@@ -5,7 +5,7 @@ set -e
 LIBOPENAL_SHA=d3875f333fb6abe2f39d82caca329414871ae53b
 LIBPINMAME_SHA=c69f68aca1fe28d5bb65ab10a17c09fb2593d57b
 LIBPPUC_SHA=2bb464dd10e37649e0ec3321edfaf71b4c1d3216
-LIBDMDUTIL_SHA=c7b28ff9b26d206820f438a54c9bc89171a3ae02
+LIBDMDUTIL_SHA=b54bd68958e271961159fd3ccbd113e5c155027d
 
 echo "Building libraries..."
 echo "  LIBOPENAL_SHA: ${LIBOPENAL_SHA}"
@@ -53,7 +53,7 @@ if [ ! -f "../${CACHE_DIR}/${CACHE_NAME}.cache" ]; then
       -DBUILD_STATIC=ON \
       -B build
     cmake --build build --config ${BUILD_TYPE}
-    ls -l build
+    ls -l build/${BUILD_TYPE}
     cp build/${BUILD_TYPE}/dmdutil.lib ../../third-party/build-libs/win/x86/
     cp build/${BUILD_TYPE}/dmdutil.dll ../../third-party/runtime-libs/win/x86/
     cd ..
