@@ -49,7 +49,7 @@ if [ ! -f "../${CACHE_DIR}/${CACHE_NAME}.cache" ]; then
       -A Win32 \
       -DPLATFORM=win \
       -DARCH=x86 \
-      -DBUILD_SHARED=OFF \
+      -DBUILD_SHARED=ON \
       -DBUILD_STATIC=ON \
       -B build
     cmake --build build --config ${BUILD_TYPE}
@@ -79,7 +79,7 @@ if [ ! -f "../${CACHE_DIR}/${CACHE_NAME}.cache" ]; then
       -A Win32 \
       -DPLATFORM=win \
       -DARCH=x86 \
-      -DBUILD_SHARED=OFF \
+      -DBUILD_SHARED=ON \
       -DBUILD_STATIC=ON \
       -B build
     cmake --build build --config ${BUILD_TYPE}
@@ -110,7 +110,7 @@ if [ ! -f "../${CACHE_DIR}/${CACHE_NAME}.cache" ]; then
       -A Win32 \
       -DPLATFORM=win \
       -DARCH=x86 \
-      -DBUILD_SHARED=OFF \
+      -DBUILD_SHARED=ON \
       -DBUILD_STATIC=ON \
       -B build
     cmake --build build --config ${BUILD_TYPE}
