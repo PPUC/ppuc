@@ -53,6 +53,7 @@ if [ ! -f "../${CACHE_DIR}/${CACHE_NAME}.cache" ]; then
       -DBUILD_STATIC=ON \
       -B build
     cmake --build build --config ${BUILD_TYPE}
+    ls -l build
     cp build/${BUILD_TYPE}/dmdutil.lib ../../third-party/build-libs/win/x86/
     cp build/${BUILD_TYPE}/dmdutil.dll ../../third-party/runtime-libs/win/x86/
     cd ..
