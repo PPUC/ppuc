@@ -4,7 +4,7 @@ set -e
 
 LIBOPENAL_SHA=d3875f333fb6abe2f39d82caca329414871ae53b
 LIBPINMAME_SHA=c69f68aca1fe28d5bb65ab10a17c09fb2593d57b
-LIBPPUC_SHA=2bb464dd10e37649e0ec3321edfaf71b4c1d3216
+LIBPPUC_SHA=879eb844b8ba7bcbe68d07bc3f4759d2ccf5f754
 LIBDMDUTIL_SHA=b54bd68958e271961159fd3ccbd113e5c155027d
 
 echo "Building libraries..."
@@ -38,22 +38,38 @@ CACHE_NAME="libdmdutil-${LIBDMDUTIL_SHA}"
 if [ ! -f "../${CACHE_DIR}/${CACHE_NAME}.cache" ]; then
     rm -f ../${CACHE_DIR}/libdmdutil-*.cache
     rm -rf libdmdutil-*
-    curl -sL https://github.com/PPUC/libdmdutil/archive/${LIBDMDUTIL_SHA}.zip -o libdmdutil.zip
-    unzip libdmdutil.zip
-    cd libdmdutil-${LIBDMDUTIL_SHA}
-    cp -r include/DMDUtil ../../third-party/include/
-    BUILD_TYPE=${BUILD_TYPE} platforms/win/x64/external.sh
-    cp -a third-party/. ../../third-party
+    curl -sL https://github.com/vpinball/libdmdutil/archive/${LIBDMDUTIL_SHA}.tar.gz -o libdmdutil-${LIBDMDUTIL_SHA}.tar.gz
+    tar xzf libdmdutil-${LIBDMDUTIL_SHA}.tar.gz
+    mv libdmdutil-${LIBDMDUTIL_SHA} libdmdutil
+    cd libdmdutil
+    BUILD_TYPE=${BUILD_TYPE} ./platforms/win/x64/external.sh
     cmake \
       -G "Visual Studio 17 2022" \
       -DPLATFORM=win \
       -DARCH=x64 \
-      -DBUILD_SHARED=OFF \
-      -DBUILD_STATIC=ON \
+      -DBUILD_SHARED=ON \
+      -DBUILD_STATIC=OFF \
       -B build
     cmake --build build --config ${BUILD_TYPE}
-    cp build/${BUILD_TYPE}/dmdutil64.lib ../../third-party/build-libs/win/x64/
-    cp build/${BUILD_TYPE}/dmdutil64.dll ../../third-party/runtime-libs/win/x64/
+    cp build/${BUILD_TYPE}/dmdutil64.lib ../tmp/build-libs/windows-x64
+    cp build/${BUILD_TYPE}/dmdutil64.dll ../tmp/runtime-libs/windows-x64
+    cp -r include/DMDUtil ../tmp/include/
+    cp build/${BUILD_TYPE}/zedmd64.lib ../tmp/build-libs/windows-x64
+    cp build/${BUILD_TYPE}/zedmd64.dll ../tmp/runtime-libs/windows-x64
+    cp third-party/include/ZeDMD.h ../tmp/include
+    cp build/${BUILD_TYPE}/serum64.lib ../tmp/build-libs/windows-x64
+    cp build/Rele${BUILD_TYPE}ase/serum64.dll ../tmp/runtime-libs/windows-x64
+    cp third-party/include/serum.h ../tmp/include
+    cp third-party/include/serum-decode.h ../tmp/include
+    cp build/${BUILD_TYPE}/libserialport64.lib ../tmp/build-libs/windows-x64
+    cp build/${BUILD_TYPE}/libserialport64.dll ../tmp/runtime-libs/windows-x64
+    cp build/${BUILD_TYPE}/pupdmd64.lib ../tmp/build-libs/windows-x64
+    cp build/${BUILD_TYPE}/pupdmd64.dll ../tmp/runtime-libs/windows-x64
+    cp third-party/include/pupdmd.h ../tmp/include
+    cp build/${BUILD_TYPE}/sockpp64.lib ../tmp/build-libs/windows-x64
+    cp build/${BUILD_TYPE}/sockpp64.dll ../tmp/runtime-libs/windows-x64
+    cp build/${BUILD_TYPE}/cargs64.lib ../tmp/build-libs/windows-x64
+    cp build/${BUILD_TYPE}/cargs64.dll ../tmp/runtime-libs/windows-x64
     cd ..
     touch "../${CACHE_DIR}/${CACHE_NAME}.cache"
 fi
@@ -76,8 +92,8 @@ if [ ! -f "../${CACHE_DIR}/${CACHE_NAME}.cache" ]; then
       -G "Visual Studio 17 2022" \
       -DPLATFORM=win \
       -DARCH=x64 \
-      -DBUILD_SHARED=OFF \
-      -DBUILD_STATIC=ON \
+      -DBUILD_SHARED=ON \
+      -DBUILD_STATIC=OFF \
       -B build
     cmake --build build --config ${BUILD_TYPE}
     cp build/${BUILD_TYPE}/pinmame64.lib ../../third-party/build-libs/win/x64/
@@ -101,17 +117,19 @@ if [ ! -f "../${CACHE_DIR}/${CACHE_NAME}.cache" ]; then
     cp src/PPUC.h ../../third-party/include/
     cp src/PPUC_structs.h ../../third-party/include/
     BUILD_TYPE=${BUILD_TYPE} platforms/win/x64/external.sh
-    cp -a third-party/. ../../third-party
     cmake \
       -G "Visual Studio 17 2022" \
       -DPLATFORM=win \
       -DARCH=x64 \
-      -DBUILD_SHARED=OFF \
-      -DBUILD_STATIC=ON \
+      -DBUILD_SHARED=ON \
+      -DBUILD_STATIC=OFF \
       -B build
     cmake --build build --config ${BUILD_TYPE}
+    cp -a third-party/include/yaml-cpp ../../third-party/include/
     cp build/${BUILD_TYPE}/ppuc64.lib ../../third-party/build-libs/win/x64/
     cp build/${BUILD_TYPE}/ppuc64.dll ../../third-party/runtime-libs/win/x64/
+    cp third-party/build-libs/win/x64/yaml-cpp* ../../third-party/runtime-libs/win/x64/
+    cp third-party/runtime-libs/win/x64/yaml-cpp* ../../third-party/runtime-libs/win/x64/
     cd ..
     touch "../${CACHE_DIR}/${CACHE_NAME}.cache"
 fi
