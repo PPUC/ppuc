@@ -48,7 +48,7 @@ if [ "${SDL3_EXPECTED_SHA}" != "${SDL3_FOUND_SHA}" ]; then
       -DSDL_SHARED=ON \
       -DSDL_STATIC=OFF \
       -DSDL_TEST_LIBRARY=OFF \
-      -DSDL_OPENGLES=OFF \
+      -DSDL_OPENGLES=ON \
       -DCMAKE_OSX_ARCHITECTURES=arm64 \
       -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
       -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
@@ -180,6 +180,8 @@ fi
 
 cp -a SDL3/SDL/build/libSDL3.{dylib,*.dylib} ../third-party/runtime-libs/macos-arm64/
 cp -r SDL3/SDL/include/SDL3 ../third-party/include/
+cp -r SDL3/SDL/src/video/khronos/GLES2 ../third-party/include/
+cp -r SDL3/SDL/src/video/khronos/KHR ../third-party/include/
 
 cp -a SDL3/SDL_image/build/libSDL3_image.{dylib,*.dylib} ../third-party/runtime-libs/macos-arm64/
 cp -r SDL3/SDL_image/include/SDL3_image ../third-party/include/

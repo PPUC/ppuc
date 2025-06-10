@@ -43,6 +43,7 @@ set(CMAKE_C_VISIBILITY_PRESET hidden)
 
 add_executable(ppuc-pinmame
    src/ppuc.cpp
+   src/VirtualDMD.cpp
 )
 
 target_include_directories(ppuc-pinmame PUBLIC

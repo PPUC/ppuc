@@ -14,6 +14,7 @@
 #include "DMDUtil/DMDUtil.h"
 #include "SDL3/SDL.h"
 #include "SDL3_image/SDL_image.h"
+#include "VirtualDMD.h"
 #include "cargs.h"
 #include "io-boards/Event.h"
 #include "libpinmame.h"
@@ -24,10 +25,12 @@ SDL_AudioSpec audioSpec;
 DMDUtil::DMD* pDmd;
 PPUC* ppuc;
 
-SDL_Window* pWindow;
-SDL_Renderer* pRenderer;
+SDL_Window* pTransliteWindow;
+SDL_Renderer* pTransliteRenderer;
 SDL_Texture* pTransliteTexture;
 SDL_Texture* pTransliteAttractTexture;
+SDL_Window* pVirtualDMDWindow;
+SDL_Renderer* pVirtualDMDRenderer;
 
 bool opt_debug = false;
 bool opt_debug_switches = false;
@@ -135,6 +138,27 @@ static struct cag_option options[] = {
      .access_name = "translite-screen",
      .value_name = "VALUE",
      .description = "Show translite on a specific screen"},
+    {.identifier = 'J', .access_name = "virtual-dmd", .value_name = NULL, .description = "Show virtual DMD"},
+    {.identifier = 'K',
+     .access_name = "virtual-dmd-hd",
+     .value_name = NULL,
+     .description = "Show virtual DMD in HD mode"},
+    {.identifier = 'N',
+     .access_name = "virtual-dmd-window",
+     .value_name = NULL,
+     .description = "Show virtual DMD in window instead of fullscreen"},
+    {.identifier = 'O',
+     .access_name = "virtual-dmd-width",
+     .value_name = "VALUE",
+     .description = "Virtual DMD width, default 1920"},
+    {.identifier = 'Q',
+     .access_name = "virtual-dmd-height",
+     .value_name = "VALUE",
+     .description = "Virtual DMD height, default 1080"},
+    {.identifier = 'R',
+     .access_name = "virtual-dmd-screen",
+     .value_name = "VALUE",
+     .description = "Show virtual DMD on a specific screen"},
     {.identifier = 'h', .access_letters = "h", .access_name = "help", .description = "Show help"}};
 
 void PINMAMECALLBACK Game(PinmameGame* game)
@@ -357,13 +381,13 @@ void PINMAMECALLBACK OnSolenoidUpdated(PinmameSolenoidState* p_solenoidState, co
   {
     if (p_solenoidState->state)
     {
-      SDL_RenderTexture(pRenderer, pTransliteTexture, nullptr, nullptr);
-      SDL_RenderPresent(pRenderer);
+      SDL_RenderTexture(pTransliteRenderer, pTransliteTexture, nullptr, nullptr);
+      SDL_RenderPresent(pTransliteRenderer);
     }
     else if (pTransliteAttractTexture)
     {
-      SDL_RenderTexture(pRenderer, pTransliteAttractTexture, nullptr, nullptr);
-      SDL_RenderPresent(pRenderer);
+      SDL_RenderTexture(pTransliteRenderer, pTransliteAttractTexture, nullptr, nullptr);
+      SDL_RenderPresent(pTransliteRenderer);
     }
   }
 }
@@ -418,6 +442,13 @@ int main(int argc, char* argv[])
   uint16_t opt_translite_width = 1920;
   uint16_t opt_translite_height = 1080;
   int8_t opt_translite_screen = -1;
+  bool opt_virtual_dmd = false;
+  bool opt_virtual_dmd_hd = false;
+  bool opt_virtual_dmd_window = false;
+  uint16_t opt_virtual_dmd_width = 1920;
+  uint16_t opt_virtual_dmd_height = 1080;
+  int8_t opt_virtual_dmd_screen = -1;
+  VirtualDMD* pVirtualDMD;
 
   cag_option_init(&cag_context, options, CAG_ARRAY_SIZE(options), argc, argv);
   while (cag_option_fetch(&cag_context))
@@ -497,6 +528,25 @@ int main(int argc, char* argv[])
       case 'I':
         opt_translite_screen = atoi(cag_option_get_value(&cag_context));
         break;
+      case 'J':
+        opt_virtual_dmd = true;
+        break;
+      case 'K':
+        opt_virtual_dmd = true;
+        opt_virtual_dmd_hd = true;
+        break;
+      case 'N':
+        opt_virtual_dmd_window = true;
+        break;
+      case 'O':
+        opt_virtual_dmd_width = atoi(cag_option_get_value(&cag_context));
+        break;
+      case 'Q':
+        opt_virtual_dmd_height = atoi(cag_option_get_value(&cag_context));
+        break;
+      case 'R':
+        opt_virtual_dmd_screen = atoi(cag_option_get_value(&cag_context));
+        break;
       case 'h':
         printf("Usage: ppuc [OPTION]...\n");
         cag_option_print(options, CAG_ARRAY_SIZE(options), stdout);
@@ -520,7 +570,7 @@ int main(int argc, char* argv[])
     }
   }
 
-  if (opt_translite)
+  if (opt_translite || opt_virtual_dmd)
   {
 // Set the SDL video driver for Linux framebuffer
 #ifdef __linux__
@@ -532,48 +582,69 @@ int main(int argc, char* argv[])
       printf("SDL_Init Error: %s\n", SDL_GetError());
       return 1;
     }
+  }
 
-    if (!SDL_CreateWindowAndRenderer("PPUC", opt_translite_width, opt_translite_height,
-                                     opt_translite_window ? SDL_WINDOW_BORDERLESS : SDL_WINDOW_FULLSCREEN, &pWindow,
-                                     &pRenderer))
+  if (opt_translite)
+  {
+    if (!SDL_CreateWindowAndRenderer("PPUC Translite", opt_translite_width, opt_translite_height,
+                                     opt_translite_window ? SDL_WINDOW_BORDERLESS : SDL_WINDOW_FULLSCREEN,
+                                     &pTransliteWindow, &pTransliteRenderer))
     {
-      printf("SDL couldn't create window/renderer: %s", SDL_GetError());
+      printf("SDL couldn't create translite window/renderer: %s", SDL_GetError());
       return SDL_APP_FAILURE;
     }
 
-    SDL_SetWindowPosition(pWindow, 0, 0);
-    while (!SDL_SyncWindow(pWindow));
+    SDL_SetWindowPosition(pTransliteWindow, 0, 0);
+    while (!SDL_SyncWindow(pTransliteWindow));
 
-    pTransliteTexture = IMG_LoadTexture(pRenderer, opt_translite);
+    pTransliteTexture = IMG_LoadTexture(pTransliteRenderer, opt_translite);
     if (!pTransliteTexture)
     {
       printf("IMG_LoadTexture Error: %s\n", SDL_GetError());
-      SDL_DestroyRenderer(pRenderer);
-      SDL_DestroyWindow(pWindow);
+      SDL_DestroyRenderer(pTransliteRenderer);
+      SDL_DestroyWindow(pTransliteWindow);
       SDL_Quit();
       return 1;
     }
 
     if (opt_translite_attract)
     {
-      pTransliteAttractTexture = IMG_LoadTexture(pRenderer, opt_translite_attract);
+      pTransliteAttractTexture = IMG_LoadTexture(pTransliteRenderer, opt_translite_attract);
       if (!pTransliteAttractTexture)
       {
         printf("IMG_LoadTexture Error: %s\n", SDL_GetError());
         SDL_DestroyTexture(pTransliteTexture);
-        SDL_DestroyRenderer(pRenderer);
-        SDL_DestroyWindow(pWindow);
+        SDL_DestroyRenderer(pTransliteRenderer);
+        SDL_DestroyWindow(pTransliteWindow);
         SDL_Quit();
         return 1;
       }
-      SDL_RenderTexture(pRenderer, pTransliteAttractTexture, nullptr, nullptr);
+      SDL_RenderTexture(pTransliteRenderer, pTransliteAttractTexture, nullptr, nullptr);
     }
     else
     {
-      SDL_RenderTexture(pRenderer, pTransliteTexture, nullptr, nullptr);
+      SDL_RenderTexture(pTransliteRenderer, pTransliteTexture, nullptr, nullptr);
     }
 
-    SDL_RenderPresent(pRenderer);
+    SDL_RenderPresent(pTransliteRenderer);
+  }
+
+  if (opt_virtual_dmd)
+  {
+    SDL_WindowFlags window_flags =
+        (SDL_WindowFlags)(SDL_WINDOW_OPENGL | (opt_virtual_dmd_window ? SDL_WINDOW_BORDERLESS : SDL_WINDOW_FULLSCREEN));
+
+    pVirtualDMDWindow =
+        SDL_CreateWindow("PPUC Virtual DMD", opt_virtual_dmd_width, opt_virtual_dmd_height, window_flags);
+
+    if (!pVirtualDMDWindow)
+    {
+      printf("SDL couldn't create window: %s\n", SDL_GetError());
+      return SDL_APP_FAILURE;
+    }
+
+    SDL_SetWindowPosition(pVirtualDMDWindow, 0, 0);
+    while (!SDL_SyncWindow(pVirtualDMDWindow));
   }
 
   ppuc = new PPUC();
@@ -674,7 +745,7 @@ int main(int argc, char* argv[])
 #endif
 
     dmdConfig->SetLogCallback(DMDUtilLogCallback);
-    dmdConfig->SetLogLevel(DMDUtil_LogLevel_DEBUG);
+    dmdConfig->SetLogLevel(DMDUtil_LogLevel_INFO);
     dmdConfig->SetAltColorPath(altcolorPath);
     dmdConfig->SetAltColor(true);
 
@@ -702,18 +773,35 @@ int main(int argc, char* argv[])
   {
     printf("Finding displays...\n");
     dmdConfig->SetZeDMDDebug(opt_debug);
+    dmdConfig->SetLogLevel(DMDUtil_LogLevel_DEBUG);
   }
 
   pDmd = new DMDUtil::DMD();
   pDmd->SetRomName(opt_rom);
   pDmd->FindDisplays();
+
   if (opt_console_display)
   {
     pDmd->CreateConsoleDMD(!opt_debug);
   }
+
   if (opt_dump)
   {
     pDmd->DumpDMDTxt();
+  }
+
+  if (opt_virtual_dmd)
+  {
+    if (opt_virtual_dmd_hd)
+    {
+      pVirtualDMD = new VirtualDMD(pVirtualDMDWindow, 256, 64);
+    }
+    else
+    {
+      pVirtualDMD = new VirtualDMD(pVirtualDMDWindow, 128, 32);
+    }
+
+    pDmd->AddRGB24DMD((DMDUtil::RGB24DMD* const)pVirtualDMD);
   }
 
   while (pDmd->IsFinding()) std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -849,8 +937,15 @@ int main(int argc, char* argv[])
     {
       SDL_DestroyTexture(pTransliteAttractTexture);
     }
-    SDL_DestroyRenderer(pRenderer);
-    SDL_DestroyWindow(pWindow);
+    SDL_DestroyRenderer(pTransliteRenderer);
+    SDL_DestroyWindow(pTransliteWindow);
+    quitSDL = true;
+  }
+
+  if (pVirtualDMD)
+  {
+    SDL_DestroyRenderer(pVirtualDMDRenderer);
+    SDL_DestroyWindow(pVirtualDMDWindow);
     quitSDL = true;
   }
 
