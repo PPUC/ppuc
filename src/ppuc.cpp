@@ -12,9 +12,9 @@
 #include "DMDUtil/Config.h"
 #include "DMDUtil/ConsoleDMD.h"
 #include "DMDUtil/DMDUtil.h"
+#include "VirtualDMD.h"
 #include "SDL3/SDL.h"
 #include "SDL3_image/SDL_image.h"
-#include "VirtualDMD.h"
 #include "cargs.h"
 #include "io-boards/Event.h"
 #include "libpinmame.h"
@@ -445,8 +445,8 @@ int main(int argc, char* argv[])
   bool opt_virtual_dmd = false;
   bool opt_virtual_dmd_hd = false;
   bool opt_virtual_dmd_window = false;
-  uint16_t opt_virtual_dmd_width = 1920;
-  uint16_t opt_virtual_dmd_height = 1080;
+  uint16_t opt_virtual_dmd_width = 1280;
+  uint16_t opt_virtual_dmd_height = 320;
   int8_t opt_virtual_dmd_screen = -1;
   VirtualDMD* pVirtualDMD;
 
@@ -631,15 +631,11 @@ int main(int argc, char* argv[])
 
   if (opt_virtual_dmd)
   {
-    SDL_WindowFlags window_flags =
-        (SDL_WindowFlags)(SDL_WINDOW_OPENGL | (opt_virtual_dmd_window ? SDL_WINDOW_BORDERLESS : SDL_WINDOW_FULLSCREEN));
-
-    pVirtualDMDWindow =
-        SDL_CreateWindow("PPUC Virtual DMD", opt_virtual_dmd_width, opt_virtual_dmd_height, window_flags);
-
-    if (!pVirtualDMDWindow)
+    if (!SDL_CreateWindowAndRenderer("PPUC DMD", opt_virtual_dmd_width, opt_virtual_dmd_height,
+                                     opt_virtual_dmd_window ? SDL_WINDOW_BORDERLESS : SDL_WINDOW_FULLSCREEN,
+                                     &pVirtualDMDWindow, &pVirtualDMDRenderer))
     {
-      printf("SDL couldn't create window: %s\n", SDL_GetError());
+      printf("SDL couldn't create virtual DMD window/renderer: %s", SDL_GetError());
       return SDL_APP_FAILURE;
     }
 
@@ -794,14 +790,14 @@ int main(int argc, char* argv[])
   {
     if (opt_virtual_dmd_hd)
     {
-      pVirtualDMD = new VirtualDMD(pVirtualDMDWindow, 256, 64);
+      pVirtualDMD = new VirtualDMD(pVirtualDMDRenderer, 256, 64);
     }
     else
     {
-      pVirtualDMD = new VirtualDMD(pVirtualDMDWindow, 128, 32);
+      pVirtualDMD = new VirtualDMD(pVirtualDMDRenderer, 128, 32);
     }
 
-    pDmd->AddRGB24DMD((DMDUtil::RGB24DMD* const)pVirtualDMD);
+    pDmd->AddRGB24DMD((DMDUtil::RGB24DMD* const) pVirtualDMD);
   }
 
   while (pDmd->IsFinding()) std::this_thread::sleep_for(std::chrono::milliseconds(100));
