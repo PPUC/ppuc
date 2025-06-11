@@ -107,6 +107,10 @@ static struct cag_option options[] = {
      .access_name = "virtual-dmd-screen",
      .value_name = "VALUE",
      .description = "Show virtual DMD on a specific screen"},
+    {.identifier = 'S',
+     .access_name = "virtual-dmd-scale",
+     .value_name = NULL,
+     .description = "Scale virtual DMD instead or rendering dots."},
     {.identifier = 'h', .access_letters = "h", .access_name = "help", .description = "Show help"}};
 
 void DMDUTILCALLBACK LogCallback(DMDUtil_LogLevel logLevel, const char* format, va_list args)
@@ -257,6 +261,7 @@ int main(int argc, char** argv)
   bool opt_virtual_dmd = false;
   bool opt_virtual_dmd_hd = false;
   bool opt_virtual_dmd_window = false;
+  bool opt_virtual_dmd_scale = false;
   uint16_t opt_virtual_dmd_width = 1280;
   uint16_t opt_virtual_dmd_height = 320;
   int8_t opt_virtual_dmd_screen = -1;
@@ -317,6 +322,9 @@ int main(int argc, char** argv)
         break;
       case 'R':
         opt_virtual_dmd_screen = atoi(cag_option_get_value(&cag_context));
+        break;
+      case 'S':
+        opt_virtual_dmd_scale = true;
         break;
       case 'h':
         printf("Usage: ppuc [OPTION]...\n");
@@ -443,6 +451,11 @@ int main(int argc, char** argv)
     else
     {
       pVirtualDMD = new VirtualDMD(pVirtualDMDRenderer, 128, 32);
+    }
+
+    if (opt_virtual_dmd_scale)
+    {
+      pVirtualDMD->SetRenderingMode(VirtualDMD::RenderingMode::XBRZ);
     }
 
     pDmd->AddRGB24DMD((DMDUtil::RGB24DMD* const)pVirtualDMD);

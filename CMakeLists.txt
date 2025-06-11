@@ -44,6 +44,7 @@ set(CMAKE_C_VISIBILITY_PRESET hidden)
 add_executable(ppuc-pinmame
    src/ppuc.cpp
    src/VirtualDMD.cpp
+   src/xbrz/xbrz.cpp
 )
 
 target_include_directories(ppuc-pinmame PUBLIC
@@ -94,6 +95,7 @@ endif()
 add_executable(ppuc-backbox
    src/backbox.cpp
    src/VirtualDMD.cpp
+   src/xbrz/xbrz.cpp
 )
 
 target_include_directories(ppuc-backbox PUBLIC
