@@ -43,6 +43,7 @@ bool opt_pup = false;
 bool opt_console_display = false;
 const char* opt_rom = NULL;
 int game_state = 0;
+bool running = true;
 
 static struct cag_option options[] = {
     {.identifier = 'c',
@@ -424,8 +425,16 @@ void PINMAMECALLBACK OnConsoleDataUpdated(void* p_data, int size, const void* p_
 
 int PINMAMECALLBACK IsKeyPressed(PINMAME_KEYCODE keycode, const void* p_userData) { return 0; }
 
-int main(int argc, char* argv[])
+void signal_handler(int sig) { running = false; }
+
+int main(int argc, char** argv)
 {
+  signal(SIGHUP, signal_handler);
+  signal(SIGKILL, signal_handler);
+  signal(SIGTERM, signal_handler);
+  signal(SIGQUIT, signal_handler);
+  signal(SIGABRT, signal_handler);
+
   char identifier;
   cag_option_context cag_context;
   const char* config_file = NULL;
@@ -834,7 +843,6 @@ int main(int argc, char* argv[])
 
     ppuc->StartUpdates();
 
-    bool running = true;
     while (running)
     {
       std::this_thread::sleep_for(std::chrono::microseconds(sleep_us));
@@ -908,6 +916,9 @@ int main(int argc, char* argv[])
         }
       }
     }
+
+    ppuc->StopUpdates();
+    PinmameStop();
   }
 
   if (!opt_no_serial)
