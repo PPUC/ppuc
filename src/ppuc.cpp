@@ -56,6 +56,15 @@ static struct cag_option options[] = {
      .access_name = "rom",
      .value_name = "VALUE",
      .description = "Path to ROM file (optional, overwrites setting in config file)"},
+    {.identifier = 'b',
+     .access_letters = "b",
+     .access_name = "backbox-address",
+     .value_name = "VALUE",
+     .description = "Connect backbox via network address (optional)"},
+    {.identifier = 'a',
+     .access_name = "backbox-port",
+     .value_name = "VALUE",
+     .description = "Backbox port (optional, default is 6789)"},
     {.identifier = 's',
      .access_letters = "s",
      .access_name = "serial",
@@ -438,6 +447,8 @@ int main(int argc, char** argv)
   char identifier;
   cag_option_context cag_context;
   const char* config_file = NULL;
+  const char* opt_backbox_address = NULL;
+  uint16_t opt_backbox_port = 6789;
   const char* opt_serial = NULL;
   uint8_t opt_serum_timeout = 0;
   uint8_t opt_serum_skip_frames = 0;
@@ -470,6 +481,12 @@ int main(int argc, char** argv)
         break;
       case 'r':
         opt_rom = cag_option_get_value(&cag_context);
+        break;
+      case 'b':
+        opt_backbox_address = cag_option_get_value(&cag_context);
+        break;
+      case 'a':
+        opt_backbox_port = atoi(cag_option_get_value(&cag_context));
         break;
       case 's':
         opt_serial = cag_option_get_value(&cag_context);
@@ -739,6 +756,13 @@ int main(int argc, char** argv)
 #else
   snprintf((char*)config.vpmPath, PINMAME_MAX_PATH, "%s/.pinmame/", getenv("HOME"));
 #endif
+
+  if (opt_backbox_address)
+  {
+     dmdConfig->SetDMDServerAddr(opt_backbox_address);
+     dmdConfig->SetDMDServerPort(opt_backbox_port);
+     dmdConfig->SetDMDServer(true);
+  }
 
   if (opt_serum)
   {

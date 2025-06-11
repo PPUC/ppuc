@@ -15,4 +15,5 @@ rm -rf ppuc
 mkdir ppuc
 
 cp build/ppuc-pinmame ppuc/
+cp build/ppuc-backbox ppuc/
 cp -P third-party/runtime-libs/linux-aarch64/*.so* ppuc/

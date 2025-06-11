@@ -63,7 +63,6 @@ if(PLATFORM STREQUAL "win")
          cargs64
          SDL364
          SDL3_image64
-         yaml-cpp
          ws2_32
       )
    else()
@@ -74,7 +73,6 @@ if(PLATFORM STREQUAL "win")
          cargs
          SDL3
          SDL3_image
-         yaml-cpp
          ws2_32
       )
    endif()
@@ -90,5 +88,52 @@ else()
       cargs
       SDL3
       SDL3_image
+   )
+endif()
+
+add_executable(ppuc-backbox
+   src/backbox.cpp
+   src/VirtualDMD.cpp
+)
+
+target_include_directories(ppuc-backbox PUBLIC
+   third-party/include
+)
+
+if(PLATFORM STREQUAL "win")
+   target_link_directories(ppuc-backbox PUBLIC
+      third-party/build-libs/${PLATFORM}-${ARCH}
+      third-party/runtime-libs/${PLATFORM}-${ARCH}
+   )
+   if(ARCH STREQUAL "x64")
+      target_link_libraries(ppuc-backbox LINK_PUBLIC
+         dmdutil64
+         cargs64
+         SDL364
+         SDL3_image64
+         sockpp64
+         ws2_32
+      )
+   else()
+      target_link_libraries(ppuc-backbox LINK_PUBLIC
+         dmdutil
+         cargs
+         SDL3
+         SDL3_image
+         sockpp
+         ws2_32
+      )
+   endif()
+else()
+   target_link_directories(ppuc-backbox PUBLIC
+      third-party/runtime-libs/${PLATFORM}-${ARCH}
+   )
+
+   target_link_libraries(ppuc-backbox LINK_PUBLIC
+      dmdutil
+      cargs
+      SDL3
+      SDL3_image
+      sockpp
    )
 endif()
