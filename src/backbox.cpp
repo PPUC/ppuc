@@ -155,9 +155,9 @@ void run(sockpp::tcp_socket sock, uint32_t threadId)
 
     if (n == sizeof(DMDUtil::DMD::StreamHeader))
     {
-      // At the moment the server only listens on localhost.
-      // Therefore, we don't have to take care about litte vs. big endian and can use memcpy.
       memcpy(pStreamHeader, buffer, n);
+      pStreamHeader->convertToHostByteOrder();
+
       if (strcmp(pStreamHeader->header, "DMDStream") == 0 && pStreamHeader->version == 1)
       {
         // Only the current (most recent) thread is allowed to disconnect other clients.
@@ -176,6 +176,7 @@ void run(sockpp::tcp_socket sock, uint32_t threadId)
             {
               DMDUtil::DMD::PathsHeader pathsHeader;
               memcpy(&pathsHeader, buffer, n);
+              pathsHeader.convertToHostByteOrder();
 
               if (strcmp(pathsHeader.header, "Paths") == 0 &&
                   (n = sock.read_n(buffer, sizeof(DMDUtil::DMD::Update))) == sizeof(DMDUtil::DMD::Update) &&
@@ -183,6 +184,7 @@ void run(sockpp::tcp_socket sock, uint32_t threadId)
               {
                 auto data = std::make_shared<DMDUtil::DMD::Update>();
                 memcpy(data.get(), buffer, n);
+                data->convertToHostByteOrder();
 
                 if (data->width <= DMDSERVER_MAX_WIDTH && data->height <= DMDSERVER_MAX_HEIGHT)
                 {
