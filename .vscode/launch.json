@@ -1,0 +1,61 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+      {
+        "name": "(lldb) ppuc-pinmame",
+        "type": "cppdbg",
+        "request": "launch",
+        "program": "${workspaceFolder}/ppuc/ppuc-pinmame",
+        "args": ["-c", "examples/t2.yml", "-n", "--virtual-dmd", "--virtual-dmd-window"],
+        "stopAtEntry": false,
+        "cwd": "${workspaceFolder}",
+        "environment": [],
+        "externalConsole": false,
+        "MIMode": "lldb"
+      },
+      {
+        "name": "(lldb) ppuc-backbox",
+        "type": "cppdbg",
+        "request": "launch",
+        "program": "${workspaceFolder}/ppuc/ppuc-backbox",
+        "args": ["-c", "backbox.ini", "--virtual-dmd", "--virtual-dmd-window", "-d"],
+        "stopAtEntry": false,
+        "cwd": "${workspaceFolder}",
+        "environment": [],
+        "externalConsole": false,
+        "MIMode": "lldb"
+      },
+      {
+        "name": "(lldb) ppuc-backbox console",
+        "type": "cppdbg",
+        "request": "launch",
+        "program": "${workspaceFolder}/ppuc/ppuc-backbox",
+        "args": ["-c", "backbox.ini", "-i"],
+        "stopAtEntry": false,
+        "cwd": "${workspaceFolder}",
+        "environment": [],
+        "externalConsole": false,
+        "MIMode": "lldb"
+      },
+      {
+        "name": "(gdb) ppuc-pinmame",
+        "type": "cppdbg",
+        "request": "launch",
+        "program": "${workspaceFolder}/ppuc/ppuc-pinmame",
+        "args": ["-h"],
+        "stopAtEntry": false,
+        "cwd": "${workspaceFolder}",
+        "environment": [],
+        "externalConsole": false,
+        "MIMode": "gdb",
+        "miDebuggerPath": "/usr/local/bin/gdb",
+        "setupCommands": [
+          {
+            "description": "Enable pretty-printing for gdb",
+            "text": "-enable-pretty-printing",
+            "ignoreFailures": true
+          }
+        ]
+      },
+    ]
+  }
