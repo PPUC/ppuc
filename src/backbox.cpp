@@ -3,8 +3,6 @@
 #define SIGHUP 1
 #define SIGKILL 9
 #define SIGQUIT 3
-#else
-#include <netinet/tcp.h>
 #endif
 
 #include <ctype.h>
@@ -493,14 +491,6 @@ int main(int argc, char** argv)
     printf("Error accepting incoming connection: %s", acc.last_error_str().c_str());
     exit(1);
   }
-
-  int flag = 1;
-  int mss = 1200;  // Conservative size
-  int bufsize = 65536;
-  sock.set_option(IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
-  sock.set_option(IPPROTO_TCP, TCP_MAXSEG, &mss, sizeof(mss));
-  sock.set_option(SOL_SOCKET, SO_SNDBUF, &bufsize, sizeof(bufsize));
-  sock.set_option(SOL_SOCKET, SO_RCVBUF, &bufsize, sizeof(bufsize));
 
   threadMutex.lock();
   currentThreadId = ++threadId;
