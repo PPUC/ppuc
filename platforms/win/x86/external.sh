@@ -213,6 +213,7 @@ cp libdmdutil/libdmdutil/third-party/runtime-libs/win/x86/pupdmd.dll ../third-pa
 cp libdmdutil/libdmdutil/third-party/include/pupdmd.h ../third-party/include/
 cp libdmdutil/libdmdutil/third-party/build-libs/win/x86/sockpp.lib ../third-party/build-libs/win-x86/
 cp libdmdutil/libdmdutil/third-party/runtime-libs/win/x86/sockpp.dll ../third-party/runtime-libs/win-x86/
+cp -r libdmdutil/libdmdutil/third-party/include/sockpp ../../third-party/include/
 cp libdmdutil/libdmdutil/third-party/build-libs/win/x86/cargs.lib ../third-party/build-libs/win-x86/
 cp libdmdutil/libdmdutil/third-party/runtime-libs/win/x86/cargs.dll ../third-party/runtime-libs/win-x86/
 cp libdmdutil/libdmdutil/third-party/include/cargs.h ../third-party/include/
