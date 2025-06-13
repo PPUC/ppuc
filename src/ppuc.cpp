@@ -1,3 +1,9 @@
+#if defined(_WIN32) || defined(_WIN64)
+#define SIGHUP 1
+#define SIGKILL 9
+#define SIGQUIT 3
+#endif
+
 #include "PPUC.h"
 
 #include <ctype.h>

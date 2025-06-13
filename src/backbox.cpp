@@ -1,5 +1,8 @@
 #if defined(_WIN32) || defined(_WIN64)
 #include <winsock2.h>
+#define SIGHUP 1
+#define SIGKILL 9
+#define SIGQUIT 3
 #else
 #include <netinet/tcp.h>
 #endif
