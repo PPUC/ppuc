@@ -9,6 +9,7 @@
 #include <stdlib.h>
 
 #include <chrono>
+#include <csignal>
 #include <cstdio>
 #include <cstring>
 #include <mutex>

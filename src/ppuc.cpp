@@ -5,6 +5,7 @@
 #include <stdlib.h>
 
 #include <chrono>
+#include <csignal>
 #include <cstdio>
 #include <cstring>
 #include <thread>
@@ -12,9 +13,9 @@
 #include "DMDUtil/Config.h"
 #include "DMDUtil/ConsoleDMD.h"
 #include "DMDUtil/DMDUtil.h"
-#include "VirtualDMD.h"
 #include "SDL3/SDL.h"
 #include "SDL3_image/SDL_image.h"
+#include "VirtualDMD.h"
 #include "cargs.h"
 #include "io-boards/Event.h"
 #include "libpinmame.h"
@@ -759,9 +760,9 @@ int main(int argc, char** argv)
 
   if (opt_backbox_address)
   {
-     dmdConfig->SetDMDServerAddr(opt_backbox_address);
-     dmdConfig->SetDMDServerPort(opt_backbox_port);
-     dmdConfig->SetDMDServer(true);
+    dmdConfig->SetDMDServerAddr(opt_backbox_address);
+    dmdConfig->SetDMDServerPort(opt_backbox_port);
+    dmdConfig->SetDMDServer(true);
   }
 
   if (opt_serum)
@@ -830,7 +831,7 @@ int main(int argc, char** argv)
       pVirtualDMD = new VirtualDMD(pVirtualDMDRenderer, 128, 32);
     }
 
-    pDmd->AddRGB24DMD((DMDUtil::RGB24DMD* const) pVirtualDMD);
+    pDmd->AddRGB24DMD((DMDUtil::RGB24DMD* const)pVirtualDMD);
   }
 
   while (pDmd->IsFinding()) std::this_thread::sleep_for(std::chrono::milliseconds(100));
