@@ -63,7 +63,9 @@ jobs:
            brew install autoconf automake gcc-aarch64-embedded aarch64-elf-gcc libtool
       - if: (matrix.platform == 'linux' && matrix.arch == 'x64')
         name: Install packages (linux runner)
-        run: sudo apt install autoconf libtool libudev-dev libpipewire-0.3-dev libwayland-dev libdecor-0-dev liburing-dev libasound2-dev libpulse-dev libaudio-dev libjack-dev libsndio-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libxtst-dev libxkbcommon-dev libdrm-dev libgbm-dev libgl1-mesa-dev libgles2-mesa-dev libegl1-mesa-dev libdbus-1-dev libibus-1.0-dev
+        run: |
+          sudo apt update -y
+          sudo apt install autoconf libtool libudev-dev libpipewire-0.3-dev libwayland-dev libdecor-0-dev liburing-dev libasound2-dev libpulse-dev libaudio-dev libjack-dev libsndio-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libxtst-dev libxkbcommon-dev libdrm-dev libgbm-dev libgl1-mesa-dev libgles2-mesa-dev libegl1-mesa-dev libdbus-1-dev libibus-1.0-dev
       - if: (!(matrix.platform == 'linux' && matrix.arch == 'aarch64'))
         name: Build ppuc-${{ matrix.platform }}-${{ matrix.arch }}
         run: |
