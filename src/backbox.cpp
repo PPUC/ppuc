@@ -216,7 +216,7 @@ void run(sockpp::tcp_socket sock, uint32_t threadId)
   {
     // Clear the DMD by sending a black screen.
     // Fixed dimension of 128x32 should be OK for all devices.
-    memset(buffer, 0, sizeof(DMDUtil::DMD::Update));
+    memset(buffer, 0, 128 * 32 * 3);
     pDmd->UpdateRGB24Data(buffer, 128, 32);
   }
 

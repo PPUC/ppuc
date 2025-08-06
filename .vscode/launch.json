@@ -6,7 +6,7 @@
         "type": "cppdbg",
         "request": "launch",
         "program": "${workspaceFolder}/ppuc/ppuc-pinmame",
-        "args": ["-c", "examples/t2.yml", "-n", "--virtual-dmd", "--virtual-dmd-window"],
+        "args": ["-c", "examples/t2.yml", "-n", "--no-sound", "--rom=wpt_140a", "--backbox-address=127.0.0.1"],
         "stopAtEntry": false,
         "cwd": "${workspaceFolder}",
         "environment": [],
@@ -57,5 +57,11 @@
           }
         ]
       },
+    ],
+      "compounds": [
+      {
+        "name": "(lldb) ppuc-pinmame + ppuc-backbox",
+        "configurations": ["(lldb) ppuc-pinmame", "(lldb) ppuc-backbox"]
+      }
     ]
   }

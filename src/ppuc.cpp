@@ -289,10 +289,12 @@ void PINMAMECALLBACK OnDisplayUpdated(int index, void* p_displayData, PinmameDis
   // For DMD games, the ype is PINMAME_DISPLAY_TYPE_DMD.
   // For alphanumeric games that should be shown on a DMD,
   // the type is PINMAME_DISPLAY_TYPE_DMD | PINMAME_DISPLAY_TYPE_DMDSEG.
-  if ((p_displayLayout->type & PINMAME_DISPLAY_TYPE_DMD) == PINMAME_DISPLAY_TYPE_DMD)
+  // For some games like WPT, there's a second display on the playfield of type
+  // PINMAME_DISPLAY_TYPE_DMD | PINMAME_DISPLAY_TYPE_DMDNOAA | PINMAME_DISPLAY_TYPE_NODISP
+  if ((p_displayLayout->type & PINMAME_DISPLAY_TYPE_DMD) == PINMAME_DISPLAY_TYPE_DMD && (p_displayLayout->type & PINMAME_DISPLAY_TYPE_NODISP) == 0)
   {
     pDmd->UpdateData((uint8_t*)p_displayData, p_displayLayout->depth, p_displayLayout->width, p_displayLayout->height,
-                     255, 255, 255, opt_rom);
+                     255, 255, 255);
   }
   else
   {
