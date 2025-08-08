@@ -1,10 +1,3 @@
-#if defined(_WIN32) || defined(_WIN64)
-#include <winsock2.h>
-#define SIGHUP 1
-#define SIGKILL 9
-#define SIGQUIT 3
-#endif
-
 #include <ctype.h>
 #include <inttypes.h>
 #include <stdlib.h>
@@ -23,10 +16,6 @@
 #include "SDL3_image/SDL_image.h"
 #include "VirtualDMD.h"
 #include "cargs.h"
-#include "sockpp/tcp_acceptor.h"
-
-#define DMDSERVER_MAX_WIDTH 256
-#define DMDSERVER_MAX_HEIGHT 64
 
 SDL_AudioStream* m_pstream = nullptr;
 SDL_AudioSpec audioSpec;
@@ -147,110 +136,9 @@ void DMDUTILCALLBACK LogCallback(DMDUtil_LogLevel logLevel, const char* format, 
   fflush(output);
 }
 
-void run(sockpp::tcp_socket sock, uint32_t threadId)
-{
-  uint8_t buffer[sizeof(DMDUtil::DMD::Update)];
-  DMDUtil::DMD::StreamHeader* pStreamHeader = (DMDUtil::DMD::StreamHeader*)malloc(sizeof(DMDUtil::DMD::StreamHeader));
-  ssize_t n;
-  // Disconnect others is only allowed once per client.
-  bool handleDisconnectOthers = true;
-
-  while (threadId == currentThreadId || disconnectOtherClients == 0 || disconnectOtherClients <= threadId)
-  {
-    n = sock.read_n(buffer, sizeof(DMDUtil::DMD::StreamHeader));
-    // If the client disconnects or if a network error ocurres, exit the loop and terminate this thread.
-    if (n <= 0) break;
-
-    if (n == sizeof(DMDUtil::DMD::StreamHeader))
-    {
-      memcpy(pStreamHeader, buffer, n);
-      pStreamHeader->convertToHostByteOrder();
-
-      if (strcmp(pStreamHeader->header, "DMDStream") == 0 && pStreamHeader->version == 1)
-      {
-        // Only the current (most recent) thread is allowed to disconnect other clients.
-        if (handleDisconnectOthers && threadId == currentThreadId && pStreamHeader->disconnectOthers)
-        {
-          threadMutex.lock();
-          disconnectOtherClients = threadId;
-          threadMutex.unlock();
-          handleDisconnectOthers = false;
-        }
-
-        switch (pStreamHeader->mode)
-        {
-          case DMDUtil::DMD::Mode::Data:
-            if ((n = sock.read_n(buffer, sizeof(DMDUtil::DMD::PathsHeader))) == sizeof(DMDUtil::DMD::PathsHeader))
-            {
-              DMDUtil::DMD::PathsHeader pathsHeader;
-              memcpy(&pathsHeader, buffer, n);
-              pathsHeader.convertToHostByteOrder();
-
-              if (strcmp(pathsHeader.header, "Paths") == 0 &&
-                  (n = sock.read_n(buffer, sizeof(DMDUtil::DMD::Update))) == sizeof(DMDUtil::DMD::Update) &&
-                  threadId == currentThreadId)
-              {
-                auto data = std::make_shared<DMDUtil::DMD::Update>();
-                memcpy(data.get(), buffer, n);
-                data->convertToHostByteOrder();
-
-                if (data->width <= DMDSERVER_MAX_WIDTH && data->height <= DMDSERVER_MAX_HEIGHT)
-                {
-                  pDmd->SetRomName(pathsHeader.name);
-                  pDmd->QueueUpdate(data, (pStreamHeader->buffered == 1));
-                }
-              }
-            }
-            break;
-
-          default:
-            // Other modes aren't supported via network.
-            break;
-        }
-      }
-    }
-  }
-
-  // Display a buffered frame or clear the display on disconnect of the current thread.
-  if (threadId == currentThreadId && !pStreamHeader->buffered && !pDmd->QueueBuffer())
-  {
-    // Clear the DMD by sending a black screen.
-    // Fixed dimension of 128x32 should be OK for all devices.
-    memset(buffer, 0, 128 * 32 * 3);
-    pDmd->UpdateRGB24Data(buffer, 128, 32);
-  }
-
-  threadMutex.lock();
-  threads.erase(remove(threads.begin(), threads.end(), threadId), threads.end());
-  if (threadId == currentThreadId)
-  {
-    if (disconnectOtherClients == threadId)
-    {
-      // Wait until all other threads ended or a new client connnects in between.
-      while (threads.size() >= 1 && currentThreadId == threadId)
-      {
-        threadMutex.unlock();
-        // Let other threads terminate.
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        threadMutex.lock();
-      }
-
-      currentThreadId = 0;
-      disconnectOtherClients = 0;
-    }
-    else
-    {
-      currentThreadId = (threads.size() >= 1) ? threads.back() : 0;
-    }
-  }
-  threadMutex.unlock();
-
-  free(pStreamHeader);
-}
-
 void signal_handler(int sig) { running = false; }
 
-int main(int argc, char** argv)
+int main(int argc, char* argv[])
 {
   signal(SIGHUP, signal_handler);
   signal(SIGKILL, signal_handler);
@@ -474,31 +362,12 @@ int main(int argc, char** argv)
   pDmd->FindDisplays();
   while (pDmd->IsFinding()) std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-  sockpp::initialize();
-  sockpp::tcp_acceptor acc({dmdConfig->GetDMDServerAddr(), (in_port_t)dmdConfig->GetDMDServerPort()});
-  if (!acc)
+DMDUtil::DMDServer server(pDmd);
+
+  if (!server.Start(dmdConfig->GetDMDServerAddr(), dmdConfig->GetDMDServerPort()))
   {
-    printf("Error creating the DMDServer acceptor: %s", acc.last_error_str().c_str());
     return 1;
   }
-
-  sockpp::inet_address peer;
-
-  // Accept a new client connection
-  sockpp::tcp_socket sock = acc.accept(&peer);
-  if (!sock)
-  {
-    printf("Error accepting incoming connection: %s", acc.last_error_str().c_str());
-    exit(1);
-  }
-
-  threadMutex.lock();
-  currentThreadId = ++threadId;
-  threads.push_back(currentThreadId);
-  threadMutex.unlock();
-  // Create a thread and transfer the new stream to it.
-  std::thread thr(run, std::move(sock), currentThreadId);
-  thr.detach();
 
   while (running)
   {
@@ -515,6 +384,8 @@ int main(int argc, char** argv)
 
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
+
+  server.Stop();
 
   std::unique_lock<std::mutex> lock(threadMutex);
   currentThreadId = 0;

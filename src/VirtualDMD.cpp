@@ -3,33 +3,53 @@
 #include <vector>
 
 #include "xbrz/xbrz.h"
+#include "FrameUtil.h"
 
-void VirtualDMD::Update(uint8_t* pData)
+void VirtualDMD::Update(uint8_t* pData, u_int16_t width, u_int16_t height)
 {
+  if (width == 0) width = m_width;
+  if (height == 0) height = m_height;
+
+  if (width == 128 && height == 16 && m_width == 128 && m_height == 32)
+  {
+    FrameUtil::Helper::Center(m_pData, 128, 32, pData, 128, 16, 24);
+    height = 32;
+  }
+  else if (height == 64 && m_height == 32)
+  {
+    FrameUtil::Helper::ScaleDown(m_pData, 128, 32, pData, width, height, 24);
+    width = 128;
+    height = 32;
+  }
+  else
+  {
+    memcpy(m_pData, pData, width * height * 3);
+  }
+
   switch (m_renderingMode)
   {
     case RenderingMode::SmoothScaling:
-      RenderSmoothScaling(pData);
+      RenderSmoothScaling(m_pData, width, height);
       break;
 
     case RenderingMode::XBRZ:
-      RenderXBRZ(pData);
+      RenderXBRZ(m_pData, width, height);
       break;
 
     default:
-      RenderDots(pData);
+      RenderDots(m_pData, width, height);
       break;
   }
 }
 
-void VirtualDMD::RenderDots(uint8_t* pData)
+void VirtualDMD::RenderDots(uint8_t* pData, uint16_t width, uint16_t height)
 {
   // Get window size to calculate scaling
   int windowWidth, windowHeight;
   SDL_GetRenderOutputSize(m_pRenderer, &windowWidth, &windowHeight);
 
   // Calculate pixel scaling factors
-  float pixelWidth = (float)windowWidth / m_width;
+  float pixelWidth = (float)windowWidth / width;
   float pixelRadius = pixelWidth / 2.0f;
 
   // Clear the renderer
@@ -37,14 +57,14 @@ void VirtualDMD::RenderDots(uint8_t* pData)
   SDL_RenderClear(m_pRenderer);
 
   // Draw each pixel as a filled circle
-  for (int y = 0; y < m_height; y++)
+  for (int y = 0; y < height; y++)
   {
     float centerY = y * pixelWidth + pixelWidth / 2.0f;
 
-    for (int x = 0; x < m_width; x++)
+    for (int x = 0; x < width; x++)
     {
       // Calculate position in the array
-      int idx = (y * m_width + x) * 3;
+      int idx = (y * width + x) * 3;
 
       // Get RGB values
       uint8_t r = pData[idx];
@@ -79,19 +99,19 @@ void VirtualDMD::RenderDots(uint8_t* pData)
   SDL_RenderPresent(m_pRenderer);
 }
 
-void VirtualDMD::RenderSmoothScaling(uint8_t* pData)
+void VirtualDMD::RenderSmoothScaling(uint8_t* pData, uint16_t width, uint16_t height)
 {
   int windowWidth, windowHeight;
   SDL_GetRenderOutputSize(m_pRenderer, &windowWidth, &windowHeight);
 
   // Create source texture
   SDL_Texture* srcTexture =
-      SDL_CreateTexture(m_pRenderer, SDL_PIXELFORMAT_RGB24, SDL_TEXTUREACCESS_STATIC, m_width, m_height);
-  SDL_UpdateTexture(srcTexture, NULL, pData, m_width * 3);
+      SDL_CreateTexture(m_pRenderer, SDL_PIXELFORMAT_RGB24, SDL_TEXTUREACCESS_STATIC, width, height);
+  SDL_UpdateTexture(srcTexture, NULL, pData, width * 3);
 
   // Create intermediate texture at 4x resolution
-  int intermediateW = m_width * 4;
-  int intermediateH = m_height * 4;
+  int intermediateW = width * 4;
+  int intermediateH = height * 4;
   SDL_Texture* intermediate =
       SDL_CreateTexture(m_pRenderer, SDL_PIXELFORMAT_RGB24, SDL_TEXTUREACCESS_TARGET, intermediateW, intermediateH);
 
@@ -113,15 +133,15 @@ void VirtualDMD::RenderSmoothScaling(uint8_t* pData)
   SDL_DestroyTexture(intermediate);
 }
 
-void VirtualDMD::RenderXBRZ(uint8_t* pData)
+void VirtualDMD::RenderXBRZ(uint8_t* pData, uint16_t width, uint16_t height)
 {
   // Get the window size
   int windowWidth, windowHeight;
   SDL_GetRenderOutputSize(m_pRenderer, &windowWidth, &windowHeight);
 
   // Prepare source ARGB buffer
-  const int srcWidth = m_width;
-  const int srcHeight = m_height;
+  const int srcWidth = width;
+  const int srcHeight = height;
   std::vector<uint32_t> srcImage(srcWidth * srcHeight);
 
   for (int y = 0; y < srcHeight; ++y)

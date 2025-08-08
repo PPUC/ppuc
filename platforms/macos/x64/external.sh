@@ -202,6 +202,7 @@ cp -a libdmdutil/libdmdutil/third-party/runtime-libs/macos/x64/libsockpp.{dylib,
 cp libdmdutil/libdmdutil/third-party/runtime-libs/macos/x64/libcargs.dylib ../third-party/runtime-libs/macos-x64/
 cp -r libdmdutil/libdmdutil/third-party/include/sockpp ../third-party/include/
 cp libdmdutil/libdmdutil/third-party/include/cargs.h ../third-party/include/
+cp libdmdutil/libdmdutil/third-party/include/FrameUtil.h ../third-party/include/
 
 cp libppuc/libppuc/src/PPUC.h ../third-party/include/
 cp libppuc/libppuc/src/PPUC_structs.h ../third-party/include/

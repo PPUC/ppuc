@@ -197,6 +197,7 @@ cp -a libdmdutil/libdmdutil/third-party/runtime-libs/linux/aarch64/libsockpp.{so
 cp libdmdutil/libdmdutil/third-party/runtime-libs/linux/aarch64/libcargs.so ../third-party/runtime-libs/linux-aarch64/
 cp -r libdmdutil/libdmdutil/third-party/include/sockpp ../third-party/include/
 cp libdmdutil/libdmdutil/third-party/include/cargs.h ../third-party/include/
+cp libdmdutil/libdmdutil/third-party/include/FrameUtil.h ../third-party/include/
 
 cp libppuc/libppuc/src/PPUC.h ../third-party/include/
 cp libppuc/libppuc/src/PPUC_structs.h ../third-party/include/
