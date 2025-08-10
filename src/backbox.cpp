@@ -21,6 +21,7 @@ SDL_AudioStream* m_pstream = nullptr;
 SDL_AudioSpec audioSpec;
 
 DMDUtil::DMD* pDmd;
+DMDUtil::DMDServer* pServer;
 
 SDL_Window* pTransliteWindow;
 SDL_Renderer* pTransliteRenderer;
@@ -28,6 +29,7 @@ SDL_Texture* pTransliteTexture;
 SDL_Texture* pTransliteAttractTexture;
 SDL_Window* pVirtualDMDWindow;
 SDL_Renderer* pVirtualDMDRenderer;
+SDL_Event quitEvent;
 
 bool opt_debug = false;
 bool opt_no_sound = false;
@@ -136,11 +138,30 @@ void DMDUTILCALLBACK LogCallback(DMDUtil_LogLevel logLevel, const char* format, 
   fflush(output);
 }
 
-void signal_handler(int sig) { running = false; }
+void signal_handler(int sig)
+{
+  printf("\nReceived signal %d, shutting down...\n", sig);
+  running = false;
+  quitEvent.type = SDL_EVENT_QUIT;
+  SDL_PushEvent(&quitEvent);
+
+  // CTRL-C should terminate the process hard after 2 seconds if normal shutdown fails.
+  if (sig == SIGINT)
+  {
+    std::thread(
+        []
+        {
+          std::this_thread::sleep_for(std::chrono::seconds(2));
+          exit(0);
+        })
+        .detach();
+  }
+}
 
 int main(int argc, char* argv[])
 {
   signal(SIGHUP, signal_handler);
+  signal(SIGINT, signal_handler);
   signal(SIGKILL, signal_handler);
   signal(SIGTERM, signal_handler);
   signal(SIGQUIT, signal_handler);
@@ -362,9 +383,9 @@ int main(int argc, char* argv[])
   pDmd->FindDisplays();
   while (pDmd->IsFinding()) std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-DMDUtil::DMDServer server(pDmd);
+  pServer = new DMDUtil::DMDServer(pDmd);
 
-  if (!server.Start(dmdConfig->GetDMDServerAddr(), dmdConfig->GetDMDServerPort()))
+  if (!pServer->Start(dmdConfig->GetDMDServerAddr(), dmdConfig->GetDMDServerPort()))
   {
     return 1;
   }
@@ -372,20 +393,25 @@ DMDUtil::DMDServer server(pDmd);
   while (running)
   {
     SDL_Event event;
-    if (SDL_PollEvent(&event))
+
+    // Use SDL_WaitEventTimeout instead of SDL_PollEvent to reduce CPU usage
+    // and ensure we can still process signals
+    if (SDL_WaitEventTimeout(&event, 100))  // Wait up to 100ms for an event
     {
       switch (event.type)
       {
         case SDL_EVENT_QUIT:
+        case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
           running = false;
           break;
       }
     }
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    SDL_Delay(10);
   }
 
-  server.Stop();
+  pServer->Stop();
+  delete pServer;
 
   std::unique_lock<std::mutex> lock(threadMutex);
   currentThreadId = 0;
