@@ -18,7 +18,7 @@
         "type": "cppdbg",
         "request": "launch",
         "program": "${workspaceFolder}/ppuc/ppuc-backbox",
-        "args": ["-c", "backbox.ini", "--virtual-dmd", "--virtual-dmd-window", "-d"],
+        "args": ["-c", "backbox.ini", "--virtual-dmd-hd", "--virtual-dmd-window", "--virtual-dmd-width=512", "--virtual-dmd-height=128"],
         "stopAtEntry": false,
         "cwd": "${workspaceFolder}",
         "environment": [],

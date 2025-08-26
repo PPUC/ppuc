@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "DMDUtil/Config.h"
+#include "DMDUtil/DMDServer.h"
 #include "DMDUtil/DMDUtil.h"
 #include "SDL3/SDL.h"
 #include "SDL3_image/SDL_image.h"
