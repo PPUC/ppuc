@@ -405,6 +405,7 @@ void PINMAMECALLBACK OnSolenoidUpdated(PinmameSolenoidState* p_solenoidState, co
       {
         printf("Game started: solenoid=%d, state=%d\n", p_solenoidState->solNo, p_solenoidState->state);
       }
+      SDL_RenderClear(pTransliteRenderer);
       SDL_RenderTexture(pTransliteRenderer, pTransliteTexture, nullptr, nullptr);
       SDL_RenderPresent(pTransliteRenderer);
     }
@@ -416,6 +417,7 @@ void PINMAMECALLBACK OnSolenoidUpdated(PinmameSolenoidState* p_solenoidState, co
       }
       if (pTransliteAttractTexture)
       {
+        SDL_RenderClear(pTransliteRenderer);
         SDL_RenderTexture(pTransliteRenderer, pTransliteAttractTexture, nullptr, nullptr);
         SDL_RenderPresent(pTransliteRenderer);
       }
