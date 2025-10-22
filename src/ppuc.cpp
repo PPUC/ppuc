@@ -291,7 +291,8 @@ void PINMAMECALLBACK OnDisplayUpdated(int index, void* p_displayData, PinmameDis
   // the type is PINMAME_DISPLAY_TYPE_DMD | PINMAME_DISPLAY_TYPE_DMDSEG.
   // For some games like WPT, there's a second display on the playfield of type
   // PINMAME_DISPLAY_TYPE_DMD | PINMAME_DISPLAY_TYPE_DMDNOAA | PINMAME_DISPLAY_TYPE_NODISP
-  if ((p_displayLayout->type & PINMAME_DISPLAY_TYPE_DMD) == PINMAME_DISPLAY_TYPE_DMD && (p_displayLayout->type & PINMAME_DISPLAY_TYPE_NODISP) == 0)
+  if ((p_displayLayout->type & PINMAME_DISPLAY_TYPE_DMD) == PINMAME_DISPLAY_TYPE_DMD &&
+      (p_displayLayout->type & PINMAME_DISPLAY_TYPE_NODISP) == 0)
   {
     pDmd->UpdateData((uint8_t*)p_displayData, p_displayLayout->depth, p_displayLayout->width, p_displayLayout->height,
                      255, 255, 255);
@@ -400,13 +401,24 @@ void PINMAMECALLBACK OnSolenoidUpdated(PinmameSolenoidState* p_solenoidState, co
   {
     if (p_solenoidState->state)
     {
+      if (opt_debug || opt_debug_coils)
+      {
+        printf("Game started: solenoid=%d, state=%d\n", p_solenoidState->solNo, p_solenoidState->state);
+      }
       SDL_RenderTexture(pTransliteRenderer, pTransliteTexture, nullptr, nullptr);
       SDL_RenderPresent(pTransliteRenderer);
     }
-    else if (pTransliteAttractTexture)
+    else
     {
-      SDL_RenderTexture(pTransliteRenderer, pTransliteAttractTexture, nullptr, nullptr);
-      SDL_RenderPresent(pTransliteRenderer);
+      if (opt_debug || opt_debug_coils)
+      {
+        printf("Game stopped: solenoid=%d, state=%d\n", p_solenoidState->solNo, p_solenoidState->state);
+      }
+      if (pTransliteAttractTexture)
+      {
+        SDL_RenderTexture(pTransliteRenderer, pTransliteAttractTexture, nullptr, nullptr);
+        SDL_RenderPresent(pTransliteRenderer);
+      }
     }
   }
 }
