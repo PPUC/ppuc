@@ -14,6 +14,8 @@
 #include <csignal>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
+#include <queue>
 #include <thread>
 
 #include "DMDUtil/Config.h"
@@ -38,6 +40,20 @@ SDL_Texture* pTransliteTexture;
 SDL_Texture* pTransliteAttractTexture;
 SDL_Window* pVirtualDMDWindow;
 SDL_Renderer* pVirtualDMDRenderer;
+
+enum class RenderCommand
+{
+  RENDER_GAME,
+  RENDER_ATTRACT
+};
+
+struct RenderRequest
+{
+  RenderCommand command;
+};
+
+std::queue<RenderRequest> renderQueue;
+std::mutex renderMutex;
 
 bool opt_debug = false;
 bool opt_debug_switches = false;
@@ -399,19 +415,14 @@ void PINMAMECALLBACK OnSolenoidUpdated(PinmameSolenoidState* p_solenoidState, co
 
   if (p_solenoidState->solNo == ppuc->GetGameOnSolenoid())
   {
+    RenderRequest request;
     if (p_solenoidState->state)
     {
       if (opt_debug || opt_debug_coils)
       {
         printf("Game started: solenoid=%d, state=%d\n", p_solenoidState->solNo, p_solenoidState->state);
       }
-      printf("Rendering translite\n");
-      if (!SDL_SetRenderDrawColor(pTransliteRenderer, 0, 0, 0, 255) || !SDL_RenderClear(pTransliteRenderer) ||
-          !SDL_RenderTexture(pTransliteRenderer, pTransliteTexture, nullptr, nullptr) ||
-          !SDL_RenderPresent(pTransliteRenderer) || !SDL_FlushRenderer(pTransliteRenderer))
-      {
-        printf("Failed to render translite: %s\n", SDL_GetError());
-      }
+      request.command = RenderCommand::RENDER_GAME;
     }
     else
     {
@@ -421,15 +432,12 @@ void PINMAMECALLBACK OnSolenoidUpdated(PinmameSolenoidState* p_solenoidState, co
       }
       if (pTransliteAttractTexture)
       {
-        printf("Rendering attract translite\n");
-        if (!SDL_SetRenderDrawColor(pTransliteRenderer, 0, 0, 0, 255) || !SDL_RenderClear(pTransliteRenderer) ||
-            !SDL_RenderTexture(pTransliteRenderer, pTransliteAttractTexture, nullptr, nullptr) ||
-            !SDL_RenderPresent(pTransliteRenderer) || !SDL_FlushRenderer(pTransliteRenderer))
-        {
-          printf("Failed to render attract translite: %s\n", SDL_GetError());
-        }
+        request.command = RenderCommand::RENDER_ATTRACT;
       }
     }
+
+    std::lock_guard<std::mutex> lock(renderMutex);
+    renderQueue.push(request);
   }
 }
 
@@ -942,6 +950,39 @@ int main(int argc, char** argv)
         }
 
         ppuc->SetLampState(lampNo, lampState);
+      }
+
+      {
+        // Process any pending render requests
+        std::lock_guard<std::mutex> lock(renderMutex);
+        while (!renderQueue.empty())
+        {
+          const RenderRequest& request = renderQueue.front();
+
+          switch (request.command)
+          {
+            case RenderCommand::RENDER_GAME:
+              printf("Rendering translite\n");
+              if (!SDL_SetRenderDrawColor(pTransliteRenderer, 0, 0, 0, 255) || !SDL_RenderClear(pTransliteRenderer) ||
+                  !SDL_RenderTexture(pTransliteRenderer, pTransliteTexture, nullptr, nullptr) ||
+                  !SDL_RenderPresent(pTransliteRenderer) || !SDL_FlushRenderer(pTransliteRenderer))
+              {
+                printf("Failed to render translite: %s\n", SDL_GetError());
+              }
+              break;
+
+            case RenderCommand::RENDER_ATTRACT:
+              printf("Rendering attract translite\n");
+              if (!SDL_SetRenderDrawColor(pTransliteRenderer, 0, 0, 0, 255) || !SDL_RenderClear(pTransliteRenderer) ||
+                  !SDL_RenderTexture(pTransliteRenderer, pTransliteAttractTexture, nullptr, nullptr) ||
+                  !SDL_RenderPresent(pTransliteRenderer) || !SDL_FlushRenderer(pTransliteRenderer))
+              {
+                printf("Failed to render attract translite: %s\n", SDL_GetError());
+              }
+              break;
+          }
+          renderQueue.pop();
+        }
       }
 
       SDL_Event event;
