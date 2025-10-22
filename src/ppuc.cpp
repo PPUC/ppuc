@@ -407,8 +407,9 @@ void PINMAMECALLBACK OnSolenoidUpdated(PinmameSolenoidState* p_solenoidState, co
       }
       printf("Rendering translite\n");
       if (!SDL_SetRenderDrawColor(pTransliteRenderer, 0, 0, 0, 255) || !SDL_RenderClear(pTransliteRenderer) ||
+          !SDL_FlushRenderer(pTransliteRenderer) ||
           !SDL_RenderTexture(pTransliteRenderer, pTransliteTexture, nullptr, nullptr) ||
-          !SDL_RenderPresent(pTransliteRenderer))
+          !SDL_RenderPresent(pTransliteRenderer) || !SDL_FlushRenderer(pTransliteRenderer))
       {
         printf("Failed to render translite: %s\n", SDL_GetError());
       }
@@ -423,8 +424,9 @@ void PINMAMECALLBACK OnSolenoidUpdated(PinmameSolenoidState* p_solenoidState, co
       {
         printf("Rendering attract translite\n");
         if (!SDL_SetRenderDrawColor(pTransliteRenderer, 0, 0, 0, 255) || !SDL_RenderClear(pTransliteRenderer) ||
+            !SDL_FlushRenderer(pTransliteRenderer) ||
             !SDL_RenderTexture(pTransliteRenderer, pTransliteAttractTexture, nullptr, nullptr) ||
-            !SDL_RenderPresent(pTransliteRenderer))
+            !SDL_RenderPresent(pTransliteRenderer) || !SDL_FlushRenderer(pTransliteRenderer))
         {
           printf("Failed to render attract translite: %s\n", SDL_GetError());
         }
@@ -684,6 +686,7 @@ int main(int argc, char** argv)
     }
 
     SDL_RenderPresent(pTransliteRenderer);
+    SDL_FlushRenderer(pTransliteRenderer);
   }
 
   if (opt_virtual_dmd)
