@@ -406,10 +406,12 @@ void PINMAMECALLBACK OnSolenoidUpdated(PinmameSolenoidState* p_solenoidState, co
         printf("Game started: solenoid=%d, state=%d\n", p_solenoidState->solNo, p_solenoidState->state);
       }
       printf("Rendering translite\n");
-      SDL_SetRenderDrawColor(pTransliteRenderer, 0, 0, 0, 255);
-      SDL_RenderClear(pTransliteRenderer);
-      SDL_RenderTexture(pTransliteRenderer, pTransliteTexture, nullptr, nullptr);
-      SDL_RenderPresent(pTransliteRenderer);
+      if (!SDL_SetRenderDrawColor(pTransliteRenderer, 0, 0, 0, 255) || !SDL_RenderClear(pTransliteRenderer) ||
+          !SDL_RenderTexture(pTransliteRenderer, pTransliteTexture, nullptr, nullptr) ||
+          !SDL_RenderPresent(pTransliteRenderer))
+      {
+        printf("Failed to render translite: %s\n", SDL_GetError());
+      }
     }
     else
     {
@@ -420,10 +422,12 @@ void PINMAMECALLBACK OnSolenoidUpdated(PinmameSolenoidState* p_solenoidState, co
       if (pTransliteAttractTexture)
       {
         printf("Rendering attract translite\n");
-        SDL_SetRenderDrawColor(pTransliteRenderer, 0, 0, 0, 255);
-        SDL_RenderClear(pTransliteRenderer);
-        SDL_RenderTexture(pTransliteRenderer, pTransliteAttractTexture, nullptr, nullptr);
-        SDL_RenderPresent(pTransliteRenderer);
+        if (!SDL_SetRenderDrawColor(pTransliteRenderer, 0, 0, 0, 255) || !SDL_RenderClear(pTransliteRenderer) ||
+            !SDL_RenderTexture(pTransliteRenderer, pTransliteAttractTexture, nullptr, nullptr) ||
+            !SDL_RenderPresent(pTransliteRenderer))
+        {
+          printf("Failed to render attract translite: %s\n", SDL_GetError());
+        }
       }
     }
   }
