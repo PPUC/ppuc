@@ -407,7 +407,6 @@ void PINMAMECALLBACK OnSolenoidUpdated(PinmameSolenoidState* p_solenoidState, co
       }
       printf("Rendering translite\n");
       if (!SDL_SetRenderDrawColor(pTransliteRenderer, 0, 0, 0, 255) || !SDL_RenderClear(pTransliteRenderer) ||
-          !SDL_FlushRenderer(pTransliteRenderer) ||
           !SDL_RenderTexture(pTransliteRenderer, pTransliteTexture, nullptr, nullptr) ||
           !SDL_RenderPresent(pTransliteRenderer) || !SDL_FlushRenderer(pTransliteRenderer))
       {
@@ -424,7 +423,6 @@ void PINMAMECALLBACK OnSolenoidUpdated(PinmameSolenoidState* p_solenoidState, co
       {
         printf("Rendering attract translite\n");
         if (!SDL_SetRenderDrawColor(pTransliteRenderer, 0, 0, 0, 255) || !SDL_RenderClear(pTransliteRenderer) ||
-            !SDL_FlushRenderer(pTransliteRenderer) ||
             !SDL_RenderTexture(pTransliteRenderer, pTransliteAttractTexture, nullptr, nullptr) ||
             !SDL_RenderPresent(pTransliteRenderer) || !SDL_FlushRenderer(pTransliteRenderer))
         {
