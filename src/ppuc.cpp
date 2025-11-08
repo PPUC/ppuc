@@ -747,6 +747,8 @@ int main(int argc, char** argv)
       return 1;
     }
 
+    ppuc->StartUpdates();
+
     if (opt_lamp_test)
     {
       ppuc->LampTest();
@@ -762,6 +764,7 @@ int main(int argc, char** argv)
       ppuc->SwitchTest();
     }
 
+    ppuc->StopUpdates();
     ppuc->Disconnect();
 
     return 0;
