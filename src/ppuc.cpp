@@ -756,7 +756,9 @@ int main(int argc, char** argv)
 
     if (opt_coil_test)
     {
+      ppuc->SetSolenoidState(ppuc->GetGameOnSolenoid(), 1);
       ppuc->CoilTest();
+      ppuc->SetSolenoidState(ppuc->GetGameOnSolenoid(), 0);
     }
 
     if (opt_switch_test)
