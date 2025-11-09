@@ -28,6 +28,8 @@
 #include "io-boards/Event.h"
 #include "libpinmame.h"
 
+#define MAIN_LOOP_SLEEP_US 20  // Main loop sleep time in microseconds
+
 SDL_AudioStream* m_pstream = nullptr;
 SDL_AudioSpec audioSpec;
 
@@ -902,44 +904,33 @@ int main(int argc, char** argv)
 
   if (PinmameRun(opt_rom) == PINMAME_STATUS_OK)
   {
-    // Pinball machines were slower than modern CPUs. There's no need to
-    // update states too frequently at full speed.
-    int sleep_us = 1000;
-    // Poll I/O boards for events (mainly switches) every 50us.
-    int poll_interval_ms = 50;
-    int poll_trigger = poll_interval_ms * 1000 / sleep_us;
     int index_recv = 0;
 
     ppuc->StartUpdates();
 
     while (running)
     {
-      std::this_thread::sleep_for(std::chrono::microseconds(sleep_us));
+      std::this_thread::sleep_for(std::chrono::microseconds(MAIN_LOOP_SLEEP_US));
 
       if (!game_state)
       {
         continue;
       }
 
-      if (--poll_trigger <= 0)
+      PPUCSwitchState* switchState;
+      while ((switchState = ppuc->GetNextSwitchState()) != nullptr)
       {
-        poll_trigger = poll_interval_ms * 1000 / sleep_us;
-
-        PPUCSwitchState* switchState;
-        while ((switchState = ppuc->GetNextSwitchState()) != nullptr)
+        if (opt_debug || opt_debug_switches)
         {
-          if (opt_debug || opt_debug_switches)
-          {
-            printf("Switch updated: #%d, %d\n", switchState->number, switchState->state);
-          }
+          printf("Switch updated: #%d, %d\n", switchState->number, switchState->state);
+        }
 
-          // Switches between 200 and 240 are custom switches within the io-boards which should not be sent to
-          // pinmame. Switches above 240 will become negative values, for example 243 => -3.
-          if (switchState->number < 200 || switchState->number > 241)
-          {
-            int switchNumber = (switchState->number < 241) ? switchState->number : 240 - switchState->number;
-            PinmameSetSwitch(switchNumber, switchState->state);
-          }
+        // Switches between 200 and 240 are custom switches within the io-boards which should not be sent to
+        // pinmame. Switches above 240 will become negative values, for example 243 => -3.
+        if (switchState->number < 200 || switchState->number > 241)
+        {
+          int switchNumber = (switchState->number < 241) ? switchState->number : 240 - switchState->number;
+          PinmameSetSwitch(switchNumber, switchState->state);
         }
       }
 
@@ -957,7 +948,7 @@ int main(int argc, char** argv)
         ppuc->SetLampState(lampNo, lampState);
       }
 
-      {
+      {  // Needs to be a separate scope for the lock_guard
         // Process any pending render requests
         std::lock_guard<std::mutex> lock(renderMutex);
         while (!renderQueue.empty())
