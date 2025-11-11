@@ -485,12 +485,6 @@ void signal_handler(int sig) { running = false; }
 
 int main(int argc, char** argv)
 {
-  signal(SIGHUP, signal_handler);
-  signal(SIGKILL, signal_handler);
-  signal(SIGTERM, signal_handler);
-  signal(SIGQUIT, signal_handler);
-  signal(SIGABRT, signal_handler);
-
   char identifier;
   cag_option_context cag_context;
   const char* config_file = NULL;
@@ -932,6 +926,13 @@ int main(int argc, char** argv)
 
   if (PinmameRun(opt_rom) == PINMAME_STATUS_OK)
   {
+    // Setup signal handlers to allow graceful termination
+    signal(SIGHUP, signal_handler);
+    signal(SIGKILL, signal_handler);
+    signal(SIGTERM, signal_handler);
+    signal(SIGQUIT, signal_handler);
+    signal(SIGABRT, signal_handler);
+
     int index_recv = 0;
 
     ppuc->StartUpdates();
