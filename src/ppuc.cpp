@@ -149,6 +149,12 @@ static struct cag_option options[] = {
     {.identifier = '0', .access_name = "switch-test", .value_name = NULL, .description = "Run switch test"},
     {.identifier = '1', .access_name = "coil-test", .value_name = NULL, .description = "Run coil test"},
     {.identifier = '2', .access_name = "lamp-test", .value_name = NULL, .description = "Run lamp test"},
+    {.identifier = '3', .access_name = "gi-test", .value_name = NULL, .description = "Run lamp test"},
+    {.identifier = '4', .access_name = "flasher-test", .value_name = NULL, .description = "Run flasher test"},
+    {.identifier = '5',
+     .access_name = "number",
+     .value_name = "VALUE",
+     .description = "Specifiy a specific number for coil/lamp/GI/flasher test"},
     {.identifier = 'D',
      .access_name = "translite",
      .value_name = "VALUE",
@@ -497,6 +503,9 @@ int main(int argc, char** argv)
   bool opt_switch_test = false;
   bool opt_coil_test = false;
   bool opt_lamp_test = false;
+  bool opt_gi_test = false;
+  bool opt_flasher_test = false;
+  uint8_t opt_number = 0;
   const char* opt_translite = NULL;
   const char* opt_translite_attract = NULL;
   bool opt_translite_window = false;
@@ -576,6 +585,15 @@ int main(int argc, char** argv)
         break;
       case '2':
         opt_lamp_test = true;
+        break;
+      case '3':
+        opt_gi_test = true;
+        break;
+      case '4':
+        opt_flasher_test = true;
+        break;
+      case '5':
+        opt_number = atoi(cag_option_get_value(&cag_context));
         break;
       case 'D':
         opt_translite = cag_option_get_value(&cag_context);
@@ -750,17 +768,26 @@ int main(int argc, char** argv)
     }
 
     ppuc->StartUpdates();
+    ppuc->SetSolenoidState(ppuc->GetGameOnSolenoid(), 1);
 
     if (opt_lamp_test)
     {
-      ppuc->LampTest();
+      ppuc->LampTest(opt_number);
+    }
+
+    if (opt_gi_test)
+    {
+      ppuc->GITest(opt_number);
+    }
+
+    if (opt_flasher_test)
+    {
+      ppuc->FlasherTest(opt_number);
     }
 
     if (opt_coil_test)
     {
-      ppuc->SetSolenoidState(ppuc->GetGameOnSolenoid(), 1);
-      ppuc->CoilTest();
-      ppuc->SetSolenoidState(ppuc->GetGameOnSolenoid(), 0);
+      ppuc->CoilTest(opt_number);
     }
 
     if (opt_switch_test)
@@ -768,6 +795,7 @@ int main(int argc, char** argv)
       ppuc->SwitchTest();
     }
 
+    ppuc->SetSolenoidState(ppuc->GetGameOnSolenoid(), 0);
     ppuc->StopUpdates();
     ppuc->Disconnect();
 
