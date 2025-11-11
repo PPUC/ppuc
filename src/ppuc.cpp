@@ -481,10 +481,18 @@ void PINMAMECALLBACK OnConsoleDataUpdated(void* p_data, int size, const void* p_
 
 int PINMAMECALLBACK IsKeyPressed(PINMAME_KEYCODE keycode, const void* p_userData) { return 0; }
 
-void signal_handler(int sig) { running = false; }
+void signal_handler_graceful(int sig) { running = false; }
+void signal_handler_quit(int sig) { exit(1); }
 
 int main(int argc, char** argv)
 {
+  // Setup signal handlers to allow graceful termination
+  signal(SIGHUP, signal_handler_quit);
+  signal(SIGKILL, signal_handler_quit);
+  signal(SIGTERM, signal_handler_quit);
+  signal(SIGQUIT, signal_handler_quit);
+  signal(SIGABRT, signal_handler_quit);
+
   char identifier;
   cag_option_context cag_context;
   const char* config_file = NULL;
@@ -927,11 +935,11 @@ int main(int argc, char** argv)
   if (PinmameRun(opt_rom) == PINMAME_STATUS_OK)
   {
     // Setup signal handlers to allow graceful termination
-    signal(SIGHUP, signal_handler);
-    signal(SIGKILL, signal_handler);
-    signal(SIGTERM, signal_handler);
-    signal(SIGQUIT, signal_handler);
-    signal(SIGABRT, signal_handler);
+    signal(SIGHUP, signal_handler_graceful);
+    signal(SIGKILL, signal_handler_graceful);
+    signal(SIGTERM, signal_handler_graceful);
+    signal(SIGQUIT, signal_handler_graceful);
+    signal(SIGABRT, signal_handler_graceful);
 
     int index_recv = 0;
 
