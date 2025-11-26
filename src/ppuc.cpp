@@ -5,6 +5,7 @@
 #endif
 
 #include "PPUC.h"
+#include "ppuc_version.h" // <--- HINZUGEFÜGT
 
 #include <ctype.h>
 #include <inttypes.h>
@@ -486,6 +487,10 @@ void signal_handler_quit(int sig) { exit(1); }
 
 int main(int argc, char** argv)
 {
+  // version info
+  printf("PPUC Version: %s\n", PPUC_EXECUTABLE_VERSION);
+  printf("Commit SHA: %s\n", PPUC_EXECUTABLE_SHA);
+
   // Setup signal handlers to allow graceful termination
   signal(SIGHUP, signal_handler_quit);
   signal(SIGKILL, signal_handler_quit);

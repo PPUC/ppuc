@@ -1,5 +1,7 @@
 #pragma once
 
+#define PPUC_EXECUTABLE_SHA "SHA"  // Git commit SHA placeholder
+
 #define PPUC_EXECUTABLE_VERSION_MAJOR 0  // X Digits
 #define PPUC_EXECUTABLE_VERSION_MINOR 3  // Max 2 Digits
 #define PPUC_EXECUTABLE_VERSION_PATCH 0  // Max 2 Digits

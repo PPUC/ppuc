@@ -54,6 +54,16 @@ jobs:
             arch: aarch64
     steps:
       - uses: actions/checkout@v4
+      - if: (matrix.platform != 'macos')
+        name: Patch SHA into ppuc_version.h
+        run: |
+          GIT_SHA=$(git rev-parse --short HEAD)
+          sed -i 's/^#define PPUC_EXECUTABLE_SHA .*/#define PPUC_EXECUTABLE_SHA "'$GIT_SHA'"/' src/ppuc_version.h
+      - if: (matrix.platform == 'macos')
+        name: Patch SHA into ppuc_version.h
+        run: |
+          GIT_SHA=$(git rev-parse --short HEAD)
+          sed -i '' 's/^#define PPUC_EXECUTABLE_SHA .*/#define PPUC_EXECUTABLE_SHA "'$GIT_SHA'"/' src/ppuc_version.h
       - if: (matrix.platform == 'win')
         name: Add msbuild to path (win runner)
         uses: microsoft/setup-msbuild@v2
