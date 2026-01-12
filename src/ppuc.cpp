@@ -18,6 +18,7 @@
 #include <mutex>
 #include <queue>
 #include <thread>
+#include <type_traits>
 
 #include "DMDUtil/Config.h"
 #include "DMDUtil/ConsoleDMD.h"
@@ -70,6 +71,25 @@ bool opt_console_display = false;
 const char* opt_rom = NULL;
 int game_state = 0;
 bool running = true;
+
+template <typename T>
+struct LogCallbackTraits;
+
+template <typename R, typename A1, typename A2, typename A3, typename A4>
+struct LogCallbackTraits<R (*)(A1, A2, A3, A4)>
+{
+  using Arg3 = A3;
+};
+
+#if defined(_WIN32) || defined(_WIN64)
+template <typename R, typename A1, typename A2, typename A3, typename A4>
+struct LogCallbackTraits<R(__stdcall *)(A1, A2, A3, A4)>
+{
+  using Arg3 = A3;
+};
+#endif
+
+using PinmameLogMessageArg = LogCallbackTraits<PinmameOnLogMessageCallback>::Arg3;
 
 static struct cag_option options[] = {
     {.identifier = 'c',
@@ -243,9 +263,24 @@ void PINMAMECALLBACK OnStateUpdated(int state, void* p_userData)
   }
 }
 
-void PINMAMECALLBACK OnLogMessage(PINMAME_LOG_LEVEL logLevel, const char* format, char* message, void* p_userData)
+template <typename T>
+static void PrintPinmameLogMessage(PINMAME_LOG_LEVEL logLevel, const char* format, T arg)
 {
-  const char* logMessage = message ? message : format;
+  const char* logMessage = format;
+  char buffer[1024];
+
+  if constexpr (std::is_same_v<T, char*> || std::is_same_v<T, const char*>)
+  {
+    if (arg)
+    {
+      logMessage = arg;
+    }
+  }
+  else
+  {
+    vsnprintf(buffer, sizeof(buffer), format, arg);
+    logMessage = buffer;
+  }
 
   if (logLevel == PINMAME_LOG_LEVEL_INFO)
   {
@@ -255,6 +290,12 @@ void PINMAMECALLBACK OnLogMessage(PINMAME_LOG_LEVEL logLevel, const char* format
   {
     printf("ERROR: %s", logMessage);
   }
+}
+
+void PINMAMECALLBACK OnLogMessage(PINMAME_LOG_LEVEL logLevel, const char* format, PinmameLogMessageArg arg,
+                                  void* p_userData)
+{
+  PrintPinmameLogMessage(logLevel, format, arg);
 }
 
 void DMDUTILCALLBACK DMDUtilLogCallback(DMDUtil_LogLevel logLevel, const char* format, va_list args)
