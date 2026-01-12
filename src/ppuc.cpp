@@ -211,7 +211,7 @@ void PINMAMECALLBACK Game(PinmameGame* game)
       game->name, game->description, game->manufacturer, game->year, (unsigned long)game->flags, game->found);
 }
 
-void PINMAMECALLBACK OnStateUpdated(int state, const void* p_userData)
+void PINMAMECALLBACK OnStateUpdated(int state, void* p_userData)
 {
   if (opt_debug)
   {
@@ -243,18 +243,17 @@ void PINMAMECALLBACK OnStateUpdated(int state, const void* p_userData)
   }
 }
 
-void PINMAMECALLBACK OnLogMessage(PINMAME_LOG_LEVEL logLevel, const char* format, va_list args, const void* p_userData)
+void PINMAMECALLBACK OnLogMessage(PINMAME_LOG_LEVEL logLevel, const char* format, char* message, void* p_userData)
 {
-  char buffer[1024];
-  vsnprintf(buffer, sizeof(buffer), format, args);
+  const char* logMessage = message ? message : format;
 
   if (logLevel == PINMAME_LOG_LEVEL_INFO)
   {
-    printf("INFO: %s", buffer);
+    printf("INFO: %s", logMessage);
   }
   else if (logLevel == PINMAME_LOG_LEVEL_ERROR)
   {
-    printf("ERROR: %s", buffer);
+    printf("ERROR: %s", logMessage);
   }
 }
 
@@ -281,7 +280,7 @@ void DMDUTILCALLBACK DMDUtilLogCallback(DMDUtil_LogLevel logLevel, const char* f
 }
 
 void PINMAMECALLBACK OnDisplayAvailable(int index, int displayCount, PinmameDisplayLayout* p_displayLayout,
-                                        const void* p_userData)
+                                        void* p_userData)
 {
   if (opt_debug)
   {
@@ -295,7 +294,7 @@ void PINMAMECALLBACK OnDisplayAvailable(int index, int displayCount, PinmameDisp
 }
 
 void PINMAMECALLBACK OnDisplayUpdated(int index, void* p_displayData, PinmameDisplayLayout* p_displayLayout,
-                                      const void* p_userData)
+                                      void* p_userData)
 {
   if (p_displayData == nullptr)
   {
@@ -347,6 +346,13 @@ void PINMAMECALLBACK OnDisplayUpdated(int index, void* p_displayData, PinmameDis
       case PINMAME_DISPLAY_TYPE_SEGALL:   // maximum segment definition number
       case PINMAME_DISPLAY_TYPE_IMPORT:   // Link to another display layout
       case PINMAME_DISPLAY_TYPE_SEGMASK:  // Note that CORE_IMPORT must be part of the segmask as well!
+      case PINMAME_DISPLAY_TYPE_SEG8H:
+      case PINMAME_DISPLAY_TYPE_SEG7H:
+      case PINMAME_DISPLAY_TYPE_SEG87H:
+      case PINMAME_DISPLAY_TYPE_SEG87FH:
+      case PINMAME_DISPLAY_TYPE_SEG7SH:
+      case PINMAME_DISPLAY_TYPE_SEG7SCH:
+      case PINMAME_DISPLAY_TYPE_VIDEO_ROT90:
         break;
 
       case PINMAME_DISPLAY_TYPE_VIDEO:  // VIDEO Display
@@ -354,7 +360,6 @@ void PINMAMECALLBACK OnDisplayUpdated(int index, void* p_displayData, PinmameDis
         break;
 
       case PINMAME_DISPLAY_TYPE_DMD:     // DMD Display
-      case PINMAME_DISPLAY_TYPE_DMDSEG:  // @todo
         // handled above, just surpress a warning of missing cases here.
         break;
 
@@ -367,7 +372,7 @@ void PINMAMECALLBACK OnDisplayUpdated(int index, void* p_displayData, PinmameDis
   }
 }
 
-int PINMAMECALLBACK OnAudioAvailable(PinmameAudioInfo* p_audioInfo, const void* p_userData)
+int PINMAMECALLBACK OnAudioAvailable(PinmameAudioInfo* p_audioInfo, void* p_userData)
 {
   if (opt_debug)
   {
@@ -404,7 +409,7 @@ int PINMAMECALLBACK OnAudioAvailable(PinmameAudioInfo* p_audioInfo, const void* 
   return p_audioInfo->samplesPerFrame;
 }
 
-int PINMAMECALLBACK OnAudioUpdated(void* p_buffer, int samples, const void* p_userData)
+int PINMAMECALLBACK OnAudioUpdated(void* p_buffer, int samples, void* p_userData)
 {
   if (m_pstream)
   {
@@ -413,7 +418,7 @@ int PINMAMECALLBACK OnAudioUpdated(void* p_buffer, int samples, const void* p_us
   return samples;
 }
 
-void PINMAMECALLBACK OnSolenoidUpdated(PinmameSolenoidState* p_solenoidState, const void* p_userData)
+void PINMAMECALLBACK OnSolenoidUpdated(PinmameSolenoidState* p_solenoidState, void* p_userData)
 {
   if (opt_debug || opt_debug_coils)
   {
@@ -450,7 +455,7 @@ void PINMAMECALLBACK OnSolenoidUpdated(PinmameSolenoidState* p_solenoidState, co
   }
 }
 
-void PINMAMECALLBACK OnMechAvailable(int mechNo, PinmameMechInfo* p_mechInfo, const void* p_userData)
+void PINMAMECALLBACK OnMechAvailable(int mechNo, PinmameMechInfo* p_mechInfo, void* p_userData)
 {
   if (opt_debug)
   {
@@ -461,7 +466,7 @@ void PINMAMECALLBACK OnMechAvailable(int mechNo, PinmameMechInfo* p_mechInfo, co
   }
 }
 
-void PINMAMECALLBACK OnMechUpdated(int mechNo, PinmameMechInfo* p_mechInfo, const void* p_userData)
+void PINMAMECALLBACK OnMechUpdated(int mechNo, PinmameMechInfo* p_mechInfo, void* p_userData)
 {
   if (opt_debug)
   {
@@ -472,7 +477,7 @@ void PINMAMECALLBACK OnMechUpdated(int mechNo, PinmameMechInfo* p_mechInfo, cons
   }
 }
 
-void PINMAMECALLBACK OnConsoleDataUpdated(void* p_data, int size, const void* p_userData)
+void PINMAMECALLBACK OnConsoleDataUpdated(void* p_data, int size, void* p_userData)
 {
   if (opt_debug)
   {
@@ -480,7 +485,7 @@ void PINMAMECALLBACK OnConsoleDataUpdated(void* p_data, int size, const void* p_
   }
 }
 
-int PINMAMECALLBACK IsKeyPressed(PINMAME_KEYCODE keycode, const void* p_userData) { return 0; }
+int PINMAMECALLBACK IsKeyPressed(PINMAME_KEYCODE keycode, void* p_userData) { return 0; }
 
 void signal_handler_graceful(int sig) { running = false; }
 void signal_handler_quit(int sig) { exit(1); }
