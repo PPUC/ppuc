@@ -81,7 +81,7 @@ struct LogCallbackTraits<R (*)(A1, A2, A3, A4)>
   using Arg3 = A3;
 };
 
-#if defined(_WIN32) || defined(_WIN64)
+#if defined(_WIN32) && !defined(_WIN64)
 template <typename R, typename A1, typename A2, typename A3, typename A4>
 struct LogCallbackTraits<R(__stdcall *)(A1, A2, A3, A4)>
 {

@@ -161,12 +161,18 @@ void signal_handler(int sig)
 
 int main(int argc, char* argv[])
 {
-  signal(SIGHUP, signal_handler);
   signal(SIGINT, signal_handler);
-  signal(SIGKILL, signal_handler);
   signal(SIGTERM, signal_handler);
-  signal(SIGQUIT, signal_handler);
   signal(SIGABRT, signal_handler);
+#ifdef SIGHUP
+  signal(SIGHUP, signal_handler);
+#endif
+#ifdef SIGKILL
+  signal(SIGKILL, signal_handler);
+#endif
+#ifdef SIGQUIT
+  signal(SIGQUIT, signal_handler);
+#endif
 
   char identifier;
   cag_option_context cag_context;

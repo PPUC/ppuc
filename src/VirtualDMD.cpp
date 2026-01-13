@@ -5,7 +5,7 @@
 #include "xbrz/xbrz.h"
 #include "FrameUtil.h"
 
-void VirtualDMD::Update(uint8_t* pData, u_int16_t width, u_int16_t height)
+void VirtualDMD::Update(uint8_t* pData, uint16_t width, uint16_t height)
 {
   if (width == 0) width = m_width;
   if (height == 0) height = m_height;
