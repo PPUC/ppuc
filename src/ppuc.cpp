@@ -149,7 +149,11 @@ static struct cag_option options[] = {
      .access_letters = "m",
      .access_name = "dump-display",
      .value_name = NULL,
-     .description = "Enable display dump (optional)"},
+     .description = "Write DMD txt dump files (optional)"},
+    {.identifier = 'X',
+     .access_name = "dump-dmd-txt",
+     .value_name = NULL,
+     .description = "Write DMD txt dump files (optional)"},
     {.identifier = 'd',
      .access_letters = "d",
      .access_name = "debug",
@@ -616,6 +620,9 @@ int main(int argc, char** argv)
         opt_console_display = true;
         break;
       case 'm':
+        opt_dump = true;
+        break;
+      case 'X':
         opt_dump = true;
         break;
       case 'd':

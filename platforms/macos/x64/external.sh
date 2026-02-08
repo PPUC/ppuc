@@ -188,6 +188,8 @@ cp pinmame/pinmame/src/libpinmame/libpinmame.h ../third-party/include/
 
 cp -a libdmdutil/libdmdutil/build/libdmdutil.{dylib,*.dylib} ../third-party/runtime-libs/macos-x64/
 cp -r libdmdutil/libdmdutil/include/DMDUtil ../third-party/include/
+cp -a libdmdutil/libdmdutil/third-party/runtime-libs/macos/x64/libusb*.dylib ../third-party/runtime-libs/macos-x64/
+cp -a libdmdutil/libdmdutil/third-party/runtime-libs/macos/x64/libvni.{dylib,*.dylib} ../third-party/runtime-libs/macos-x64/
 cp -a libdmdutil/libdmdutil/third-party/runtime-libs/macos/x64/libzedmd.{dylib,*.dylib} ../third-party/runtime-libs/macos-x64/
 cp libdmdutil/libdmdutil/third-party/include/ZeDMD.h ../third-party/include/
 cp -a libdmdutil/libdmdutil/third-party/runtime-libs/macos/x64/libserum.{dylib,*.dylib} ../third-party/runtime-libs/macos-x64/

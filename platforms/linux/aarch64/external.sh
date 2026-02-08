@@ -185,6 +185,8 @@ cp pinmame/pinmame/src/libpinmame/libpinmame.h ../third-party/include/
 
 cp -a libdmdutil/libdmdutil/build/libdmdutil.{so,so.*} ../third-party/runtime-libs/linux-aarch64/
 cp -r libdmdutil/libdmdutil/include/DMDUtil ../third-party/include/
+cp -a libdmdutil/libdmdutil/third-party/runtime-libs/linux/aarch64/libusb-1.0.{so,so.*} ../third-party/runtime-libs/linux-aarch64/
+cp -a libdmdutil/libdmdutil/third-party/runtime-libs/linux/aarch64/libvni.{so,so.*} ../third-party/runtime-libs/linux-aarch64/
 cp -a libdmdutil/libdmdutil/third-party/runtime-libs/linux/aarch64/libzedmd.{so,so.*} ../third-party/runtime-libs/linux-aarch64/
 cp libdmdutil/libdmdutil/third-party/include/ZeDMD.h ../third-party/include/
 cp -a libdmdutil/libdmdutil/third-party/runtime-libs/linux/aarch64/libserum.{so,so.*} ../third-party/runtime-libs/linux-aarch64/

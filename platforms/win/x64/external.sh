@@ -196,6 +196,10 @@ cp pinmame/pinmame/src/libpinmame/libpinmame.h ../third-party/include/
 cp libdmdutil/libdmdutil/build/${BUILD_TYPE}/dmdutil64.lib ../third-party/build-libs/win-x64/
 cp libdmdutil/libdmdutil/build/${BUILD_TYPE}/dmdutil64.dll ../third-party/runtime-libs/win-x64/
 cp -r libdmdutil/libdmdutil/include/DMDUtil ../third-party/include/
+cp libdmdutil/libdmdutil/third-party/build-libs/win/x64/libusb64-1.0.lib ../third-party/build-libs/win-x64/
+cp libdmdutil/libdmdutil/third-party/runtime-libs/win/x64/libusb64-1.0.dll ../third-party/runtime-libs/win-x64/
+cp libdmdutil/libdmdutil/third-party/build-libs/win/x64/vni64.lib ../third-party/build-libs/win-x64/
+cp libdmdutil/libdmdutil/third-party/runtime-libs/win/x64/vni64.dll ../third-party/runtime-libs/win-x64/
 cp libdmdutil/libdmdutil/third-party/build-libs/win/x64/zedmd64.lib ../third-party/build-libs/win-x64/
 cp libdmdutil/libdmdutil/third-party/runtime-libs/win/x64/zedmd64.dll ../third-party/runtime-libs/win-x64/
 cp libdmdutil/libdmdutil/third-party/include/ZeDMD.h ../third-party/include/
