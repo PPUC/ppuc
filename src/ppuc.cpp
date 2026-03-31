@@ -2,6 +2,7 @@
 #define SIGHUP 1
 #define SIGKILL 9
 #define SIGQUIT 3
+#define SIGINT 2
 #endif
 
 #include "PPUC.h"
@@ -15,6 +16,7 @@
 #include <csignal>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <mutex>
 #include <queue>
 #include <thread>
@@ -23,6 +25,7 @@
 #include "DMDUtil/Config.h"
 #include "DMDUtil/ConsoleDMD.h"
 #include "DMDUtil/DMDUtil.h"
+#include "PUPTriggerEngine.h"
 #include "SDL3/SDL.h"
 #include "SDL3_image/SDL_image.h"
 #include "VirtualDMD.h"
@@ -37,6 +40,7 @@ SDL_AudioSpec audioSpec;
 
 DMDUtil::DMD* pDmd;
 PPUC* ppuc;
+std::unique_ptr<PUPTriggerEngine> pPUPTriggerEngine;
 
 SDL_Window* pTransliteWindow;
 SDL_Renderer* pTransliteRenderer;
@@ -71,6 +75,7 @@ bool opt_console_display = false;
 const char* opt_rom = NULL;
 int game_state = 0;
 bool running = true;
+volatile std::sig_atomic_t shutdown_requested = 0;
 
 template <typename T>
 struct LogCallbackTraits;
@@ -90,6 +95,21 @@ struct LogCallbackTraits<R(__stdcall *)(A1, A2, A3, A4)>
 #endif
 
 using PinmameLogMessageArg = LogCallbackTraits<PinmameOnLogMessageCallback>::Arg3;
+
+static void PrintFlushedLogLine(const char* prefix, const char* message)
+{
+  const char* safeMessage = message ? message : "";
+  const size_t len = strlen(safeMessage);
+  const bool hasTrailingNewline = len > 0 && safeMessage[len - 1] == '\n';
+
+  fputs(prefix, stdout);
+  fputs(safeMessage, stdout);
+  if (!hasTrailingNewline)
+  {
+    fputc('\n', stdout);
+  }
+  fflush(stdout);
+}
 
 static struct cag_option options[] = {
     {.identifier = 'c',
@@ -140,6 +160,10 @@ static struct cag_option options[] = {
      .access_name = "pup",
      .value_name = "VALUE",
      .description = "Enable PUP videos (optional)"},
+    {.identifier = 'y',
+     .access_name = "pup-triggers",
+     .value_name = "VALUE",
+     .description = "Path to PUP trigger rules file (optional)"},
     {.identifier = 'i',
      .access_letters = "i",
      .access_name = "console-display",
@@ -244,7 +268,9 @@ void PINMAMECALLBACK OnStateUpdated(int state, void* p_userData)
 
   if (!state)
   {
-    exit(1);
+    running = false;
+    shutdown_requested = 1;
+    return;
   }
   else
   {
@@ -288,11 +314,11 @@ static void PrintPinmameLogMessage(PINMAME_LOG_LEVEL logLevel, const char* forma
 
   if (logLevel == PINMAME_LOG_LEVEL_INFO)
   {
-    printf("INFO: %s", logMessage);
+    PrintFlushedLogLine("INFO: ", logMessage);
   }
   else if (logLevel == PINMAME_LOG_LEVEL_ERROR)
   {
-    printf("ERROR: %s", logMessage);
+    PrintFlushedLogLine("ERROR: ", logMessage);
   }
 }
 
@@ -312,15 +338,21 @@ void DMDUTILCALLBACK DMDUtilLogCallback(DMDUtil_LogLevel logLevel, const char* f
 
   if (logLevel == DMDUtil_LogLevel_INFO)
   {
-    printf("%lu INFO: %s", now, buffer);
+    char logLine[1152];
+    snprintf(logLine, sizeof(logLine), "%" PRIu32 " INFO: %s", now, buffer);
+    PrintFlushedLogLine("", logLine);
   }
   else if (logLevel == DMDUtil_LogLevel_DEBUG)
   {
-    printf("%lu DEBUG: %s\n", now, buffer);
+    char logLine[1152];
+    snprintf(logLine, sizeof(logLine), "%" PRIu32 " DEBUG: %s", now, buffer);
+    PrintFlushedLogLine("", logLine);
   }
   else if (logLevel == DMDUtil_LogLevel_ERROR)
   {
-    printf("%lu ERROR: %s", now, buffer);
+    char logLine[1152];
+    snprintf(logLine, sizeof(logLine), "%" PRIu32 " ERROR: %s", now, buffer);
+    PrintFlushedLogLine("", logLine);
   }
 }
 
@@ -448,7 +480,7 @@ int PINMAMECALLBACK OnAudioAvailable(PinmameAudioInfo* p_audioInfo, void* p_user
     }
     else
     {
-      printf("SDL failed to load audio stream: %s", SDL_GetError());
+      printf("SDL failed to load audio stream: %s\n", SDL_GetError());
     }
   }
   return p_audioInfo->samplesPerFrame;
@@ -465,21 +497,33 @@ int PINMAMECALLBACK OnAudioUpdated(void* p_buffer, int samples, void* p_userData
 
 void PINMAMECALLBACK OnSolenoidUpdated(PinmameSolenoidState* p_solenoidState, void* p_userData)
 {
+  const uint8_t coilState = p_solenoidState->state == 0 ? 0 : 1;
+  const bool isGameOnCoil = p_solenoidState->solNo == ppuc->GetGameOnSolenoid();
+
   if (opt_debug || opt_debug_coils)
   {
-    printf("OnSolenoidUpdated: solenoid=%d, state=%d\n", p_solenoidState->solNo, p_solenoidState->state);
+    printf("OnSolenoidUpdated: solenoid=%d, state=%d\n", p_solenoidState->solNo, coilState);
   }
 
-  ppuc->SetSolenoidState(p_solenoidState->solNo, p_solenoidState->state);
+  if (pPUPTriggerEngine)
+  {
+    if (isGameOnCoil)
+    {
+      pPUPTriggerEngine->SetAttractMode(coilState == 0);
+    }
+    pPUPTriggerEngine->OnCoilState(p_solenoidState->solNo, coilState);
+  }
 
-  if (p_solenoidState->solNo == ppuc->GetGameOnSolenoid())
+  ppuc->SetSolenoidState(p_solenoidState->solNo, coilState);
+
+  if (isGameOnCoil)
   {
     RenderRequest request;
-    if (p_solenoidState->state)
+    if (coilState)
     {
       if (opt_debug || opt_debug_coils)
       {
-        printf("Game started: solenoid=%d, state=%d\n", p_solenoidState->solNo, p_solenoidState->state);
+        printf("Game started: solenoid=%d, state=%d\n", p_solenoidState->solNo, coilState);
       }
       request.command = RenderCommand::RENDER_GAME;
     }
@@ -487,7 +531,7 @@ void PINMAMECALLBACK OnSolenoidUpdated(PinmameSolenoidState* p_solenoidState, vo
     {
       if (opt_debug || opt_debug_coils)
       {
-        printf("Game stopped: solenoid=%d, state=%d\n", p_solenoidState->solNo, p_solenoidState->state);
+        printf("Game stopped: solenoid=%d, state=%d\n", p_solenoidState->solNo, coilState);
       }
       if (pTransliteAttractTexture)
       {
@@ -532,8 +576,11 @@ void PINMAMECALLBACK OnConsoleDataUpdated(void* p_data, int size, void* p_userDa
 
 int PINMAMECALLBACK IsKeyPressed(PINMAME_KEYCODE keycode, void* p_userData) { return 0; }
 
-void signal_handler_graceful(int sig) { running = false; }
-void signal_handler_quit(int sig) { exit(1); }
+void signal_handler_graceful(int sig)
+{
+  running = false;
+  shutdown_requested = 1;
+}
 
 int main(int argc, char** argv)
 {
@@ -542,15 +589,16 @@ int main(int argc, char** argv)
   printf("Commit SHA: %s\n", PPUC_EXECUTABLE_SHA);
 
   // Setup signal handlers to allow graceful termination
-  signal(SIGHUP, signal_handler_quit);
-  signal(SIGKILL, signal_handler_quit);
-  signal(SIGTERM, signal_handler_quit);
-  signal(SIGQUIT, signal_handler_quit);
-  signal(SIGABRT, signal_handler_quit);
+  signal(SIGINT, signal_handler_graceful);
+  signal(SIGHUP, signal_handler_graceful);
+  signal(SIGTERM, signal_handler_graceful);
+  signal(SIGQUIT, signal_handler_graceful);
+  signal(SIGABRT, signal_handler_graceful);
 
   char identifier;
   cag_option_context cag_context;
   const char* config_file = NULL;
+  const char* opt_pup_triggers = NULL;
   const char* opt_backbox_address = NULL;
   uint16_t opt_backbox_port = 6789;
   const char* opt_serial = NULL;
@@ -575,7 +623,7 @@ int main(int argc, char** argv)
   uint16_t opt_virtual_dmd_width = 1280;
   uint16_t opt_virtual_dmd_height = 320;
   int8_t opt_virtual_dmd_screen = -1;
-  VirtualDMD* pVirtualDMD;
+  VirtualDMD* pVirtualDMD = nullptr;
 
   cag_option_init(&cag_context, options, CAG_ARRAY_SIZE(options), argc, argv);
   while (cag_option_fetch(&cag_context))
@@ -615,6 +663,9 @@ int main(int argc, char** argv)
         break;
       case 'p':
         opt_pup = true;
+        break;
+      case 'y':
+        opt_pup_triggers = cag_option_get_value(&cag_context);
         break;
       case 'i':
         opt_console_display = true;
@@ -735,7 +786,7 @@ int main(int argc, char** argv)
                                      opt_translite_window ? SDL_WINDOW_BORDERLESS : SDL_WINDOW_FULLSCREEN,
                                      &pTransliteWindow, &pTransliteRenderer))
     {
-      printf("SDL couldn't create translite window/renderer: %s", SDL_GetError());
+      printf("SDL couldn't create translite window/renderer: %s\n", SDL_GetError());
       return SDL_APP_FAILURE;
     }
 
@@ -781,7 +832,7 @@ int main(int argc, char** argv)
                                      opt_virtual_dmd_window ? SDL_WINDOW_BORDERLESS : SDL_WINDOW_FULLSCREEN,
                                      &pVirtualDMDWindow, &pVirtualDMDRenderer))
     {
-      printf("SDL couldn't create virtual DMD window/renderer: %s", SDL_GetError());
+      printf("SDL couldn't create virtual DMD window/renderer: %s\n", SDL_GetError());
       return SDL_APP_FAILURE;
     }
 
@@ -867,6 +918,26 @@ int main(int argc, char** argv)
   // So it is important to start that search before the RS485 BUS gets
   // initialized.
   DMDUtil::Config* dmdConfig = DMDUtil::Config::GetInstance();
+
+  if (opt_pup_triggers)
+  {
+    pPUPTriggerEngine = std::make_unique<PUPTriggerEngine>();
+    pPUPTriggerEngine->SetDebug(opt_debug);
+    pPUPTriggerEngine->SetTriggerCallback([](const char source, const uint16_t id, const uint8_t value) {
+      if (pDmd)
+      {
+        pDmd->SetPUPTrigger(source, id, value);
+      }
+    });
+
+    std::string error;
+    if (!pPUPTriggerEngine->LoadRules(opt_pup_triggers, error))
+    {
+      printf("%s: %s\n", error.c_str(), opt_pup_triggers);
+      return 1;
+    }
+    printf("Loaded %zu PUP trigger rule(s) from %s\n", pPUPTriggerEngine->GetRuleCount(), opt_pup_triggers);
+  }
 
   PinmameConfig config = {
       PINMAME_AUDIO_FORMAT_INT16,
@@ -993,8 +1064,8 @@ int main(int argc, char** argv)
   if (PinmameRun(opt_rom) == PINMAME_STATUS_OK)
   {
     // Setup signal handlers to allow graceful termination
+    signal(SIGINT, signal_handler_graceful);
     signal(SIGHUP, signal_handler_graceful);
-    signal(SIGKILL, signal_handler_graceful);
     signal(SIGTERM, signal_handler_graceful);
     signal(SIGQUIT, signal_handler_graceful);
     signal(SIGABRT, signal_handler_graceful);
@@ -1015,17 +1086,24 @@ int main(int argc, char** argv)
       PPUCSwitchState* switchState;
       while ((switchState = ppuc->GetNextSwitchState()) != nullptr)
       {
+        const uint8_t newSwitchState = switchState->state == 0 ? 0 : 1;
+
         if (opt_debug || opt_debug_switches)
         {
-          printf("Switch updated: #%d, %d\n", switchState->number, switchState->state);
+          printf("Switch updated: #%d, %d\n", switchState->number, newSwitchState);
+        }
+
+        if (pPUPTriggerEngine)
+        {
+          pPUPTriggerEngine->OnSwitchState(switchState->number, newSwitchState);
         }
 
         // Switches between 200 and 240 are custom switches within the io-boards which should not be sent to
         // pinmame. Switches above 240 will become negative values, for example 243 => -3.
         if (switchState->number < 200 || switchState->number > 241)
         {
-          int switchNumber = (switchState->number < 241) ? switchState->number : 240 - switchState->number;
-          PinmameSetSwitch(switchNumber, switchState->state);
+          const int switchNumber = (switchState->number < 241) ? switchState->number : 240 - switchState->number;
+          PinmameSetSwitch(switchNumber, newSwitchState);
         }
       }
 
@@ -1041,6 +1119,11 @@ int main(int argc, char** argv)
         }
 
         ppuc->SetLampState(lampNo, lampState);
+
+        if (pPUPTriggerEngine)
+        {
+          pPUPTriggerEngine->OnLampState(static_cast<int>(lampNo), lampState);
+        }
       }
 
       {  // Needs to be a separate scope for the lock_guard
@@ -1105,6 +1188,20 @@ int main(int argc, char** argv)
       }
     }
 
+    if (shutdown_requested && opt_serum)
+    {
+      // Emergency shutdown path:
+      // Serum/libdmdutil teardown can race across worker threads when interrupted by signal.
+      // Exit the process before Pinmame/DMD teardown runs to avoid use-after-free in external code.
+      ppuc->StopUpdates();
+      if (!opt_no_serial)
+      {
+        ppuc->Disconnect();
+      }
+      fflush(stdout);
+      _Exit(0);
+    }
+
     ppuc->StopUpdates();
     PinmameStop();
   }
@@ -1115,7 +1212,20 @@ int main(int argc, char** argv)
     ppuc->Disconnect();
   }
 
-  delete pDmd;
+  if (pDmd)
+  {
+    // Serum teardown can race in worker threads on signal-driven shutdown.
+    // Avoid deleting the DMD instance in that path and let process exit reclaim memory.
+    if (!(shutdown_requested && opt_serum))
+    {
+      delete pDmd;
+      pDmd = nullptr;
+    }
+    else
+    {
+      printf("Skipping DMD teardown after signal while Serum is active.\n");
+    }
+  }
 
   bool quitSDL = false;
 

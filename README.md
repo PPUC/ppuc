@@ -54,11 +54,52 @@ These components are still in an early development stage and the documentation w
 * -p VALUE
     * Serum ignore number of unknown frames
     * optional
+* --pup-triggers path
+    * path to a lightweight PUP trigger rules file
+    * optional
 * -i
     * render display in console
     * optional
 * -h
     * help
+
+### PUP Trigger Rules
+
+Use `--pup-triggers <file>` to map switch/lamp/coil conditions to calls of `SetPUPTrigger(source, id, value)`.
+This trigger feature is independent from `--pup`.
+
+Rule syntax:
+
+```text
+<source> <id> [value] [cooldown=<milliseconds>] : <expression>
+```
+
+Expression functions:
+* `switch(<number>)`
+* `lamp(<number>)`
+* `coil(<number>)`
+* `attract` or `attract()`
+* `switch_rising(<number>)`
+* `switch_falling(<number>)`
+* `lamp_rising(<number>)`
+* `lamp_falling(<number>)`
+* `coil_rising(<number>)`
+* `coil_falling(<number>)`
+
+Operators:
+* `!`
+* `&&`
+* `||`
+* parentheses `(...)`
+
+Example:
+
+```text
+P 100 1 : switch_rising(13) && lamp(42)
+P 101 1 cooldown=500 : switch_rising(13) && attract
+```
+
+A ready-to-use sample file is available at `examples/pup-triggers.rules`.
 
 
 ### Compiling

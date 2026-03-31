@@ -41,6 +41,7 @@ set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 set(CMAKE_C_VISIBILITY_PRESET hidden)
 
 add_executable(ppuc-pinmame
+   src/PUPTriggerEngine.cpp
    src/ppuc.cpp
    src/VirtualDMD.cpp
    src/xbrz/xbrz.cpp
