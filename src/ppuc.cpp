@@ -31,6 +31,7 @@
 #include "VirtualDMD.h"
 #include "cargs.h"
 #include "io-boards/Event.h"
+#include "io-boards/PPUCPlatforms.h"
 #include "libpinmame.h"
 
 #define MAIN_LOOP_SLEEP_US 20  // Main loop sleep time in microseconds
@@ -870,7 +871,8 @@ int main(int argc, char** argv)
     opt_serial = ppuc->GetSerial();
   }
 
-  if (opt_switch_test || opt_coil_test || opt_lamp_test)
+  if (opt_switch_test || opt_coil_test || opt_lamp_test || opt_gi_test ||
+      opt_flasher_test)
   {
     if (!ppuc->Connect())
     {
@@ -1057,8 +1059,10 @@ int main(int argc, char** argv)
 #if defined(_WIN32) || defined(_WIN64)
   // Avoid compile error C2131. Use a larger constant value instead.
   PinmameLampState changedLampStates[256];
+  PinmameGIState changedGIStates[8];
 #else
   PinmameLampState changedLampStates[PinmameGetMaxLamps()];
+  PinmameGIState changedGIStates[PinmameGetMaxGIs()];
 #endif
 
   if (PinmameRun(opt_rom) == PINMAME_STATUS_OK)
@@ -1123,6 +1127,23 @@ int main(int argc, char** argv)
         if (pPUPTriggerEngine)
         {
           pPUPTriggerEngine->OnLampState(static_cast<int>(lampNo), lampState);
+        }
+      }
+
+      if (ppuc->GetPlatform() == PLATFORM_WPC)
+      {
+        count = PinmameGetChangedGIs(changedGIStates);
+        for (int c = 0; c < count; c++)
+        {
+          const uint8_t giNo = static_cast<uint8_t>(changedGIStates[c].giNo);
+          const uint8_t giState = static_cast<uint8_t>(changedGIStates[c].state);
+
+          if (opt_debug || opt_debug_lamps)
+          {
+            printf("GI updated: #%d, %d\n", giNo, giState);
+          }
+
+          ppuc->SetGIState(giNo, giState);
         }
       }
 
