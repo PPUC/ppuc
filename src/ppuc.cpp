@@ -19,6 +19,7 @@
 #include <memory>
 #include <mutex>
 #include <queue>
+#include <sstream>
 #include <thread>
 #include <type_traits>
 
@@ -65,15 +66,19 @@ std::queue<RenderRequest> renderQueue;
 std::mutex renderMutex;
 
 bool opt_debug = false;
+bool opt_debug_errors = false;
 bool opt_debug_switches = false;
 bool opt_debug_coils = false;
 bool opt_debug_lamps = false;
+bool opt_close_coin_door = false;
+bool opt_disable_virtual_switch_chain = false;
 bool opt_no_serial = false;
 bool opt_no_sound = false;
 bool opt_serum = false;
 bool opt_pup = false;
 bool opt_console_display = false;
 const char* opt_rom = NULL;
+const char* opt_skip_boards = NULL;
 int game_state = 0;
 bool running = true;
 volatile std::sig_atomic_t shutdown_requested = 0;
@@ -110,6 +115,13 @@ static void PrintFlushedLogLine(const char* prefix, const char* message)
     fputc('\n', stdout);
   }
   fflush(stdout);
+}
+
+static uint64_t CurrentUnixMs()
+{
+  return static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+          .count());
 }
 
 static struct cag_option options[] = {
@@ -184,6 +196,11 @@ static struct cag_option options[] = {
      .access_name = "debug",
      .value_name = NULL,
      .description = "Enable all debug output (optional)"},
+    {.identifier = 'e',
+     .access_letters = "e",
+     .access_name = "debug-errors",
+     .value_name = NULL,
+     .description = "Enable communication/protocol error details without full debug output (optional)"},
     {.identifier = 'S',
      .access_name = "debug-switches",
      .value_name = NULL,
@@ -196,6 +213,18 @@ static struct cag_option options[] = {
      .access_name = "debug-lamps",
      .value_name = NULL,
      .description = "Enable lamps debug output (optional)"},
+    {.identifier = '6',
+     .access_name = "close-coin-door",
+     .value_name = NULL,
+     .description = "Virtually force the configured coin door switch closed (optional)"},
+    {.identifier = '7',
+     .access_name = "skip-boards",
+     .value_name = "VALUE",
+     .description = "Comma separated list of boards to skip and virtualize immediately (optional)"},
+    {.identifier = '8',
+     .access_name = "disable-virtual-switch-chain",
+     .value_name = NULL,
+     .description = "Do not splice skipped or missing boards into the runtime switch chain (optional)"},
     {.identifier = '0', .access_name = "switch-test", .value_name = NULL, .description = "Run switch test"},
     {.identifier = '1', .access_name = "coil-test", .value_name = NULL, .description = "Run coil test"},
     {.identifier = '2', .access_name = "lamp-test", .value_name = NULL, .description = "Run lamp test"},
@@ -333,26 +362,24 @@ void DMDUTILCALLBACK DMDUtilLogCallback(DMDUtil_LogLevel logLevel, const char* f
 {
   char buffer[1024];
   vsnprintf(buffer, sizeof(buffer), format, args);
-  uint32_t now =
-      std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
-          .count();
+  uint64_t now = CurrentUnixMs();
 
   if (logLevel == DMDUtil_LogLevel_INFO)
   {
     char logLine[1152];
-    snprintf(logLine, sizeof(logLine), "%" PRIu32 " INFO: %s", now, buffer);
+    snprintf(logLine, sizeof(logLine), "%" PRIu64 " INFO: %s", now, buffer);
     PrintFlushedLogLine("", logLine);
   }
   else if (logLevel == DMDUtil_LogLevel_DEBUG)
   {
     char logLine[1152];
-    snprintf(logLine, sizeof(logLine), "%" PRIu32 " DEBUG: %s", now, buffer);
+    snprintf(logLine, sizeof(logLine), "%" PRIu64 " DEBUG: %s", now, buffer);
     PrintFlushedLogLine("", logLine);
   }
   else if (logLevel == DMDUtil_LogLevel_ERROR)
   {
     char logLine[1152];
-    snprintf(logLine, sizeof(logLine), "%" PRIu32 " ERROR: %s", now, buffer);
+    snprintf(logLine, sizeof(logLine), "%" PRIu64 " ERROR: %s", now, buffer);
     PrintFlushedLogLine("", logLine);
   }
 }
@@ -679,6 +706,10 @@ int main(int argc, char** argv)
         break;
       case 'd':
         opt_debug = true;
+        opt_debug_errors = true;
+        break;
+      case 'e':
+        opt_debug_errors = true;
         break;
       case 'S':
         opt_debug_switches = true;
@@ -688,6 +719,15 @@ int main(int argc, char** argv)
         break;
       case 'L':
         opt_debug_lamps = true;
+        break;
+      case '6':
+        opt_close_coin_door = true;
+        break;
+      case '7':
+        opt_skip_boards = cag_option_get_value(&cag_context);
+        break;
+      case '8':
+        opt_disable_virtual_switch_chain = true;
         break;
       case '0':
         opt_switch_test = true;
@@ -748,6 +788,28 @@ int main(int argc, char** argv)
         printf("Usage: ppuc [OPTION]...\n");
         cag_option_print(options, CAG_ARRAY_SIZE(options), stdout);
         return 0;
+      default:
+        if (cag_option_get_error_index(&cag_context) >= 0)
+        {
+          fprintf(stderr, "Unknown command line option: ");
+          cag_option_print_error(&cag_context, stderr);
+          fprintf(stderr, "Usage: ppuc [OPTION]...\n");
+          cag_option_print(options, CAG_ARRAY_SIZE(options), stderr);
+          return 1;
+        }
+        break;
+    }
+  }
+
+  for (int i = cag_option_get_index(&cag_context); i < argc; ++i)
+  {
+    const char* arg = argv[i];
+    if (arg && arg[0] == '-' && arg[1] != '\0')
+    {
+      fprintf(stderr, "Unknown command line option: %s\n", arg);
+      fprintf(stderr, "Usage: ppuc [OPTION]...\n");
+      cag_option_print(options, CAG_ARRAY_SIZE(options), stderr);
+      return 1;
     }
   }
 
@@ -851,6 +913,16 @@ int main(int argc, char** argv)
     opt_debug = ppuc->GetDebug();
   }
   ppuc->SetDebug(opt_debug);
+  ppuc->SetDebugErrors(opt_debug_errors);
+  ppuc->SetSkippedBoardsCsv(opt_skip_boards);
+  ppuc->SetVirtualSwitchChainEnabled(!opt_disable_virtual_switch_chain);
+
+  if (opt_debug || opt_debug_errors)
+  {
+    char logLine[256];
+    snprintf(logLine, sizeof(logLine), "%" PRIu64 " INFO: Logging started", CurrentUnixMs());
+    PrintFlushedLogLine("", logLine);
+  }
 
   if (opt_rom)
   {
@@ -882,6 +954,17 @@ int main(int argc, char** argv)
 
     ppuc->StartUpdates();
     ppuc->SetSolenoidState(ppuc->GetGameOnSolenoid(), 1);
+    if (opt_close_coin_door && ppuc->GetCoinDoorClosedSwitch() > 0)
+    {
+      if (ppuc->IsSwitchVirtualized(ppuc->GetCoinDoorClosedSwitch()))
+      {
+        ppuc->SetSwitchState(ppuc->GetCoinDoorClosedSwitch(), 1);
+      }
+      else
+      {
+        printf("Coin door switch belongs to a present physical board; virtual override ignored.\n");
+      }
+    }
 
     if (opt_lamp_test)
     {
@@ -908,6 +991,13 @@ int main(int argc, char** argv)
       ppuc->SwitchTest();
     }
 
+    if (opt_close_coin_door && ppuc->GetCoinDoorClosedSwitch() > 0)
+    {
+      if (ppuc->IsSwitchVirtualized(ppuc->GetCoinDoorClosedSwitch()))
+      {
+        ppuc->SetSwitchState(ppuc->GetCoinDoorClosedSwitch(), 0);
+      }
+    }
     ppuc->SetSolenoidState(ppuc->GetGameOnSolenoid(), 0);
     ppuc->StopUpdates();
     ppuc->Disconnect();
