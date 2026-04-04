@@ -27,9 +27,11 @@
 #include "DMDUtil/Config.h"
 #include "DMDUtil/ConsoleDMD.h"
 #include "DMDUtil/DMDUtil.h"
+#include "AudioOutput.h"
 #include "PUPTriggerEngine.h"
 #include "SDL3/SDL.h"
 #include "SDL3_image/SDL_image.h"
+#include "SpeechService.h"
 #include "VirtualDMD.h"
 #include "cargs.h"
 #include "io-boards/Event.h"
@@ -38,12 +40,11 @@
 
 #define MAIN_LOOP_SLEEP_US 20  // Main loop sleep time in microseconds
 
-SDL_AudioStream* m_pstream = nullptr;
-SDL_AudioSpec audioSpec;
-
 DMDUtil::DMD* pDmd;
 PPUC* ppuc;
 std::unique_ptr<PUPTriggerEngine> pPUPTriggerEngine;
+std::unique_ptr<AudioOutput> pAudioOutput;
+std::unique_ptr<SpeechService> pSpeechService;
 
 SDL_Window* pTransliteWindow;
 SDL_Renderer* pTransliteRenderer;
@@ -73,6 +74,8 @@ bool opt_debug_coils = false;
 bool opt_debug_lamps = false;
 bool opt_no_serial = false;
 bool opt_no_sound = false;
+bool opt_speech = false;
+bool opt_greeting = false;
 bool opt_serum = false;
 bool opt_pup = false;
 bool opt_console_display = false;
@@ -709,6 +712,10 @@ static void DrainSwitchUpdatesForTest(PPUC* ppuc, BenchTestRunner& runner)
       {
         runner.switchFeedbackOffUntil = offUntil;
       }
+      if (pSpeechService != nullptr && it != switches.end())
+      {
+        pSpeechService->SpeakSwitchActivated(*it);
+      }
     }
     const char* stateName = switchState->state ? "closed" : "open";
 
@@ -831,6 +838,8 @@ static struct cag_option options[] = {
      .value_name = NULL,
      .description = "No serial communication to controllers (optional)"},
     {.identifier = 'M', .access_name = "no-sound", .value_name = NULL, .description = "Turn off sound (optional)"},
+    {.identifier = 'W', .access_name = "speech", .value_name = NULL, .description = "Enable speech callouts (optional)"},
+    {.identifier = 'Y', .access_name = "greeting", .value_name = NULL, .description = "Speak a startup greeting for speech debugging (optional)"},
     {.identifier = 'u',
      .access_letters = "u",
      .access_name = "serum",
@@ -1167,24 +1176,14 @@ int PINMAMECALLBACK OnAudioAvailable(PinmameAudioInfo* p_audioInfo, void* p_user
 
   if (!opt_no_sound)
   {
-    audioSpec.freq = (int)p_audioInfo->sampleRate;
-    audioSpec.format = SDL_AUDIO_S16LE;
-    audioSpec.channels = p_audioInfo->channels;
-
-    if (m_pstream)
+    if (pAudioOutput != nullptr)
     {
-      SDL_DestroyAudioStream(m_pstream);
-    }
-
-    m_pstream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &audioSpec, nullptr, nullptr);
-
-    if (m_pstream)
-    {
-      SDL_ResumeAudioStreamDevice(m_pstream);  // it always stops paused
+      pAudioOutput->ConfigureGameFormat(static_cast<int>(p_audioInfo->sampleRate),
+                                        p_audioInfo->channels);
     }
     else
     {
-      printf("SDL failed to load audio stream: %s\n", SDL_GetError());
+      printf("Audio output not initialized.\n");
     }
   }
   return p_audioInfo->samplesPerFrame;
@@ -1192,9 +1191,10 @@ int PINMAMECALLBACK OnAudioAvailable(PinmameAudioInfo* p_audioInfo, void* p_user
 
 int PINMAMECALLBACK OnAudioUpdated(void* p_buffer, int samples, void* p_userData)
 {
-  if (m_pstream)
+  if (pAudioOutput != nullptr)
   {
-    SDL_PutAudioStreamData(m_pstream, p_buffer, samples * 1 * sizeof(int16_t));
+    pAudioOutput->QueueGameFrames(reinterpret_cast<const int16_t*>(p_buffer),
+                                  static_cast<size_t>(samples));
   }
   return samples;
 }
@@ -1359,6 +1359,12 @@ int main(int argc, char** argv)
         break;
       case 'M':
         opt_no_sound = true;
+        break;
+      case 'W':
+        opt_speech = true;
+        break;
+      case 'Y':
+        opt_greeting = true;
         break;
       case 'u':
         opt_serum = true;
@@ -1529,6 +1535,22 @@ int main(int argc, char** argv)
     {
       printf("SDL_Init failed: %s\n", SDL_GetError());
       return 1;
+    }
+
+    pAudioOutput = std::make_unique<AudioOutput>();
+    if (!pAudioOutput->Initialize())
+    {
+      printf("Audio output init failed: %s\n", SDL_GetError());
+      return 1;
+    }
+    if (opt_speech || opt_greeting)
+    {
+      pSpeechService = CreateSpeechService(*pAudioOutput);
+      if (opt_greeting && pSpeechService != nullptr)
+      {
+        pSpeechService->SpeakText(
+            "P P U C, the pinball power-up controller.");
+      }
     }
   }
 
@@ -2060,9 +2082,11 @@ int main(int argc, char** argv)
 
   bool quitSDL = false;
 
-  if (m_pstream)
+  if (pAudioOutput)
   {
-    SDL_DestroyAudioStream(m_pstream);
+    pSpeechService.reset();
+    pAudioOutput->Shutdown();
+    pAudioOutput.reset();
     quitSDL = true;
   }
 

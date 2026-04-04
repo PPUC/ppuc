@@ -9,6 +9,7 @@ NUM_PROCS=$(nproc)
 echo "Building libraries..."
 echo "  SDL_SHA: ${SDL_SHA}"
 echo "  SDL_IMAGE_SHA: ${SDL_IMAGE_SHA}"
+echo "  FLITE_SHA: ${FLITE_SHA}"
 echo "  PINMAME_SHA: ${PINMAME_SHA}"
 echo "  LIBPPUC_SHA: ${LIBPPUC_SHA}"
 echo "  LIBDMDUTIL_SHA: ${LIBDMDUTIL_SHA}"
@@ -73,6 +74,36 @@ if [ "${SDL3_EXPECTED_SHA}" != "${SDL3_FOUND_SHA}" ]; then
    cd ..
 
    echo "$SDL3_EXPECTED_SHA" > cache.txt
+
+   cd ..
+fi
+
+#
+# flite
+#
+
+FLITE_EXPECTED_SHA="${FLITE_SHA}"
+FLITE_FOUND_SHA="$([ -f flite/cache.txt ] && cat flite/cache.txt || echo "")"
+
+if [ "${FLITE_EXPECTED_SHA}" != "${FLITE_FOUND_SHA}" ]; then
+   echo "Building flite. Expected: ${FLITE_EXPECTED_SHA}, Found: ${FLITE_FOUND_SHA}"
+
+   rm -rf flite
+   mkdir flite
+   cd flite
+
+   curl -sL https://github.com/festvox/flite/archive/${FLITE_SHA}.tar.gz -o flite-${FLITE_SHA}.tar.gz
+   tar xzf flite-${FLITE_SHA}.tar.gz
+   mv flite-${FLITE_SHA} flite
+   cd flite
+   ./configure \
+      --prefix="$(pwd)/install" \
+      CFLAGS="-fPIC -O2"
+   make -j${NUM_PROCS}
+   make install
+   cd ..
+
+   echo "$FLITE_EXPECTED_SHA" > cache.txt
 
    cd ..
 fi
@@ -178,6 +209,9 @@ cp -r SDL3/SDL/include/SDL3 ../third-party/include/
 
 cp -a SDL3/SDL_image/build/libSDL3_image.{so,so.*} ../third-party/runtime-libs/linux-aarch64/
 cp -r SDL3/SDL_image/include/SDL3_image ../third-party/include/
+
+cp -r flite/flite/install/include/flite ../third-party/include/
+cp -a flite/flite/install/lib/libflite*.a ../third-party/build-libs/linux-aarch64/
 
 cp -a pinmame/pinmame/build/libpinmame.{so,so.*} ../third-party/runtime-libs/linux-aarch64/
 cp pinmame/pinmame/src/libpinmame/libpinmame.h ../third-party/include/

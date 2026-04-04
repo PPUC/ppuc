@@ -41,7 +41,9 @@ set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 set(CMAKE_C_VISIBILITY_PRESET hidden)
 
 add_executable(ppuc-pinmame
+   src/AudioOutput.cpp
    src/PUPTriggerEngine.cpp
+   src/SpeechService.cpp
    src/ppuc.cpp
    src/VirtualDMD.cpp
    src/xbrz/xbrz.cpp
@@ -50,6 +52,14 @@ add_executable(ppuc-pinmame
 target_include_directories(ppuc-pinmame PUBLIC
    third-party/include
 )
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/flite/flite.h" OR
+   EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/flite/flite/flite.h")
+   target_compile_definitions(ppuc-pinmame PRIVATE PPUC_HAS_FLITE)
+   target_sources(ppuc-pinmame PRIVATE
+      src/FliteSpeechService.cpp
+   )
+endif()
 
 if(PLATFORM STREQUAL "win")
    target_link_directories(ppuc-pinmame PUBLIC
@@ -81,6 +91,7 @@ if(PLATFORM STREQUAL "win")
    endif()
 else()
    target_link_directories(ppuc-pinmame PUBLIC
+      third-party/build-libs/${PLATFORM}-${ARCH}
       third-party/runtime-libs/${PLATFORM}-${ARCH}
    )
 
@@ -92,6 +103,16 @@ else()
       SDL3
       SDL3_image
    )
+
+   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/flite/flite.h" OR
+      EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/flite/flite/flite.h")
+      target_link_libraries(ppuc-pinmame LINK_PUBLIC
+         flite_cmu_us_kal
+         flite_cmulex
+         flite_usenglish
+         flite
+      )
+   endif()
 endif()
 
 add_executable(ppuc-backbox
