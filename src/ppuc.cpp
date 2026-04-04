@@ -16,6 +16,7 @@
 #include <csignal>
 #include <cstdio>
 #include <cstring>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <queue>
@@ -37,6 +38,12 @@
 #include "io-boards/Event.h"
 #include "io-boards/PPUCPlatforms.h"
 #include "libpinmame.h"
+
+#if !defined(_WIN32) && !defined(_WIN64)
+#include <sys/select.h>
+#include <termios.h>
+#include <unistd.h>
+#endif
 
 #define MAIN_LOOP_SLEEP_US 20  // Main loop sleep time in microseconds
 
@@ -76,6 +83,7 @@ bool opt_no_serial = false;
 bool opt_no_sound = false;
 bool opt_speech = false;
 bool opt_greeting = false;
+bool opt_interactive = false;
 bool opt_serum = false;
 bool opt_pup = false;
 bool opt_console_display = false;
@@ -259,6 +267,9 @@ struct BenchTestRunner
 {
   BenchTestMode mode;
   std::vector<BenchOutputStep> steps;
+  std::unordered_map<int, std::vector<BenchOutputStep>> stepsByNumber;
+  std::deque<BenchOutputStep> pendingInteractiveSteps;
+  bool interactive = false;
   size_t index = 0;
   bool outputActive = false;
   bool waitingBetweenSteps = false;
@@ -271,7 +282,54 @@ struct BenchTestRunner
   std::unordered_map<int, uint8_t> initialSwitchStates;
   std::unordered_map<int, uint8_t> currentSwitchStates;
   std::chrono::steady_clock::time_point switchFeedbackOffUntil{};
+  std::string interactiveInput;
 };
+
+#if !defined(_WIN32) && !defined(_WIN64)
+class ScopedRawTerminalMode
+{
+public:
+  explicit ScopedRawTerminalMode(bool enable)
+  {
+    if (!enable || !isatty(STDIN_FILENO))
+    {
+      return;
+    }
+
+    if (tcgetattr(STDIN_FILENO, &original_) != 0)
+    {
+      return;
+    }
+
+    termios raw = original_;
+    raw.c_lflag &= static_cast<tcflag_t>(~(ICANON | ECHO));
+    raw.c_cc[VMIN] = 0;
+    raw.c_cc[VTIME] = 0;
+    if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) == 0)
+    {
+      active_ = true;
+    }
+  }
+
+  ~ScopedRawTerminalMode()
+  {
+    if (active_)
+    {
+      tcsetattr(STDIN_FILENO, TCSANOW, &original_);
+    }
+  }
+
+private:
+  bool active_ = false;
+  termios original_{};
+};
+#else
+class ScopedRawTerminalMode
+{
+public:
+  explicit ScopedRawTerminalMode(bool /*enable*/) {}
+};
+#endif
 
 static bool ComputeSwitchFeedbackGiOn(const BenchTestRunner& runner,
                                       std::chrono::steady_clock::time_point now)
@@ -309,6 +367,29 @@ static void PrintBenchStepDetails(const BenchOutputStep& step)
   {
     printf("Brightness: %d\n", step.value);
   }
+}
+
+static void PrintInteractiveBenchPrompt(const BenchTestRunner& runner)
+{
+  const char* label = "item";
+  switch (runner.mode)
+  {
+    case BenchTestMode::COILS:
+      label = "coil/flasher";
+      break;
+    case BenchTestMode::LAMPS:
+      label = "lamp";
+      break;
+    case BenchTestMode::FLASHERS:
+      label = "flasher";
+      break;
+    default:
+      break;
+  }
+
+  printf("Enter %s number, or q/ESC to quit: %s", label,
+         runner.interactiveInput.c_str());
+  fflush(stdout);
 }
 
 static void ApplyBenchOutput(PPUC* ppuc, const BenchOutputStep& step, bool on)
@@ -582,6 +663,10 @@ static BenchTestRunner CreateBenchTestRunner(PPUC* ppuc, BenchTestMode mode,
 {
   BenchTestRunner runner;
   runner.mode = mode;
+  runner.interactive =
+      opt_interactive &&
+      (mode == BenchTestMode::COILS || mode == BenchTestMode::LAMPS ||
+       mode == BenchTestMode::FLASHERS);
 
   switch (mode)
   {
@@ -608,6 +693,15 @@ static BenchTestRunner CreateBenchTestRunner(PPUC* ppuc, BenchTestMode mode,
       PrintFlasherTestHeader(ppuc, number);
       runner.steps = BuildFlasherTestSteps(ppuc, number);
       break;
+  }
+
+  if (runner.interactive)
+  {
+    for (const auto& step : runner.steps)
+    {
+      runner.stepsByNumber[step.number].push_back(step);
+    }
+    PrintInteractiveBenchPrompt(runner);
   }
 
   return runner;
@@ -736,6 +830,85 @@ static void DrainSwitchUpdatesForTest(PPUC* ppuc, BenchTestRunner& runner)
   UpdateSwitchFeedbackGi(ppuc, runner);
 }
 
+static bool PollInteractiveBenchInput(BenchTestRunner& runner)
+{
+  if (!runner.interactive)
+  {
+    return true;
+  }
+
+#if defined(_WIN32) || defined(_WIN64)
+  return true;
+#else
+  fd_set readSet;
+  FD_ZERO(&readSet);
+  FD_SET(STDIN_FILENO, &readSet);
+  timeval timeout{0, 0};
+
+  if (select(STDIN_FILENO + 1, &readSet, nullptr, nullptr, &timeout) <= 0 ||
+      !FD_ISSET(STDIN_FILENO, &readSet))
+  {
+    return true;
+  }
+
+  char ch = '\0';
+  while (read(STDIN_FILENO, &ch, 1) == 1)
+  {
+    if (ch == 27 || ch == 'q' || ch == 'Q')
+    {
+      printf("\n");
+      fflush(stdout);
+      running = false;
+      return false;
+    }
+
+    if (ch == '\r' || ch == '\n')
+    {
+      printf("\n");
+      if (!runner.interactiveInput.empty())
+      {
+        const int selectedNumber = atoi(runner.interactiveInput.c_str());
+        auto it = runner.stepsByNumber.find(selectedNumber);
+        if (it != runner.stepsByNumber.end())
+        {
+          for (const auto& step : it->second)
+          {
+            runner.pendingInteractiveSteps.push_back(step);
+          }
+        }
+        else
+        {
+          printf("Unknown test item number: %d\n", selectedNumber);
+        }
+        runner.interactiveInput.clear();
+      }
+      PrintInteractiveBenchPrompt(runner);
+      continue;
+    }
+
+    if (ch == 127 || ch == '\b')
+    {
+      if (!runner.interactiveInput.empty())
+      {
+        runner.interactiveInput.pop_back();
+        printf("\b \b");
+        fflush(stdout);
+      }
+      continue;
+    }
+
+    if (ch >= '0' && ch <= '9')
+    {
+      runner.interactiveInput.push_back(ch);
+      putchar(ch);
+      fflush(stdout);
+    }
+  }
+
+  return true;
+#endif
+}
+
 static bool ServiceBenchTestRunner(PPUC* ppuc, BenchTestRunner& runner)
 {
   DrainSwitchUpdatesForTest(ppuc, runner);
@@ -743,6 +916,55 @@ static bool ServiceBenchTestRunner(PPUC* ppuc, BenchTestRunner& runner)
   if (runner.mode == BenchTestMode::SWITCHES)
   {
     UpdateSwitchFeedbackGi(ppuc, runner);
+    return true;
+  }
+
+  if (!PollInteractiveBenchInput(runner))
+  {
+    return false;
+  }
+
+  if (runner.interactive)
+  {
+    const auto now = std::chrono::steady_clock::now();
+    if (runner.waitingBetweenSteps)
+    {
+      if (now < runner.nextStepReadyAt)
+      {
+        return true;
+      }
+      runner.waitingBetweenSteps = false;
+    }
+
+    if (!runner.outputActive)
+    {
+      if (runner.pendingInteractiveSteps.empty())
+      {
+        return true;
+      }
+
+      const BenchOutputStep& step = runner.pendingInteractiveSteps.front();
+      PrintBenchStepDetails(step);
+      ApplyBenchOutput(ppuc, step, true);
+      runner.outputActive = true;
+      runner.phaseDeadline = now + std::chrono::milliseconds(step.onDurationMs);
+      return true;
+    }
+
+    if (now < runner.phaseDeadline)
+    {
+      return true;
+    }
+
+    const BenchOutputStep step = runner.pendingInteractiveSteps.front();
+    ApplyBenchOutput(ppuc, step, false);
+    runner.outputActive = false;
+    runner.pendingInteractiveSteps.pop_front();
+    if (!runner.pendingInteractiveSteps.empty() && step.offDurationMs > 0)
+    {
+      runner.waitingBetweenSteps = true;
+      runner.nextStepReadyAt = now + std::chrono::milliseconds(step.offDurationMs);
+    }
     return true;
   }
 
@@ -915,6 +1137,7 @@ static struct cag_option options[] = {
     {.identifier = '2', .access_name = "lamp-test", .value_name = NULL, .description = "Run lamp test"},
     {.identifier = '3', .access_name = "gi-test", .value_name = NULL, .description = "Run lamp test"},
     {.identifier = '4', .access_name = "flasher-test", .value_name = NULL, .description = "Run flasher test"},
+    {.identifier = 'Z', .access_name = "interactive", .value_name = NULL, .description = "Interactive coil/lamp/flasher test selection"},
     {.identifier = '5',
      .access_name = "number",
      .value_name = "VALUE",
@@ -1430,6 +1653,9 @@ int main(int argc, char** argv)
       case '4':
         opt_flasher_test = true;
         break;
+      case 'Z':
+        opt_interactive = true;
+        break;
       case '5':
         opt_number = atoi(cag_option_get_value(&cag_context));
         break;
@@ -1525,6 +1751,14 @@ int main(int argc, char** argv)
   {
     fprintf(stderr,
             "--close-coin-door requires serial communication and cannot be used with --no-serial\n");
+    return 1;
+  }
+
+  if (opt_interactive &&
+      !(opt_coil_test || opt_lamp_test || opt_flasher_test))
+  {
+    fprintf(stderr,
+            "--interactive is only supported with --coil-test, --lamp-test, or --flasher-test\n");
     return 1;
   }
 
@@ -1719,6 +1953,7 @@ int main(int argc, char** argv)
     else
     {
       running = true;
+      ScopedRawTerminalMode rawTerminal(testRunner.interactive);
       if (testRunner.mode == BenchTestMode::SWITCHES)
       {
         const uint32_t cleanChainBaseline =
