@@ -33,6 +33,7 @@
 #include "SDL3/SDL.h"
 #include "SDL3_image/SDL_image.h"
 #include "SpeechService.h"
+#include "SpeechTriggerMap.h"
 #include "VirtualDMD.h"
 #include "cargs.h"
 #include "io-boards/Event.h"
@@ -50,8 +51,11 @@
 DMDUtil::DMD* pDmd;
 PPUC* ppuc;
 std::unique_ptr<PUPTriggerEngine> pPUPTriggerEngine;
+std::unique_ptr<SpeechTriggerMap> pSpeechTriggerMap;
 std::unique_ptr<AudioOutput> pAudioOutput;
 std::unique_ptr<SpeechService> pSpeechService;
+
+constexpr char kSpeechTriggerSource = 'O';
 
 SDL_Window* pTransliteWindow;
 SDL_Renderer* pTransliteRenderer;
@@ -83,6 +87,7 @@ bool opt_no_serial = false;
 bool opt_no_sound = false;
 bool opt_speech = false;
 bool opt_greeting = false;
+const char* opt_speech_file = NULL;
 bool opt_interactive = false;
 bool opt_serum = false;
 bool opt_pup = false;
@@ -268,6 +273,7 @@ struct BenchTestRunner
   BenchTestMode mode;
   std::vector<BenchOutputStep> steps;
   std::unordered_map<int, std::vector<BenchOutputStep>> stepsByNumber;
+  std::vector<std::string> interactiveMenuLines;
   std::deque<BenchOutputStep> pendingInteractiveSteps;
   bool interactive = false;
   size_t index = 0;
@@ -390,6 +396,19 @@ static void PrintInteractiveBenchPrompt(const BenchTestRunner& runner)
   printf("Enter %s number, or q/ESC to quit: %s", label,
          runner.interactiveInput.c_str());
   fflush(stdout);
+}
+
+static void PrintInteractiveBenchMenu(const BenchTestRunner& runner)
+{
+  if (!runner.interactiveMenuLines.empty())
+  {
+    for (const auto& line : runner.interactiveMenuLines)
+    {
+      printf("%s\n", line.c_str());
+    }
+    printf("\n");
+  }
+  PrintInteractiveBenchPrompt(runner);
 }
 
 static void ApplyBenchOutput(PPUC* ppuc, const BenchOutputStep& step, bool on)
@@ -701,6 +720,31 @@ static BenchTestRunner CreateBenchTestRunner(PPUC* ppuc, BenchTestMode mode,
     {
       runner.stepsByNumber[step.number].push_back(step);
     }
+    std::vector<int> orderedNumbers;
+    orderedNumbers.reserve(runner.stepsByNumber.size());
+    for (const auto& entry : runner.stepsByNumber)
+    {
+      orderedNumbers.push_back(entry.first);
+    }
+    std::sort(orderedNumbers.begin(), orderedNumbers.end());
+    orderedNumbers.erase(std::unique(orderedNumbers.begin(), orderedNumbers.end()),
+                         orderedNumbers.end());
+
+    for (const int itemNumber : orderedNumbers)
+    {
+      const auto it = runner.stepsByNumber.find(itemNumber);
+      if (it == runner.stepsByNumber.end() || it->second.empty())
+      {
+        continue;
+      }
+
+      const BenchOutputStep& step = it->second.front();
+      char buffer[512];
+      snprintf(buffer, sizeof(buffer), "  #%d  board=%d port=%d  %s",
+               step.number, step.board, step.port, step.description.c_str());
+      runner.interactiveMenuLines.emplace_back(buffer);
+    }
+
     PrintInteractiveBenchPrompt(runner);
   }
 
@@ -882,7 +926,7 @@ static bool PollInteractiveBenchInput(BenchTestRunner& runner)
         }
         runner.interactiveInput.clear();
       }
-      PrintInteractiveBenchPrompt(runner);
+      PrintInteractiveBenchMenu(runner);
       continue;
     }
 
@@ -1062,6 +1106,10 @@ static struct cag_option options[] = {
     {.identifier = 'M', .access_name = "no-sound", .value_name = NULL, .description = "Turn off sound (optional)"},
     {.identifier = 'W', .access_name = "speech", .value_name = NULL, .description = "Enable speech callouts (optional)"},
     {.identifier = 'Y', .access_name = "greeting", .value_name = NULL, .description = "Speak a startup greeting for speech debugging (optional)"},
+    {.identifier = '9',
+     .access_name = "speech-file",
+     .value_name = "VALUE",
+     .description = "Path to speech trigger text file (optional)"},
     {.identifier = 'u',
      .access_letters = "u",
      .access_name = "serum",
@@ -1589,6 +1637,9 @@ int main(int argc, char** argv)
       case 'Y':
         opt_greeting = true;
         break;
+      case '9':
+        opt_speech_file = cag_option_get_value(&cag_context);
+        break;
       case 'u':
         opt_serum = true;
         break;
@@ -1762,6 +1813,13 @@ int main(int argc, char** argv)
     return 1;
   }
 
+  if (opt_speech_file && opt_no_sound)
+  {
+    fprintf(stderr,
+            "--speech-file requires audio output and cannot be used with --no-sound\n");
+    return 1;
+  }
+
   if (!opt_no_sound)
   {
     // Initialize the sound device
@@ -1777,7 +1835,7 @@ int main(int argc, char** argv)
       printf("Audio output init failed: %s\n", SDL_GetError());
       return 1;
     }
-    if (opt_speech || opt_greeting)
+    if (opt_speech || opt_greeting || opt_speech_file)
     {
       pSpeechService = CreateSpeechService(*pAudioOutput);
       if (opt_greeting && pSpeechService != nullptr)
@@ -1990,6 +2048,19 @@ int main(int argc, char** argv)
     pPUPTriggerEngine = std::make_unique<PUPTriggerEngine>();
     pPUPTriggerEngine->SetDebug(opt_debug);
     pPUPTriggerEngine->SetTriggerCallback([](const char source, const uint16_t id, const uint8_t value) {
+      if (source == kSpeechTriggerSource)
+      {
+        if (pSpeechService && pSpeechTriggerMap)
+        {
+          const std::string* text = pSpeechTriggerMap->Find(id);
+          if (text)
+          {
+            pSpeechService->SpeakText(*text);
+          }
+        }
+        return;
+      }
+
       if (pDmd)
       {
         pDmd->SetPUPTrigger(source, id, value);
@@ -2003,6 +2074,21 @@ int main(int argc, char** argv)
       return 1;
     }
     printf("Loaded %zu PUP trigger rule(s) from %s\n", pPUPTriggerEngine->GetRuleCount(), opt_pup_triggers);
+  }
+
+  if (opt_speech_file)
+  {
+    pSpeechTriggerMap = std::make_unique<SpeechTriggerMap>();
+    std::string error;
+    if (!pSpeechTriggerMap->Load(opt_speech_file, error))
+    {
+      printf("%s: %s\n", error.c_str(), opt_speech_file);
+      return 1;
+    }
+    printf("Loaded %zu speech trigger text entr%s from %s\n",
+           pSpeechTriggerMap->GetEntryCount(),
+           pSpeechTriggerMap->GetEntryCount() == 1 ? "y" : "ies",
+           opt_speech_file);
   }
 
   PinmameConfig config = {

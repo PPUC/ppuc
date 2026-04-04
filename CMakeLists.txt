@@ -43,6 +43,7 @@ set(CMAKE_C_VISIBILITY_PRESET hidden)
 add_executable(ppuc-pinmame
    src/AudioOutput.cpp
    src/PUPTriggerEngine.cpp
+   src/SpeechTriggerMap.cpp
    src/SpeechService.cpp
    src/ppuc.cpp
    src/VirtualDMD.cpp

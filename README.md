@@ -57,6 +57,9 @@ These components are still in an early development stage and the documentation w
 * --pup-triggers path
     * path to a lightweight PUP trigger rules file
     * optional
+* --speech-file path
+    * path to a speech trigger text file used with speech trigger rules
+    * optional
 * -i
     * render display in console
     * optional
@@ -66,7 +69,7 @@ These components are still in an early development stage and the documentation w
 ### PUP Trigger Rules
 
 Use `--pup-triggers <file>` to map switch/lamp/coil conditions to calls of `SetPUPTrigger(source, id, value)`.
-This trigger feature is independent from `--pup`.
+This trigger feature is independent from `--pup`, and can also drive speech callouts.
 
 Rule syntax:
 
@@ -97,9 +100,37 @@ Example:
 ```text
 P 100 1 : switch_rising(13) && lamp(42)
 P 101 1 cooldown=500 : switch_rising(13) && attract
+O 60010 1 : lamp_rising(23) && !attract
 ```
 
 A ready-to-use sample file is available at `examples/pup-triggers.rules`.
+
+Speech trigger source:
+* `O`
+  * spoken callout target
+  * the trigger `id` is looked up in a `--speech-file`
+
+### Speech Trigger Text Files
+
+Use `--speech-file <file>` together with `--speech` and `--pup-triggers` to map speech trigger IDs to spoken text.
+
+Syntax:
+
+```text
+<trigger-id> : <text to speak>
+```
+
+Example:
+
+```text
+60010: New highscore!
+```
+
+If a trigger rule emits source `O` with id `60010`, the speech backend will speak that text.
+
+Ready-to-use samples are available at:
+* `examples/flash.rules`
+* `examples/flash.speech`
 
 
 ### Compiling
