@@ -99,8 +99,16 @@ if [ "${FLITE_EXPECTED_SHA}" != "${FLITE_FOUND_SHA}" ]; then
    ./configure \
       --prefix="$(pwd)/install" \
       CFLAGS="-fPIC -O2"
-   make -j${NUM_PROCS}
-   make install
+   # The full upstream "make" also enters Flite's CLI/tool targets. On a clean
+   # Linux build that can fail in main/ because flite_voice_list.c is treated as
+   # an unconditional all-target prerequisite without a standalone build rule.
+   # We only need headers and static libraries for ppuc, so build the library
+   # directories directly and stage them ourselves.
+   make -j${NUM_PROCS} -C src
+   make -j${NUM_PROCS} -C lang
+   mkdir -p install/include install/lib
+   cp -r include/* install/include/
+   find build -path '*/lib/libflite*.a' -exec cp {} install/lib/ \;
    cd ..
 
    echo "$FLITE_EXPECTED_SHA" > cache.txt
