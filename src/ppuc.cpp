@@ -121,6 +121,10 @@ struct LogCallbackTraits<R(__stdcall *)(A1, A2, A3, A4)>
 
 using PinmameLogMessageArg = LogCallbackTraits<PinmameOnLogMessageCallback>::Arg3;
 
+#define PINMAME_CALLBACK_CAST(type, fn) reinterpret_cast<type>(fn)
+
+static uint64_t CurrentUnixMs();
+
 static void PrintFlushedLogLine(const char* prefix, const char* message)
 {
   const char* safeMessage = message ? message : "";
@@ -1315,7 +1319,7 @@ void PINMAMECALLBACK Game(PinmameGame* game)
       game->name, game->description, game->manufacturer, game->year, (unsigned long)game->flags, game->found);
 }
 
-void PINMAMECALLBACK OnStateUpdated(int state, void* p_userData)
+void PINMAMECALLBACK OnStateUpdated(int state, const void* p_userData)
 {
   if (opt_debug)
   {
@@ -1379,7 +1383,7 @@ static void PrintPinmameLogMessage(PINMAME_LOG_LEVEL logLevel, const char* forma
 }
 
 void PINMAMECALLBACK OnLogMessage(PINMAME_LOG_LEVEL logLevel, const char* format, PinmameLogMessageArg arg,
-                                  void* p_userData)
+                                  const void* p_userData)
 {
   PrintPinmameLogMessage(logLevel, format, arg);
 }
@@ -1411,7 +1415,7 @@ void DMDUTILCALLBACK DMDUtilLogCallback(DMDUtil_LogLevel logLevel, const char* f
 }
 
 void PINMAMECALLBACK OnDisplayAvailable(int index, int displayCount, PinmameDisplayLayout* p_displayLayout,
-                                        void* p_userData)
+                                        const void* p_userData)
 {
   if (opt_debug)
   {
@@ -1425,7 +1429,7 @@ void PINMAMECALLBACK OnDisplayAvailable(int index, int displayCount, PinmameDisp
 }
 
 void PINMAMECALLBACK OnDisplayUpdated(int index, void* p_displayData, PinmameDisplayLayout* p_displayLayout,
-                                      void* p_userData)
+                                      const void* p_userData)
 {
   if (p_displayData == nullptr)
   {
@@ -1483,7 +1487,9 @@ void PINMAMECALLBACK OnDisplayUpdated(int index, void* p_displayData, PinmameDis
       case PINMAME_DISPLAY_TYPE_SEG87FH:
       case PINMAME_DISPLAY_TYPE_SEG7SH:
       case PINMAME_DISPLAY_TYPE_SEG7SCH:
+#ifdef PINMAME_DISPLAY_TYPE_VIDEO_ROT90
       case PINMAME_DISPLAY_TYPE_VIDEO_ROT90:
+#endif
         break;
 
       case PINMAME_DISPLAY_TYPE_VIDEO:  // VIDEO Display
@@ -1499,11 +1505,14 @@ void PINMAMECALLBACK OnDisplayUpdated(int index, void* p_displayData, PinmameDis
       case PINMAME_DISPLAY_TYPE_DMDNOAA:
       case PINMAME_DISPLAY_TYPE_NODISP:
         break;
+
+      default:
+        break;
     }
   }
 }
 
-int PINMAMECALLBACK OnAudioAvailable(PinmameAudioInfo* p_audioInfo, void* p_userData)
+int PINMAMECALLBACK OnAudioAvailable(PinmameAudioInfo* p_audioInfo, const void* p_userData)
 {
   if (opt_debug)
   {
@@ -1530,7 +1539,7 @@ int PINMAMECALLBACK OnAudioAvailable(PinmameAudioInfo* p_audioInfo, void* p_user
   return p_audioInfo->samplesPerFrame;
 }
 
-int PINMAMECALLBACK OnAudioUpdated(void* p_buffer, int samples, void* p_userData)
+int PINMAMECALLBACK OnAudioUpdated(void* p_buffer, int samples, const void* p_userData)
 {
   if (pAudioOutput != nullptr)
   {
@@ -1540,7 +1549,7 @@ int PINMAMECALLBACK OnAudioUpdated(void* p_buffer, int samples, void* p_userData
   return samples;
 }
 
-void PINMAMECALLBACK OnSolenoidUpdated(PinmameSolenoidState* p_solenoidState, void* p_userData)
+void PINMAMECALLBACK OnSolenoidUpdated(PinmameSolenoidState* p_solenoidState, const void* p_userData)
 {
   const uint8_t coilState = p_solenoidState->state == 0 ? 0 : 1;
   const bool isGameOnCoil = p_solenoidState->solNo == ppuc->GetGameOnSolenoid();
@@ -1589,7 +1598,7 @@ void PINMAMECALLBACK OnSolenoidUpdated(PinmameSolenoidState* p_solenoidState, vo
   }
 }
 
-void PINMAMECALLBACK OnMechAvailable(int mechNo, PinmameMechInfo* p_mechInfo, void* p_userData)
+void PINMAMECALLBACK OnMechAvailable(int mechNo, PinmameMechInfo* p_mechInfo, const void* p_userData)
 {
   if (opt_debug)
   {
@@ -1600,7 +1609,7 @@ void PINMAMECALLBACK OnMechAvailable(int mechNo, PinmameMechInfo* p_mechInfo, vo
   }
 }
 
-void PINMAMECALLBACK OnMechUpdated(int mechNo, PinmameMechInfo* p_mechInfo, void* p_userData)
+void PINMAMECALLBACK OnMechUpdated(int mechNo, PinmameMechInfo* p_mechInfo, const void* p_userData)
 {
   if (opt_debug)
   {
@@ -1611,7 +1620,7 @@ void PINMAMECALLBACK OnMechUpdated(int mechNo, PinmameMechInfo* p_mechInfo, void
   }
 }
 
-void PINMAMECALLBACK OnConsoleDataUpdated(void* p_data, int size, void* p_userData)
+void PINMAMECALLBACK OnConsoleDataUpdated(void* p_data, int size, const void* p_userData)
 {
   if (opt_debug)
   {
@@ -1619,7 +1628,7 @@ void PINMAMECALLBACK OnConsoleDataUpdated(void* p_data, int size, void* p_userDa
   }
 }
 
-int PINMAMECALLBACK IsKeyPressed(PINMAME_KEYCODE keycode, void* p_userData) { return 0; }
+int PINMAMECALLBACK IsKeyPressed(PINMAME_KEYCODE keycode, const void* p_userData) { return 0; }
 
 void signal_handler_graceful(int sig)
 {
@@ -2272,17 +2281,17 @@ int main(int argc, char** argv)
       PINMAME_AUDIO_FORMAT_INT16,
       44100,
       "",
-      &OnStateUpdated,
-      &OnDisplayAvailable,
-      &OnDisplayUpdated,
-      &OnAudioAvailable,
-      &OnAudioUpdated,
-      &OnMechAvailable,
-      &OnMechUpdated,
-      &OnSolenoidUpdated,
-      &OnConsoleDataUpdated,
-      &IsKeyPressed,
-      &OnLogMessage,
+      PINMAME_CALLBACK_CAST(PinmameOnStateUpdatedCallback, &OnStateUpdated),
+      PINMAME_CALLBACK_CAST(PinmameOnDisplayAvailableCallback, &OnDisplayAvailable),
+      PINMAME_CALLBACK_CAST(PinmameOnDisplayUpdatedCallback, &OnDisplayUpdated),
+      PINMAME_CALLBACK_CAST(PinmameOnAudioAvailableCallback, &OnAudioAvailable),
+      PINMAME_CALLBACK_CAST(PinmameOnAudioUpdatedCallback, &OnAudioUpdated),
+      PINMAME_CALLBACK_CAST(PinmameOnMechAvailableCallback, &OnMechAvailable),
+      PINMAME_CALLBACK_CAST(PinmameOnMechUpdatedCallback, &OnMechUpdated),
+      PINMAME_CALLBACK_CAST(PinmameOnSolenoidUpdatedCallback, &OnSolenoidUpdated),
+      PINMAME_CALLBACK_CAST(PinmameOnConsoleDataUpdatedCallback, &OnConsoleDataUpdated),
+      PINMAME_CALLBACK_CAST(PinmameIsKeyPressedFunction, &IsKeyPressed),
+      PINMAME_CALLBACK_CAST(PinmameOnLogMessageCallback, &OnLogMessage),
       NULL,
   };
 
@@ -2384,7 +2393,8 @@ int main(int argc, char** argv)
 
   PinmameSetConfig(&config);
 
-  PinmameSetDmdMode(PINMAME_DMD_MODE_RAW);
+  const PINMAME_DMD_MODE dmdMode = opt_serum ? PINMAME_DMD_MODE_RAW : PINMAME_DMD_MODE_BRIGHTNESS;
+  PinmameSetDmdMode(dmdMode);
   // PinmameSetSoundMode(PINMAME_SOUND_MODE_ALTSOUND);
   PinmameSetHandleKeyboard(0);
   PinmameSetHandleMechanics(0);
