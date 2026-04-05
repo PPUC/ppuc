@@ -18,13 +18,20 @@ void unregister_cmu_us_kal(cst_voice* voice);
 namespace
 {
 constexpr size_t kMaxQueuedUtterances = 8;
+constexpr const char* kDefaultVoice = "kal";
 }
 
-FliteSpeechService::FliteSpeechService(AudioOutput& audioOutput)
+FliteSpeechService::FliteSpeechService(AudioOutput& audioOutput,
+                                       const SpeechOptions& options)
     : audioOutput_(audioOutput)
 {
   flite_init();
-  voice_ = register_cmu_us_kal(nullptr);
+  const std::string requestedVoice =
+      options.voice.empty() ? kDefaultVoice : options.voice;
+  if (requestedVoice == "kal" || requestedVoice == "cmu_us_kal")
+  {
+    voice_ = register_cmu_us_kal(nullptr);
+  }
   worker_ = std::thread(&FliteSpeechService::WorkerLoop, this);
 }
 

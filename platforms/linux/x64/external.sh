@@ -9,6 +9,7 @@ NUM_PROCS=$(nproc)
 echo "Building libraries..."
 echo "  SDL_SHA: ${SDL_SHA}"
 echo "  SDL_IMAGE_SHA: ${SDL_IMAGE_SHA}"
+echo "  ESPEAK_NG_SHA: ${ESPEAK_NG_SHA}"
 echo "  PINMAME_SHA: ${PINMAME_SHA}"
 echo "  LIBPPUC_SHA: ${LIBPPUC_SHA}"
 echo "  LIBDMDUTIL_SHA: ${LIBDMDUTIL_SHA}"
@@ -73,6 +74,51 @@ if [ "${SDL3_EXPECTED_SHA}" != "${SDL3_FOUND_SHA}" ]; then
    cd ..
 
    echo "$SDL3_EXPECTED_SHA" > cache.txt
+
+   cd ..
+fi
+
+#
+# espeak-ng
+#
+
+ESPEAK_NG_EXPECTED_SHA="${ESPEAK_NG_SHA}"
+ESPEAK_NG_FOUND_SHA="$([ -f espeak-ng/cache.txt ] && cat espeak-ng/cache.txt || echo "")"
+ESPEAK_NG_INSTALL_DIR="espeak-ng/espeak-ng/install"
+ESPEAK_NG_ARTIFACTS_OK=0
+if [ -d "${ESPEAK_NG_INSTALL_DIR}/include/espeak-ng" ] && \
+   ls "${ESPEAK_NG_INSTALL_DIR}"/lib/libespeak-ng*.so* >/dev/null 2>&1 && \
+   [ -d "${ESPEAK_NG_INSTALL_DIR}/share/espeak-ng-data" ]; then
+   ESPEAK_NG_ARTIFACTS_OK=1
+fi
+
+if [ "${ESPEAK_NG_EXPECTED_SHA}" != "${ESPEAK_NG_FOUND_SHA}" ] || [ "${ESPEAK_NG_ARTIFACTS_OK}" -ne 1 ]; then
+   echo "Building espeak-ng. Expected: ${ESPEAK_NG_EXPECTED_SHA}, Found: ${ESPEAK_NG_FOUND_SHA}"
+
+   rm -rf espeak-ng
+   mkdir espeak-ng
+   cd espeak-ng
+
+   curl -sL https://github.com/espeak-ng/espeak-ng/archive/refs/tags/${ESPEAK_NG_SHA}.tar.gz -o espeak-ng-${ESPEAK_NG_SHA}.tar.gz
+   tar xzf espeak-ng-${ESPEAK_NG_SHA}.tar.gz
+   mv espeak-ng-${ESPEAK_NG_SHA} espeak-ng
+   cd espeak-ng
+   cmake \
+      -DBUILD_SHARED_LIBS=ON \
+      -DBUILD_TESTING=OFF \
+      -DUSE_MBROLA=OFF \
+      -DUSE_LIBSONIC=OFF \
+      -DUSE_LIBPCAUDIO=OFF \
+      -DUSE_SPEECHPLAYER=OFF \
+      -DUSE_ASYNC=OFF \
+      -DCMAKE_INSTALL_PREFIX="$(pwd)/install" \
+      -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
+      -B build
+   cmake --build build -- -j${NUM_PROCS}
+   cmake --install build
+   cd ..
+
+   echo "$ESPEAK_NG_EXPECTED_SHA" > cache.txt
 
    cd ..
 fi
@@ -178,6 +224,10 @@ cp -r SDL3/SDL/include/SDL3 ../third-party/include/
 
 cp -a SDL3/SDL_image/build/libSDL3_image.{so,so.*} ../third-party/runtime-libs/linux-x64/
 cp -r SDL3/SDL_image/include/SDL3_image ../third-party/include/
+
+cp -r espeak-ng/espeak-ng/install/include/espeak-ng ../third-party/include/
+cp -a espeak-ng/espeak-ng/install/lib/libespeak-ng*.so* ../third-party/runtime-libs/linux-x64/
+cp -R espeak-ng/espeak-ng/install/share/espeak-ng-data ../third-party/runtime-libs/linux-x64/
 
 cp -a pinmame/pinmame/build/libpinmame.{so,so.*} ../third-party/runtime-libs/linux-x64/
 cp pinmame/pinmame/src/libpinmame/libpinmame.h ../third-party/include/

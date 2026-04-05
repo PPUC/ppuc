@@ -125,15 +125,15 @@ void DMDUTILCALLBACK LogCallback(DMDUtil_LogLevel logLevel, const char* format, 
 
   if (logLevel == DMDUtil_LogLevel_INFO)
   {
-    fprintf(output, "%lu INFO: %s\n", now, buffer);
+    fprintf(output, "%" PRIu32 " INFO: %s\n", now, buffer);
   }
   else if (logLevel == DMDUtil_LogLevel_DEBUG)
   {
-    fprintf(output, "%lu DEBUG: %s\n", now, buffer);
+    fprintf(output, "%" PRIu32 " DEBUG: %s\n", now, buffer);
   }
   else if (logLevel == DMDUtil_LogLevel_ERROR)
   {
-    fprintf(output, "%lu ERROR: %s\n", now, buffer);
+    fprintf(output, "%" PRIu32 " ERROR: %s\n", now, buffer);
   }
 
   fflush(output);

@@ -54,11 +54,23 @@ target_include_directories(ppuc-pinmame PUBLIC
    third-party/include
 )
 
+target_compile_definitions(ppuc-pinmame PRIVATE
+   PPUC_RUNTIME_LIB_SUBDIR="${PLATFORM}-${ARCH}"
+)
+
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/flite/flite.h" OR
    EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/flite/flite/flite.h")
    target_compile_definitions(ppuc-pinmame PRIVATE PPUC_HAS_FLITE)
    target_sources(ppuc-pinmame PRIVATE
       src/FliteSpeechService.cpp
+   )
+endif()
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/espeak-ng/speak_lib.h" OR
+   EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/espeak-ng/espeak-ng/speak_lib.h")
+   target_compile_definitions(ppuc-pinmame PRIVATE PPUC_HAS_ESPEAK_NG)
+   target_sources(ppuc-pinmame PRIVATE
+      src/ESpeakNgSpeechService.cpp
    )
 endif()
 
@@ -90,6 +102,13 @@ if(PLATFORM STREQUAL "win")
          ws2_32
       )
    endif()
+
+   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/espeak-ng/speak_lib.h" OR
+      EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/espeak-ng/espeak-ng/speak_lib.h")
+      target_link_libraries(ppuc-pinmame LINK_PUBLIC
+         espeak-ng
+      )
+   endif()
 else()
    target_link_directories(ppuc-pinmame PUBLIC
       third-party/build-libs/${PLATFORM}-${ARCH}
@@ -112,6 +131,13 @@ else()
          flite_cmulex
          flite_usenglish
          flite
+      )
+   endif()
+
+   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/espeak-ng/speak_lib.h" OR
+      EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/espeak-ng/espeak-ng/speak_lib.h")
+      target_link_libraries(ppuc-pinmame LINK_PUBLIC
+         espeak-ng
       )
    endif()
 endif()

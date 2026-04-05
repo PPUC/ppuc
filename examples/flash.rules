@@ -1,0 +1,65 @@
+# Format:
+# <source> <id> [value] [cooldown=<milliseconds>] : <expression>
+#
+# Expression functions:
+# - switch(<number>)        current switch state (true when closed)
+# - lamp(<number>)          current lamp state (true when lit)
+# - coil(<number>)          current coil state (true when active)
+# - attract / attract()     true if table is in attract mode (no game running)
+# - switch_rising(<number>) switch transitioned 0 -> 1 in this event
+# - switch_falling(<number>)
+# - lamp_rising(<number>)
+# - lamp_falling(<number>)
+# - coil_rising(<number>)
+# - coil_falling(<number>)
+#
+# Operators: !, &&, || and parentheses
+
+# Ball 1
+D 60001 1 : coil_rising(13) && lamp(42) && !attract
+
+# Ball 2
+D 60002 1 : coil_rising(13) && lamp(43) && !attract
+
+# Ball 3
+D 60003 1 : coil_rising(13) && lamp(44) && !attract
+
+# Extra Ball
+D 60007 1 : lamp_rising(22) && !attract
+
+# Shoot Again
+D 60016 1 : lamp_falling(22) && !attract
+
+# Bonus x2
+D 60005 1 : lamp_rising(20) && !attract
+
+# Bonus x3
+D 60006 1 : lamp_rising(21) && !attract
+
+# Flash
+D 60008 1 cooldown=20000 : lamp_rising(5) && attract
+
+# Game Over
+D 60009 1 : lamp_rising(23) && !attract
+
+# Highscore
+D 60010 1 : lamp_rising(23) && !attract
+O 60010 1 : lamp_rising(23) && !attract
+
+# progress-1.mp4, 30fps
+D 60012 1 : lamp_rising(24) && !attract
+
+# progress-1.mp4, 30fps
+D 60013 1 : lamp_rising(25) && !attract
+
+# progress-1.mp4, 30fps
+D 60014 1 : lamp_rising(26) && !attract
+
+# progress-1.mp4, 30fps
+D 60015 1 : lamp_rising(27) && !attract
+
+# Special
+D 60017 1 : (switch_rising(13) || switch_rising(12)) && (lamp(2) || lamp(23)) && !attract
+
+# Tilt
+D 60018 1 : lamp_rising(27)  && !attract

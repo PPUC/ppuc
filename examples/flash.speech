@@ -1,0 +1,15 @@
+# Format:
+# <trigger-id> : <text to speak>
+#
+# Use with trigger rules that emit source "O".
+# Example in flash.rules:
+# O 60010 1 : lamp_rising(23) && !attract
+
+# Highscore
+60010: New highscore!
+
+# Game Over
+60009: Game over.
+
+# Extra Ball
+60007: Extra ball!

@@ -60,6 +60,18 @@ These components are still in an early development stage and the documentation w
 * --speech-file path
     * path to a speech trigger text file used with speech trigger rules
     * optional
+* --speech-backend value
+    * speech backend to use: `auto`, `flite`, `espeak-ng`
+    * optional
+* --speech-voice value
+    * speech voice name, mainly for `espeak-ng`
+    * optional
+* --speech-rate value
+    * speech rate in words per minute, mainly for `espeak-ng`
+    * optional
+* --speech-pitch value
+    * speech pitch `0-100`, mainly for `espeak-ng`
+    * optional
 * -i
     * render display in console
     * optional
@@ -127,6 +139,20 @@ Example:
 ```
 
 If a trigger rule emits source `O` with id `60010`, the speech backend will speak that text.
+
+Speech backends:
+* `auto`
+  * prefer `espeak-ng` when available, otherwise `flite`
+* `flite`
+  * lightweight default backend
+* `espeak-ng`
+  * second backend with broader voice/language support when staged in `third-party`
+  * default voice is now a more distinct `en-us+f3`
+
+Examples:
+* `--speech-backend espeak-ng --speech-voice en-us+m3`
+* `--speech-backend espeak-ng --speech-rate 210 --speech-pitch 35`
+* `--speech-backend flite --speech-voice kal`
 
 Ready-to-use samples are available at:
 * `examples/flash.rules`

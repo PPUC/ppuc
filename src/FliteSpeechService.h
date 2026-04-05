@@ -14,7 +14,7 @@ typedef struct cst_voice_struct cst_voice;
 class FliteSpeechService final : public SpeechService
 {
 public:
-  explicit FliteSpeechService(AudioOutput& audioOutput);
+  FliteSpeechService(AudioOutput& audioOutput, const SpeechOptions& options);
   ~FliteSpeechService() override;
 
   void SpeakText(const std::string& text) override;

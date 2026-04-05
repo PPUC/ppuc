@@ -9,6 +9,7 @@
 #include "ppuc_version.h" // <--- HINZUGEFÜGT
 
 #include <ctype.h>
+#include <climits>
 #include <inttypes.h>
 #include <stdlib.h>
 
@@ -88,6 +89,10 @@ bool opt_no_sound = false;
 bool opt_speech = false;
 bool opt_greeting = false;
 const char* opt_speech_file = NULL;
+const char* opt_speech_backend = "auto";
+const char* opt_speech_voice = NULL;
+const char* opt_speech_rate_arg = NULL;
+const char* opt_speech_pitch_arg = NULL;
 bool opt_interactive = false;
 bool opt_serum = false;
 bool opt_pup = false;
@@ -161,6 +166,29 @@ static bool ParseUint32Strict(const char* text, uint32_t* outValue)
   return true;
 }
 
+static bool ParseIntStrict(const char* text, int* outValue)
+{
+  if (!text || !outValue || text[0] == '\0')
+  {
+    return false;
+  }
+
+  char* end = nullptr;
+  const long value = strtol(text, &end, 10);
+  if (end == text || *end != '\0')
+  {
+    return false;
+  }
+
+  if (value < INT_MIN || value > INT_MAX)
+  {
+    return false;
+  }
+
+  *outValue = static_cast<int>(value);
+  return true;
+}
+
 static bool ValidateSkippedBoardsCsv(const char* csv)
 {
   if (!csv || csv[0] == '\0')
@@ -199,6 +227,32 @@ static bool ValidateSkippedBoardsCsv(const char* csv)
     }
     token.push_back(c);
   }
+}
+
+static bool ParseSpeechBackend(const char* text, SpeechBackend* outBackend)
+{
+  if (!text || !outBackend)
+  {
+    return false;
+  }
+
+  if (strcmp(text, "auto") == 0)
+  {
+    *outBackend = SpeechBackend::Auto;
+    return true;
+  }
+  if (strcmp(text, "flite") == 0)
+  {
+    *outBackend = SpeechBackend::Flite;
+    return true;
+  }
+  if (strcmp(text, "espeak") == 0 || strcmp(text, "espeak-ng") == 0)
+  {
+    *outBackend = SpeechBackend::ESpeakNg;
+    return true;
+  }
+
+  return false;
 }
 
 static const char* kAnsiStrikeOn = "\033[9m";
@@ -1110,6 +1164,22 @@ static struct cag_option options[] = {
      .access_name = "speech-file",
      .value_name = "VALUE",
      .description = "Path to speech trigger text file (optional)"},
+    {.identifier = 'U',
+     .access_name = "speech-backend",
+     .value_name = "VALUE",
+     .description = "Speech backend: auto, flite, espeak-ng (optional)"},
+    {.identifier = 'v',
+     .access_name = "speech-voice",
+     .value_name = "VALUE",
+     .description = "Speech voice name, mainly for espeak-ng (optional)"},
+    {.identifier = 'w',
+     .access_name = "speech-rate",
+     .value_name = "VALUE",
+     .description = "Speech rate in words per minute for espeak-ng (optional)"},
+    {.identifier = 'x',
+     .access_name = "speech-pitch",
+     .value_name = "VALUE",
+     .description = "Speech pitch 0-100 for espeak-ng (optional)"},
     {.identifier = 'u',
      .access_letters = "u",
      .access_name = "serum",
@@ -1640,6 +1710,18 @@ int main(int argc, char** argv)
       case '9':
         opt_speech_file = cag_option_get_value(&cag_context);
         break;
+      case 'U':
+        opt_speech_backend = cag_option_get_value(&cag_context);
+        break;
+      case 'v':
+        opt_speech_voice = cag_option_get_value(&cag_context);
+        break;
+      case 'w':
+        opt_speech_rate_arg = cag_option_get_value(&cag_context);
+        break;
+      case 'x':
+        opt_speech_pitch_arg = cag_option_get_value(&cag_context);
+        break;
       case 'u':
         opt_serum = true;
         break;
@@ -1798,6 +1880,44 @@ int main(int argc, char** argv)
     return 1;
   }
 
+  SpeechBackend speechBackend = SpeechBackend::Auto;
+  if (!ParseSpeechBackend(opt_speech_backend, &speechBackend))
+  {
+    fprintf(stderr, "Invalid value for --speech-backend: %s\n",
+            opt_speech_backend ? opt_speech_backend : "(null)");
+    return 1;
+  }
+
+  SpeechOptions speechOptions;
+  if (opt_speech_voice && opt_speech_voice[0] != '\0')
+  {
+    speechOptions.voice = opt_speech_voice;
+  }
+  if (opt_speech_rate_arg &&
+      !ParseIntStrict(opt_speech_rate_arg, &speechOptions.rate))
+  {
+    fprintf(stderr, "Invalid value for --speech-rate: %s\n",
+            opt_speech_rate_arg);
+    return 1;
+  }
+  if (opt_speech_pitch_arg &&
+      !ParseIntStrict(opt_speech_pitch_arg, &speechOptions.pitch))
+  {
+    fprintf(stderr, "Invalid value for --speech-pitch: %s\n",
+            opt_speech_pitch_arg);
+    return 1;
+  }
+  if (speechOptions.rate < 0)
+  {
+    fprintf(stderr, "--speech-rate must be >= 0\n");
+    return 1;
+  }
+  if (speechOptions.pitch < 0 || speechOptions.pitch > 100)
+  {
+    fprintf(stderr, "--speech-pitch must be in the range 0..100\n");
+    return 1;
+  }
+
   if (opt_close_coin_door && opt_no_serial)
   {
     fprintf(stderr,
@@ -1819,6 +1939,14 @@ int main(int argc, char** argv)
             "--speech-file requires audio output and cannot be used with --no-sound\n");
     return 1;
   }
+  if ((opt_speech || opt_greeting || opt_speech_voice || opt_speech_rate_arg ||
+       opt_speech_pitch_arg) &&
+      opt_no_sound)
+  {
+    fprintf(stderr,
+            "Speech options require audio output and cannot be used with --no-sound\n");
+    return 1;
+  }
 
   if (!opt_no_sound)
   {
@@ -1835,15 +1963,58 @@ int main(int argc, char** argv)
       printf("Audio output init failed: %s\n", SDL_GetError());
       return 1;
     }
-    if (opt_speech || opt_greeting || opt_speech_file)
+  }
+
+  const auto initializeSpeechIfNeeded = [&]() -> bool {
+    if (pSpeechService != nullptr ||
+        !(opt_speech || opt_greeting || opt_speech_file))
     {
-      pSpeechService = CreateSpeechService(*pAudioOutput);
-      if (opt_greeting && pSpeechService != nullptr)
-      {
-        pSpeechService->SpeakText(
-            "P P U C, the pinball power-up controller.");
-      }
+      return true;
     }
+
+    std::string speechBackendError;
+    pSpeechService = CreateSpeechService(*pAudioOutput, speechBackend,
+                                         speechOptions, &speechBackendError);
+    if (pSpeechService == nullptr)
+    {
+      fprintf(stderr, "Speech init failed: %s\n",
+              speechBackendError.empty() ? "unknown backend error"
+                                         : speechBackendError.c_str());
+      return false;
+    }
+
+    printf("Speech backend requested: %s",
+           opt_speech_backend ? opt_speech_backend : "auto");
+    if (!speechOptions.voice.empty())
+    {
+      printf(", voice=%s", speechOptions.voice.c_str());
+    }
+    if (opt_speech_rate_arg != nullptr)
+    {
+      printf(", rate=%d", speechOptions.rate);
+    }
+    if (opt_speech_pitch_arg != nullptr)
+    {
+      printf(", pitch=%d", speechOptions.pitch);
+    }
+    printf("\n");
+
+    return true;
+  };
+
+  if (opt_greeting)
+  {
+    std::string speechBackendError;
+    pSpeechService = CreateSpeechService(*pAudioOutput, speechBackend,
+                                         speechOptions, &speechBackendError);
+    if (pSpeechService == nullptr)
+    {
+      fprintf(stderr, "Speech init failed: %s\n",
+              speechBackendError.empty() ? "unknown backend error"
+                                         : speechBackendError.c_str());
+      return 1;
+    }
+    pSpeechService->SpeakText("P P U C, the pinball power-up controller.");
   }
 
   if (opt_translite || opt_virtual_dmd)
@@ -1968,7 +2139,13 @@ int main(int argc, char** argv)
   {
     if (!ppuc->Connect())
     {
-      printf("Unable to open serial communication to PPUC boards.\n");
+      printf("Unable to open serial communication to PPUC boards on %s.\n",
+             opt_serial ? opt_serial : "(null)");
+      return 1;
+    }
+
+    if (!initializeSpeechIfNeeded())
+    {
       return 1;
     }
 
@@ -2195,7 +2372,13 @@ int main(int argc, char** argv)
 
   if (!opt_no_serial && !ppuc->Connect())
   {
-    printf("Unable to open serial communication to PPUC boards.\n");
+    printf("Unable to open serial communication to PPUC boards on %s.\n",
+           opt_serial ? opt_serial : "(null)");
+    return 1;
+  }
+
+  if (!initializeSpeechIfNeeded())
+  {
     return 1;
   }
 
