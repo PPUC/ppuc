@@ -15,5 +15,6 @@ rm -rf ppuc
 mkdir ppuc
 
 cp build/ppuc-pinmame ppuc/
+cp build/ppuc-menu ppuc/
 cp build/ppuc-backbox ppuc/
 cp -P third-party/runtime-libs/linux-x64/*.so* ppuc/

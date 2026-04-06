@@ -187,6 +187,18 @@ platforms/linux/x64/build.sh
 ppuc/ppuc-pinmame -c examples/t2.yml -n -i
 ```
 
+### Menu launcher
+
+`ppuc-menu` is an SDL3 selector that reads a plain-text menu file with repeated `title`, `image`, `selected-image`, and `command` fields. It uses the same speech backend options as `ppuc-pinmame`.
+
+```shell
+ppuc/ppuc-menu \
+  --menu-file examples/menu.txt \
+  --logo assets/ppuc-logo.png \
+  --slogan "Choose a machine and press Enter" \
+  --speech --greeting
+```
+
 #### Linux (aarch64)
 ```shell
 platforms/linux/aarch64/build.sh

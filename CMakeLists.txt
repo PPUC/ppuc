@@ -43,6 +43,7 @@ set(CMAKE_C_VISIBILITY_PRESET hidden)
 add_executable(ppuc-pinmame
    src/AudioOutput.cpp
    src/PUPTriggerEngine.cpp
+   src/SpeechCliSupport.cpp
    src/SpeechTriggerMap.cpp
    src/SpeechService.cpp
    src/ppuc.cpp
@@ -143,6 +144,98 @@ else()
    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/espeak-ng/speak_lib.h" OR
       EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/espeak-ng/espeak-ng/speak_lib.h")
       target_link_libraries(ppuc-pinmame LINK_PUBLIC
+         espeak-ng
+      )
+   endif()
+endif()
+
+add_executable(ppuc-menu
+   src/AudioOutput.cpp
+   src/menu.cpp
+   src/SpeechCliSupport.cpp
+   src/SpeechService.cpp
+)
+
+target_include_directories(ppuc-menu PUBLIC
+   third-party/include
+)
+
+target_compile_definitions(ppuc-menu PRIVATE
+   PPUC_RUNTIME_LIB_SUBDIR="${PLATFORM}-${ARCH}"
+)
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/flite/flite.h" OR
+   EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/flite/flite/flite.h")
+   target_compile_definitions(ppuc-menu PRIVATE PPUC_HAS_FLITE)
+   target_sources(ppuc-menu PRIVATE
+      src/FliteSpeechService.cpp
+   )
+endif()
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/espeak-ng/speak_lib.h" OR
+   EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/espeak-ng/espeak-ng/speak_lib.h")
+   target_compile_definitions(ppuc-menu PRIVATE PPUC_HAS_ESPEAK_NG)
+   target_sources(ppuc-menu PRIVATE
+      src/ESpeakNgSpeechService.cpp
+   )
+endif()
+
+if(PLATFORM STREQUAL "win")
+   target_link_directories(ppuc-menu PUBLIC
+      third-party/build-libs/${PLATFORM}-${ARCH}
+      third-party/runtime-libs/${PLATFORM}-${ARCH}
+   )
+   if(ARCH STREQUAL "x64")
+      target_link_libraries(ppuc-menu LINK_PUBLIC
+         cargs64
+         SDL364
+         SDL3_image64
+      )
+   else()
+      target_link_libraries(ppuc-menu LINK_PUBLIC
+         cargs
+         SDL3
+         SDL3_image
+      )
+   endif()
+
+   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/espeak-ng/speak_lib.h" OR
+      EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/espeak-ng/espeak-ng/speak_lib.h")
+      target_link_libraries(ppuc-menu LINK_PUBLIC
+         espeak-ng
+      )
+   endif()
+else()
+   target_link_directories(ppuc-menu PUBLIC
+      third-party/build-libs/${PLATFORM}-${ARCH}
+      third-party/runtime-libs/${PLATFORM}-${ARCH}
+   )
+
+   target_link_libraries(ppuc-menu LINK_PUBLIC
+      cargs
+      SDL3
+      SDL3_image
+   )
+
+   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/flite/flite.h" OR
+      EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/flite/flite/flite.h")
+      target_link_libraries(ppuc-menu LINK_PUBLIC
+         flite_cmu_us_kal
+         flite_cmulex
+         flite_usenglish
+         flite
+      )
+
+      if(PLATFORM STREQUAL "linux")
+         target_link_libraries(ppuc-menu LINK_PUBLIC
+            asound
+         )
+      endif()
+   endif()
+
+   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/espeak-ng/speak_lib.h" OR
+      EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/espeak-ng/espeak-ng/speak_lib.h")
+      target_link_libraries(ppuc-menu LINK_PUBLIC
          espeak-ng
       )
    endif()

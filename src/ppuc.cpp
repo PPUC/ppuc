@@ -33,6 +33,7 @@
 #include "PUPTriggerEngine.h"
 #include "SDL3/SDL.h"
 #include "SDL3_image/SDL_image.h"
+#include "SpeechCliSupport.h"
 #include "SpeechService.h"
 #include "SpeechTriggerMap.h"
 #include "VirtualDMD.h"
@@ -170,29 +171,6 @@ static bool ParseUint32Strict(const char* text, uint32_t* outValue)
   return true;
 }
 
-static bool ParseIntStrict(const char* text, int* outValue)
-{
-  if (!text || !outValue || text[0] == '\0')
-  {
-    return false;
-  }
-
-  char* end = nullptr;
-  const long value = strtol(text, &end, 10);
-  if (end == text || *end != '\0')
-  {
-    return false;
-  }
-
-  if (value < INT_MIN || value > INT_MAX)
-  {
-    return false;
-  }
-
-  *outValue = static_cast<int>(value);
-  return true;
-}
-
 static bool ValidateSkippedBoardsCsv(const char* csv)
 {
   if (!csv || csv[0] == '\0')
@@ -231,32 +209,6 @@ static bool ValidateSkippedBoardsCsv(const char* csv)
     }
     token.push_back(c);
   }
-}
-
-static bool ParseSpeechBackend(const char* text, SpeechBackend* outBackend)
-{
-  if (!text || !outBackend)
-  {
-    return false;
-  }
-
-  if (strcmp(text, "auto") == 0)
-  {
-    *outBackend = SpeechBackend::Auto;
-    return true;
-  }
-  if (strcmp(text, "flite") == 0)
-  {
-    *outBackend = SpeechBackend::Flite;
-    return true;
-  }
-  if (strcmp(text, "espeak") == 0 || strcmp(text, "espeak-ng") == 0)
-  {
-    *outBackend = SpeechBackend::ESpeakNg;
-    return true;
-  }
-
-  return false;
 }
 
 static const char* kAnsiStrikeOn = "\033[9m";
@@ -1890,40 +1842,14 @@ int main(int argc, char** argv)
   }
 
   SpeechBackend speechBackend = SpeechBackend::Auto;
-  if (!ParseSpeechBackend(opt_speech_backend, &speechBackend))
-  {
-    fprintf(stderr, "Invalid value for --speech-backend: %s\n",
-            opt_speech_backend ? opt_speech_backend : "(null)");
-    return 1;
-  }
-
   SpeechOptions speechOptions;
-  if (opt_speech_voice && opt_speech_voice[0] != '\0')
+  std::string speechValidationError;
+  if (!ParseSpeechCliOptions(opt_speech_backend, opt_speech_voice,
+                             opt_speech_rate_arg, opt_speech_pitch_arg,
+                             &speechBackend, &speechOptions,
+                             &speechValidationError))
   {
-    speechOptions.voice = opt_speech_voice;
-  }
-  if (opt_speech_rate_arg &&
-      !ParseIntStrict(opt_speech_rate_arg, &speechOptions.rate))
-  {
-    fprintf(stderr, "Invalid value for --speech-rate: %s\n",
-            opt_speech_rate_arg);
-    return 1;
-  }
-  if (opt_speech_pitch_arg &&
-      !ParseIntStrict(opt_speech_pitch_arg, &speechOptions.pitch))
-  {
-    fprintf(stderr, "Invalid value for --speech-pitch: %s\n",
-            opt_speech_pitch_arg);
-    return 1;
-  }
-  if (speechOptions.rate < 0)
-  {
-    fprintf(stderr, "--speech-rate must be >= 0\n");
-    return 1;
-  }
-  if (speechOptions.pitch < 0 || speechOptions.pitch > 100)
-  {
-    fprintf(stderr, "--speech-pitch must be in the range 0..100\n");
+    fprintf(stderr, "%s\n", speechValidationError.c_str());
     return 1;
   }
 
@@ -1942,18 +1868,13 @@ int main(int argc, char** argv)
     return 1;
   }
 
-  if (opt_speech_file && opt_no_sound)
+  if (!ValidateSpeechAudioUsage(
+          opt_no_sound,
+          (opt_speech || opt_speech_voice || opt_speech_rate_arg ||
+           opt_speech_pitch_arg),
+          opt_greeting, opt_speech_file, &speechValidationError))
   {
-    fprintf(stderr,
-            "--speech-file requires audio output and cannot be used with --no-sound\n");
-    return 1;
-  }
-  if ((opt_speech || opt_greeting || opt_speech_voice || opt_speech_rate_arg ||
-       opt_speech_pitch_arg) &&
-      opt_no_sound)
-  {
-    fprintf(stderr,
-            "Speech options require audio output and cannot be used with --no-sound\n");
+    fprintf(stderr, "%s\n", speechValidationError.c_str());
     return 1;
   }
 
@@ -1982,31 +1903,17 @@ int main(int argc, char** argv)
     }
 
     std::string speechBackendError;
-    pSpeechService = CreateSpeechService(*pAudioOutput, speechBackend,
-                                         speechOptions, &speechBackendError);
-    if (pSpeechService == nullptr)
+    if (!CreateConfiguredSpeechService(*pAudioOutput, speechBackend,
+                                       speechOptions, &pSpeechService,
+                                       &speechBackendError))
     {
       fprintf(stderr, "Speech init failed: %s\n",
               speechBackendError.empty() ? "unknown backend error"
                                          : speechBackendError.c_str());
       return false;
     }
-
-    printf("Speech backend requested: %s",
-           opt_speech_backend ? opt_speech_backend : "auto");
-    if (!speechOptions.voice.empty())
-    {
-      printf(", voice=%s", speechOptions.voice.c_str());
-    }
-    if (opt_speech_rate_arg != nullptr)
-    {
-      printf(", rate=%d", speechOptions.rate);
-    }
-    if (opt_speech_pitch_arg != nullptr)
-    {
-      printf(", pitch=%d", speechOptions.pitch);
-    }
-    printf("\n");
+    PrintSpeechConfiguration(opt_speech_backend, speechOptions,
+                             opt_speech_rate_arg, opt_speech_pitch_arg);
 
     return true;
   };
@@ -2014,15 +1921,17 @@ int main(int argc, char** argv)
   if (opt_greeting)
   {
     std::string speechBackendError;
-    pSpeechService = CreateSpeechService(*pAudioOutput, speechBackend,
-                                         speechOptions, &speechBackendError);
-    if (pSpeechService == nullptr)
+    if (!CreateConfiguredSpeechService(*pAudioOutput, speechBackend,
+                                       speechOptions, &pSpeechService,
+                                       &speechBackendError))
     {
       fprintf(stderr, "Speech init failed: %s\n",
               speechBackendError.empty() ? "unknown backend error"
                                          : speechBackendError.c_str());
       return 1;
     }
+    PrintSpeechConfiguration(opt_speech_backend, speechOptions,
+                             opt_speech_rate_arg, opt_speech_pitch_arg);
     pSpeechService->SpeakText("P P U C, the pinball power-up controller.");
   }
 

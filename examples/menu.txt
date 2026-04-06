@@ -1,0 +1,20 @@
+# Menu file format:
+# title: <display title>
+# image: <normal image path>
+# selected-image: <focused image path>
+# command: <ppuc-pinmame command line>
+#
+# Entries are separated by blank lines.
+
+title: Flash
+info: Williams 1976
+image: ../ppuc_games/flash/Flash_off.png
+selected-image: ../ppuc_games/flash/Flash_on.png
+command: ppuc-pinmame -c examples/t2.yml -n --virtual-dmd
+
+title: Time Warp
+info: Williams 1979
+image: ../ppuc_games/timewarp/Time_Warp_off.png
+selected-image: ../ppuc_games/timewarp/Time_Warp_on.png
+command: ppuc/ppuc-pinmame -r tmwrp_l2 -c ../ppuc_games/timewarp/Time_Warp_312818d8-da4b-4d40-b606-92042cf059d2.yml -s /dev/tty.usbserial-2120 --skip-boards 1 -e --switch-reply-delay-us=3000 --speech-backend espeak-ng --speech-voice en-us+m3 --speech-rate 140 --speech-pitch 10
+
