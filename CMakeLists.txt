@@ -132,6 +132,12 @@ else()
          flite_usenglish
          flite
       )
+
+      if(PLATFORM STREQUAL "linux")
+         target_link_libraries(ppuc-pinmame LINK_PUBLIC
+            asound
+         )
+      endif()
    endif()
 
    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/espeak-ng/speak_lib.h" OR
