@@ -10,6 +10,7 @@ echo "Building libraries..."
 echo "  SDL_SHA: ${SDL_SHA}"
 echo "  SDL_IMAGE_SHA: ${SDL_IMAGE_SHA}"
 echo "  ESPEAK_NG_SHA: ${ESPEAK_NG_SHA}"
+echo "  FLITE_SHA: ${FLITE_SHA}"
 echo "  PINMAME_SHA: ${PINMAME_SHA}"
 echo "  LIBPPUC_SHA: ${LIBPPUC_SHA}"
 echo "  LIBDMDUTIL_SHA: ${LIBDMDUTIL_SHA}"
@@ -123,6 +124,47 @@ if [ "${ESPEAK_NG_EXPECTED_SHA}" != "${ESPEAK_NG_FOUND_SHA}" ] || [ "${ESPEAK_NG
    cd ..
 fi
 
+#
+# flite
+#
+
+FLITE_EXPECTED_SHA="${FLITE_SHA}"
+FLITE_FOUND_SHA="$([ -f flite/cache.txt ] && cat flite/cache.txt || echo "")"
+FLITE_INSTALL_DIR="flite/flite/install"
+FLITE_ARTIFACTS_OK=0
+if [ -d "${FLITE_INSTALL_DIR}/include/flite" ] && ls "${FLITE_INSTALL_DIR}"/lib/libflite*.a >/dev/null 2>&1; then
+   FLITE_ARTIFACTS_OK=1
+fi
+
+if [ "${FLITE_EXPECTED_SHA}" != "${FLITE_FOUND_SHA}" ] || [ "${FLITE_ARTIFACTS_OK}" -ne 1 ]; then
+   echo "Building flite. Expected: ${FLITE_EXPECTED_SHA}, Found: ${FLITE_FOUND_SHA}"
+
+   rm -rf flite
+   mkdir flite
+   cd flite
+
+   curl -sL https://github.com/festvox/flite/archive/${FLITE_SHA}.tar.gz -o flite-${FLITE_SHA}.tar.gz
+   tar xzf flite-${FLITE_SHA}.tar.gz
+   mv flite-${FLITE_SHA} flite
+   cd flite
+   ./configure \
+      --prefix="$(pwd)/install" \
+      CFLAGS="-fPIC -O2"
+   # We only need Flite headers and static libraries for ppuc. Building the
+   # library directories directly avoids upstream CLI/tool targets that can
+   # fail on clean Linux builds.
+   make -j${NUM_PROCS} -C src
+   make -j${NUM_PROCS} -C lang
+   mkdir -p install/include install/lib
+   cp -r include/* install/include/
+   find build -path '*/lib/libflite*.a' -exec cp {} install/lib/ \;
+   cd ..
+
+   echo "$FLITE_EXPECTED_SHA" > cache.txt
+
+   cd ..
+fi
+
 LIBDMDUTIL_EXPECTED_SHA="${LIBDMDUTIL_SHA}"
 LIBDMDUTIL_FOUND_SHA="$([ -f libdmdutil/cache.txt ] && cat libdmdutil/cache.txt || echo "")"
 
@@ -228,6 +270,10 @@ cp -r SDL3/SDL_image/include/SDL3_image ../third-party/include/
 cp -r espeak-ng/espeak-ng/install/include/espeak-ng ../third-party/include/
 cp -a espeak-ng/espeak-ng/install/lib/libespeak-ng*.so* ../third-party/runtime-libs/linux-x64/
 cp -R espeak-ng/espeak-ng/install/share/espeak-ng-data ../third-party/runtime-libs/linux-x64/
+
+mkdir -p ../third-party/include/flite
+cp -r flite/flite/install/include/* ../third-party/include/flite/
+cp -a flite/flite/install/lib/libflite*.a ../third-party/build-libs/linux-x64/
 
 cp -a pinmame/pinmame/build/libpinmame.{so,so.*} ../third-party/runtime-libs/linux-x64/
 cp pinmame/pinmame/src/libpinmame/libpinmame.h ../third-party/include/

@@ -59,8 +59,21 @@ target_compile_definitions(ppuc-pinmame PRIVATE
    PPUC_RUNTIME_LIB_SUBDIR="${PLATFORM}-${ARCH}"
 )
 
+set(PPUC_HAS_FLITE_HEADERS FALSE)
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/flite/flite.h" OR
    EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/flite/flite/flite.h")
+   set(PPUC_HAS_FLITE_HEADERS TRUE)
+endif()
+
+set(PPUC_HAS_FLITE_LIBS FALSE)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/build-libs/${PLATFORM}-${ARCH}/libflite.a" AND
+   EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/build-libs/${PLATFORM}-${ARCH}/libflite_cmu_us_kal.a" AND
+   EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/build-libs/${PLATFORM}-${ARCH}/libflite_cmulex.a" AND
+   EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/build-libs/${PLATFORM}-${ARCH}/libflite_usenglish.a")
+   set(PPUC_HAS_FLITE_LIBS TRUE)
+endif()
+
+if(PPUC_HAS_FLITE_HEADERS AND PPUC_HAS_FLITE_LIBS)
    target_compile_definitions(ppuc-pinmame PRIVATE PPUC_HAS_FLITE)
    target_sources(ppuc-pinmame PRIVATE
       src/FliteSpeechService.cpp
@@ -125,8 +138,7 @@ else()
       SDL3_image
    )
 
-   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/flite/flite.h" OR
-      EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/flite/flite/flite.h")
+   if(PPUC_HAS_FLITE_HEADERS AND PPUC_HAS_FLITE_LIBS)
       target_link_libraries(ppuc-pinmame LINK_PUBLIC
          flite_cmu_us_kal
          flite_cmulex
@@ -164,8 +176,7 @@ target_compile_definitions(ppuc-menu PRIVATE
    PPUC_RUNTIME_LIB_SUBDIR="${PLATFORM}-${ARCH}"
 )
 
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/flite/flite.h" OR
-   EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/flite/flite/flite.h")
+if(PPUC_HAS_FLITE_HEADERS AND PPUC_HAS_FLITE_LIBS)
    target_compile_definitions(ppuc-menu PRIVATE PPUC_HAS_FLITE)
    target_sources(ppuc-menu PRIVATE
       src/FliteSpeechService.cpp
@@ -217,8 +228,7 @@ else()
       SDL3_image
    )
 
-   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/flite/flite.h" OR
-      EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/flite/flite/flite.h")
+   if(PPUC_HAS_FLITE_HEADERS AND PPUC_HAS_FLITE_LIBS)
       target_link_libraries(ppuc-menu LINK_PUBLIC
          flite_cmu_us_kal
          flite_cmulex
