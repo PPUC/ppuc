@@ -98,6 +98,7 @@ bool opt_interactive = false;
 bool opt_serum = false;
 bool opt_pup = false;
 bool opt_console_display = false;
+bool opt_hard_reset = false;
 const char* opt_rom = NULL;
 int game_state = 0;
 bool running = true;
@@ -1194,6 +1195,10 @@ static struct cag_option options[] = {
      .access_name = "close-coin-door",
      .value_name = NULL,
      .description = "Force the configured coin-door-closed switch closed when it is virtualized"},
+    {.identifier = 'V',
+     .access_name = "hard-reset",
+     .value_name = NULL,
+     .description = "Use hard reset instead of soft restart for board startup"},
     {.identifier = 'S',
      .access_name = "debug-switches",
      .value_name = NULL,
@@ -1723,6 +1728,9 @@ int main(int argc, char** argv)
       case '8':
         opt_close_coin_door = true;
         break;
+      case 'V':
+        opt_hard_reset = true;
+        break;
       case 'S':
         opt_debug_switches = true;
         break;
@@ -2020,6 +2028,7 @@ int main(int argc, char** argv)
   }
   ppuc->SetDebug(opt_debug);
   ppuc->SetDebugErrors(opt_debug_errors);
+  ppuc->SetForceHardReset(opt_hard_reset);
   ppuc->SetSkippedBoardsCsv(opt_skip_boards);
   ppuc->SetSwitchReplyDelayUs(opt_switch_reply_delay_us);
   ppuc->SetDisableFastFlipForTests(opt_switch_test || opt_coil_test ||
