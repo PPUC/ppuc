@@ -11,6 +11,8 @@
 #include <vector>
 #include <chrono>
 
+#include "io-boards/Event.h"
+
 namespace
 {
 std::string Trim(const std::string& input)
@@ -53,6 +55,31 @@ bool ParseUInt16Token(const std::string& token, uint16_t& out)
   }
 
   out = static_cast<uint16_t>(value);
+  return true;
+}
+
+bool ParseTriggerIdToken(const std::string& token, uint16_t& out)
+{
+  if (ParseUInt16Token(token, out))
+  {
+    return true;
+  }
+
+  if (token.empty())
+  {
+    return false;
+  }
+
+  for (char c : token)
+  {
+    const unsigned char uc = static_cast<unsigned char>(c);
+    if (!(::isalnum(uc) || c == '_' || c == '-' || c == '.'))
+    {
+      return false;
+    }
+  }
+
+  out = HashNamedTriggerId(token.c_str());
   return true;
 }
 
@@ -497,9 +524,9 @@ bool PUPTriggerEngine::LoadRules(const char* path, std::string& error)
     rule.source = sourceToken[0];
     rule.line = lineNo;
 
-    if (!ParseUInt16Token(idToken, rule.id))
+    if (!ParseTriggerIdToken(idToken, rule.id))
     {
-      error = "Invalid PUP trigger line " + std::to_string(lineNo) + ": id must be uint16.";
+      error = "Invalid PUP trigger line " + std::to_string(lineNo) + ": id must be uint16 or a named token.";
       return false;
     }
 

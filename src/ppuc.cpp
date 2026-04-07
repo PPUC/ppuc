@@ -58,6 +58,7 @@ std::unique_ptr<AudioOutput> pAudioOutput;
 std::unique_ptr<SpeechService> pSpeechService;
 
 constexpr char kSpeechTriggerSource = 'O';
+constexpr char kBoardEffectTriggerSource = 'F';
 
 SDL_Window* pTransliteWindow;
 SDL_Renderer* pTransliteRenderer;
@@ -2152,6 +2153,15 @@ int main(int argc, char** argv)
     pPUPTriggerEngine = std::make_unique<PUPTriggerEngine>();
     pPUPTriggerEngine->SetDebug(opt_debug);
     pPUPTriggerEngine->SetTriggerCallback([](const char source, const uint16_t id, const uint8_t value) {
+      if (source == kBoardEffectTriggerSource)
+      {
+        if (ppuc != nullptr)
+        {
+          ppuc->TriggerEvent(EVENT_SOURCE_EFFECT, id, value);
+        }
+        return;
+      }
+
       if (source == kSpeechTriggerSource)
       {
         if (pSpeechService && pSpeechTriggerMap)

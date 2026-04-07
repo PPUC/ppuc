@@ -38,6 +38,7 @@ D 60006 1 : lamp_rising(21) && !attract
 
 # Flash
 D 60008 1 cooldown=20000 : lamp_rising(5) && attract
+F cabinet-flash-attract 1 cooldown=20000 : lamp_rising(5) && attract
 
 # Game Over
 D 60009 1 : lamp_rising(23) && !attract
@@ -63,3 +64,4 @@ D 60017 1 : (switch_rising(13) || switch_rising(12)) && (lamp(2) || lamp(23)) &&
 
 # Tilt
 D 60018 1 : lamp_rising(27)  && !attract
+F shaker-flash-hit 1 : coil_rising(6) && !attract

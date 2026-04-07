@@ -81,12 +81,12 @@ These components are still in an early development stage and the documentation w
 ### PUP Trigger Rules
 
 Use `--pup-triggers <file>` to map switch/lamp/coil conditions to calls of `SetPUPTrigger(source, id, value)`.
-This trigger feature is independent from `--pup`, and can also drive speech callouts.
+This trigger feature is independent from `--pup`, and can also drive speech callouts and board-local PPUC effects.
 
 Rule syntax:
 
 ```text
-<source> <id> [value] [cooldown=<milliseconds>] : <expression>
+<source> <id-or-name> [value] [cooldown=<milliseconds>] : <expression>
 ```
 
 Expression functions:
@@ -113,6 +113,7 @@ Example:
 P 100 1 : switch_rising(13) && lamp(42)
 P 101 1 cooldown=500 : switch_rising(13) && attract
 O 60010 1 : lamp_rising(23) && !attract
+F cabinet-attract 1 : lamp_rising(5) && attract
 ```
 
 A ready-to-use sample file is available at `examples/pup-triggers.rules`.
@@ -121,6 +122,10 @@ Speech trigger source:
 * `O`
   * spoken callout target
   * the trigger `id` is looked up in a `--speech-file`
+* `F`
+  * board-local effect trigger
+  * forwarded to `libppuc` as a runtime event with source `EVENT_SOURCE_EFFECT`
+  * use matching `trigger.source: F` plus `trigger.name` or `trigger.number` in the game YAML effect block
 
 ### Speech Trigger Text Files
 
