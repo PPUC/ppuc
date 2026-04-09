@@ -5,7 +5,7 @@ set -euo pipefail
 usage() {
   cat <<'USAGE'
 Usage:
-  platforms/linux/install-gnome-autostart.sh [--repo-root PATH] [--autostart-name NAME] [--terminal CMD] [--delay SECONDS] -- <ppuc-pinmame args...>
+  platforms/linux/install-gnome-autostart.sh [--repo-root PATH] [--autostart-name NAME] [--terminal CMD] [--delay SECONDS] [--no-dismiss-overview] -- <ppuc-pinmame args...>
 
 Examples:
   platforms/linux/install-gnome-autostart.sh -- -c examples/t2.yml -n -i
@@ -18,6 +18,7 @@ Notes:
   - It also writes a small launcher script under ~/.local/share/ppuc/autostart/.
   - The repo build output is expected at <repo-root>/ppuc/ppuc-pinmame.
   - Any relative paths after -- are resolved from <repo-root> before being written.
+  - On GNOME, the generated launcher tries to dismiss the Activities overview shortly after startup.
 USAGE
 }
 
@@ -25,6 +26,7 @@ repo_root="$(pwd)"
 autostart_name="ppuc-pinmame"
 terminal_cmd=""
 autostart_delay="10"
+dismiss_overview="1"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -47,6 +49,9 @@ while [[ $# -gt 0 ]]; do
       shift
       [[ $# -gt 0 ]] || { echo "Missing value for --delay" >&2; exit 1; }
       autostart_delay="$1"
+      ;;
+    --no-dismiss-overview)
+      dismiss_overview="0"
       ;;
     --help|-h)
       usage
@@ -136,6 +141,33 @@ mkdir -p "$launcher_dir"
   echo "#!/bin/bash"
   echo "set -uo pipefail"
   echo "cd $(printf '%q' "$workdir")"
+  if [[ "$dismiss_overview" == "1" ]]; then
+    cat <<'EOF'
+(
+  sleep 2
+  if command -v gdbus >/dev/null 2>&1; then
+    gdbus call \
+      --session \
+      --dest org.gnome.Shell \
+      --object-path /org/gnome/Shell \
+      --method org.freedesktop.DBus.Properties.Set \
+      org.gnome.Shell \
+      OverviewActive \
+      "<false>" >/dev/null 2>&1 || true
+  elif command -v dbus-send >/dev/null 2>&1; then
+    dbus-send \
+      --session \
+      --dest=org.gnome.Shell \
+      --type=method_call \
+      /org/gnome/Shell \
+      org.freedesktop.DBus.Properties.Set \
+      string:'org.gnome.Shell' \
+      string:'OverviewActive' \
+      variant:boolean:false >/dev/null 2>&1 || true
+  fi
+) &
+EOF
+  fi
   printf '%q' "$binary"
   for arg in "${resolved_args[@]}"; do
     printf ' %q' "$arg"
@@ -179,4 +211,9 @@ echo "Installed GNOME autostart entry: $desktop_file"
 echo "Launcher: $launcher_script"
 echo "Terminal: $terminal_cmd"
 echo "Delay: ${autostart_delay}s"
+if [[ "$dismiss_overview" == "1" ]]; then
+  echo "GNOME overview dismissal: enabled"
+else
+  echo "GNOME overview dismissal: disabled"
+fi
 echo "Command: $binary ${resolved_args[*]}"

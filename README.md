@@ -236,6 +236,11 @@ terminal is launched after the session settles. Override that with:
 platforms/linux/install-gnome-autostart.sh --delay 15 -- -c examples/t2.yml -n -i
 ```
 
+On GNOME, the generated launcher also tries to dismiss the Activities overview a
+couple of seconds after startup so the terminal and game are shown on the normal
+workspace instead of remaining visible only in the workspace selector. Disable
+that behavior with `--no-dismiss-overview` if needed.
+
 Remove the autostart entry with:
 
 ```shell
