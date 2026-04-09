@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=PPUC PinMAME
+Comment=Start ppuc-pinmame automatically when the GNOME session begins
+Terminal=false
+Path=@PPUC_WORKDIR@
+Exec=@PPUC_EXEC@
+X-GNOME-Autostart-enabled=true
+StartupNotify=false
+Categories=Game;
