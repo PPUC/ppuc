@@ -5,12 +5,13 @@ set -euo pipefail
 usage() {
   cat <<'USAGE'
 Usage:
-  platforms/linux/install-gnome-autostart.sh [--repo-root PATH] [--autostart-name NAME] [--terminal CMD] -- <ppuc-pinmame args...>
+  platforms/linux/install-gnome-autostart.sh [--repo-root PATH] [--autostart-name NAME] [--terminal CMD] [--delay SECONDS] -- <ppuc-pinmame args...>
 
 Examples:
   platforms/linux/install-gnome-autostart.sh -- -c examples/t2.yml -n -i
   platforms/linux/install-gnome-autostart.sh --repo-root /opt/ppuc -- -c /opt/ppuc/examples/t2.yml -n -i
   platforms/linux/install-gnome-autostart.sh --terminal kgx -- -c examples/t2.yml -n -i
+  platforms/linux/install-gnome-autostart.sh --delay 15 -- -c examples/t2.yml -n -i
 
 Notes:
   - The script writes ~/.config/autostart/<name>.desktop for GNOME/XDG autostart.
@@ -23,6 +24,7 @@ USAGE
 repo_root="$(pwd)"
 autostart_name="ppuc-pinmame"
 terminal_cmd=""
+autostart_delay="10"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -41,6 +43,11 @@ while [[ $# -gt 0 ]]; do
       [[ $# -gt 0 ]] || { echo "Missing value for --terminal" >&2; exit 1; }
       terminal_cmd="$1"
       ;;
+    --delay)
+      shift
+      [[ $# -gt 0 ]] || { echo "Missing value for --delay" >&2; exit 1; }
+      autostart_delay="$1"
+      ;;
     --help|-h)
       usage
       exit 0
@@ -57,6 +64,11 @@ while [[ $# -gt 0 ]]; do
   esac
   shift
 done
+
+if [[ ! "$autostart_delay" =~ ^[0-9]+$ ]]; then
+  echo "--delay must be an integer number of seconds" >&2
+  exit 1
+fi
 
 if [[ $# -eq 0 ]]; then
   echo "No ppuc-pinmame arguments supplied." >&2
@@ -122,20 +134,28 @@ mkdir -p "$launcher_dir"
 
 {
   echo "#!/bin/bash"
-  echo "set -euo pipefail"
+  echo "set -uo pipefail"
   echo "cd $(printf '%q' "$workdir")"
-  printf 'exec %q' "$binary"
+  printf '%q' "$binary"
   for arg in "${resolved_args[@]}"; do
     printf ' %q' "$arg"
   done
   printf '\n'
+  echo 'status=$?'
+  echo 'if [[ "$status" -ne 0 ]]; then'
+  echo '  echo'
+  echo '  echo "ppuc-pinmame exited with status $status"'
+  echo '  echo "Press Enter to close this terminal..."'
+  echo '  read -r _'
+  echo 'fi'
+  echo 'exit "$status"'
 } > "$launcher_script"
 
 chmod 755 "$launcher_script"
 
 case "$terminal_cmd" in
   gnome-terminal)
-    printf -v autostart_exec '%q --wait -- %q' "$terminal_cmd" "$launcher_script"
+    printf -v autostart_exec '%q -- %q' "$terminal_cmd" "$launcher_script"
     ;;
   kgx)
     printf -v autostart_exec '%q -- %q' "$terminal_cmd" "$launcher_script"
@@ -150,6 +170,7 @@ esac
 
 sed \
   -e "s|@AUTOSTART_EXEC@|$autostart_exec|g" \
+  -e "s|@AUTOSTART_DELAY@|$autostart_delay|g" \
   "$template" > "$desktop_file"
 
 chmod 644 "$desktop_file"
@@ -157,4 +178,5 @@ chmod 644 "$desktop_file"
 echo "Installed GNOME autostart entry: $desktop_file"
 echo "Launcher: $launcher_script"
 echo "Terminal: $terminal_cmd"
+echo "Delay: ${autostart_delay}s"
 echo "Command: $binary ${resolved_args[*]}"

@@ -229,6 +229,13 @@ By default the installer prefers `gnome-terminal`, then `kgx`, then
 platforms/linux/install-gnome-autostart.sh --terminal gnome-terminal -- -c examples/t2.yml -n -i
 ```
 
+The installer also sets a GNOME autostart delay of 10 seconds by default so the
+terminal is launched after the session settles. Override that with:
+
+```shell
+platforms/linux/install-gnome-autostart.sh --delay 15 -- -c examples/t2.yml -n -i
+```
+
 Remove the autostart entry with:
 
 ```shell
