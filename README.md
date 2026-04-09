@@ -218,8 +218,16 @@ platforms/linux/install-gnome-autostart.sh -- -c examples/t2.yml -n -i
 ```
 
 This writes `~/.config/autostart/ppuc-pinmame.desktop` with absolute paths to the
-generated `ppuc/ppuc-pinmame` binary and the selected config file. Pass the same
-arguments you normally use on the command line after `--`.
+generated launcher and starts `ppuc-pinmame` in a terminal window so the process
+stays attached to the foreground session. Pass the same arguments you normally
+use on the command line after `--`.
+
+By default the installer prefers `gnome-terminal`, then `kgx`, then
+`x-terminal-emulator`. Override that with:
+
+```shell
+platforms/linux/install-gnome-autostart.sh --terminal gnome-terminal -- -c examples/t2.yml -n -i
+```
 
 Remove the autostart entry with:
 

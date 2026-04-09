@@ -13,7 +13,8 @@ Examples:
 
 Notes:
   - The script removes ~/.config/autostart/<name>.desktop.
-  - It only removes the per-user GNOME/XDG autostart entry and leaves the build output untouched.
+  - It also removes the generated launcher script under ~/.local/share/ppuc/autostart/.
+  - It only removes per-user autostart artifacts and leaves the build output untouched.
 USAGE
 }
 
@@ -41,11 +42,23 @@ done
 
 autostart_dir="${XDG_CONFIG_HOME:-$HOME/.config}/autostart"
 desktop_file="$autostart_dir/$autostart_name.desktop"
+data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
+launcher_script="$data_home/ppuc/autostart/$autostart_name.sh"
 
-if [[ ! -e "$desktop_file" ]]; then
-  echo "Autostart entry not found: $desktop_file"
-  exit 0
+removed_any=0
+
+if [[ -e "$desktop_file" ]]; then
+  rm -f "$desktop_file"
+  echo "Removed GNOME autostart entry: $desktop_file"
+  removed_any=1
 fi
 
-rm -f "$desktop_file"
-echo "Removed GNOME autostart entry: $desktop_file"
+if [[ -e "$launcher_script" ]]; then
+  rm -f "$launcher_script"
+  echo "Removed launcher script: $launcher_script"
+  removed_any=1
+fi
+
+if [[ "$removed_any" -eq 0 ]]; then
+  echo "Autostart entry not found for name: $autostart_name"
+fi
