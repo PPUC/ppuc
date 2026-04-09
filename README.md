@@ -209,6 +209,24 @@ ppuc/ppuc-menu \
 platforms/linux/aarch64/build.sh
 ```
 
+#### GNOME Autostart on Debian/Linux
+
+After building, install a per-user GNOME/XDG autostart entry with:
+
+```shell
+platforms/linux/install-gnome-autostart.sh -- -c examples/t2.yml -n -i
+```
+
+This writes `~/.config/autostart/ppuc-pinmame.desktop` with absolute paths to the
+generated `ppuc/ppuc-pinmame` binary and the selected config file. Pass the same
+arguments you normally use on the command line after `--`.
+
+Remove the autostart entry with:
+
+```shell
+platforms/linux/uninstall-gnome-autostart.sh
+```
+
 #### MacOS (arm64)
 ```shell
 platforms/macos/arm64/build.sh
