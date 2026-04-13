@@ -2,9 +2,11 @@ cmake_minimum_required(VERSION 3.25)
 
 set(PLATFORM "win" CACHE STRING "Platform")
 set(ARCH "x64" CACHE STRING "Arch")
+option(ENABLE_SANITIZERS "Enable AddressSanitizer and UBSan for Debug builds" OFF)
 
 message(STATUS "PLATFORM: ${PLATFORM}")
 message(STATUS "ARCH: ${ARCH}")
+message(STATUS "ENABLE_SANITIZERS: ${ENABLE_SANITIZERS}")
 
 file(READ src/ppuc_version.h version)
 string(REGEX MATCH "PPUC_EXECUTABLE_VERSION_MAJOR[ ]+([0-9]+)" _tmp ${version})
@@ -39,6 +41,14 @@ set(CMAKE_C_STANDARD 99)
 
 set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 set(CMAKE_C_VISIBILITY_PRESET hidden)
+
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+   if(ENABLE_SANITIZERS AND (PLATFORM STREQUAL "macos" OR PLATFORM STREQUAL "linux"))
+      set(SANITIZER_FLAGS -fsanitize=address,undefined)
+      add_compile_options(${SANITIZER_FLAGS} -fno-omit-frame-pointer -g)
+      add_link_options(${SANITIZER_FLAGS})
+   endif()
+endif()
 
 add_executable(ppuc-pinmame
    src/AudioOutput.cpp
