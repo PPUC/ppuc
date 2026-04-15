@@ -23,6 +23,8 @@ if(PLATFORM STREQUAL "win")
    if(ARCH STREQUAL "x86")
       add_compile_definitions(WIN32)
    endif()
+elseif(PLATFORM STREQUAL "win-mingw")
+   add_compile_options(-Wa,-mbig-obj)
 elseif(PLATFORM STREQUAL "macos")
    if (ARCH STREQUAL "arm64")
       set(CMAKE_OSX_ARCHITECTURES arm64)
@@ -110,7 +112,7 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/espeak-ng/speak_lib.h
    )
 endif()
 
-if(PLATFORM STREQUAL "win")
+if(PLATFORM STREQUAL "win" OR PLATFORM STREQUAL "win-mingw")
    target_link_directories(ppuc-pinmame PUBLIC
       third-party/build-libs/${PLATFORM}-${ARCH}
       third-party/runtime-libs/${PLATFORM}-${ARCH}
@@ -216,22 +218,26 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/espeak-ng/speak_lib.h
    )
 endif()
 
-if(PLATFORM STREQUAL "win")
+if(PLATFORM STREQUAL "win" OR PLATFORM STREQUAL "win-mingw")
    target_link_directories(ppuc-menu PUBLIC
       third-party/build-libs/${PLATFORM}-${ARCH}
       third-party/runtime-libs/${PLATFORM}-${ARCH}
    )
    if(ARCH STREQUAL "x64")
       target_link_libraries(ppuc-menu LINK_PUBLIC
+         ppuc64
          cargs64
          SDL364
          SDL3_image64
+         yaml-cpp
       )
    else()
       target_link_libraries(ppuc-menu LINK_PUBLIC
+         ppuc
          cargs
          SDL3
          SDL3_image
+         yaml-cpp
       )
    endif()
 
@@ -248,9 +254,11 @@ else()
    )
 
    target_link_libraries(ppuc-menu LINK_PUBLIC
+      ppuc
       cargs
       SDL3
       SDL3_image
+      yaml-cpp
    )
 
    if(PPUC_ENABLE_FLITE)
@@ -284,7 +292,7 @@ target_include_directories(ppuc-backbox PUBLIC
    third-party/include
 )
 
-if(PLATFORM STREQUAL "win")
+if(PLATFORM STREQUAL "win" OR PLATFORM STREQUAL "win-mingw")
    target_link_directories(ppuc-backbox PUBLIC
       third-party/build-libs/${PLATFORM}-${ARCH}
       third-party/runtime-libs/${PLATFORM}-${ARCH}
