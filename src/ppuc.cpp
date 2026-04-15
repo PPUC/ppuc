@@ -15,6 +15,7 @@
 
 #include <chrono>
 #include <csignal>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <deque>
@@ -60,6 +61,82 @@ std::unique_ptr<SpeechService> pSpeechService;
 constexpr char kSpeechTriggerSource = 'O';
 constexpr char kBoardEffectTriggerSource = 'F';
 
+void ConfigureSDLVideoDriverForHeadlessLinux()
+{
+#if defined(__linux__) && !defined(__ANDROID__)
+  if (std::getenv("SDL_VIDEODRIVER") == nullptr && std::getenv("DISPLAY") == nullptr &&
+      std::getenv("WAYLAND_DISPLAY") == nullptr)
+  {
+    setenv("SDL_VIDEODRIVER", "kmsdrm", 0);
+  }
+#endif
+}
+
+bool ResolveWindowPositionForScreen(int screenIndex, int offsetX, int offsetY, int* pResolvedX, int* pResolvedY)
+{
+  if (pResolvedX == nullptr || pResolvedY == nullptr)
+  {
+    return false;
+  }
+
+  if (screenIndex < 0)
+  {
+    *pResolvedX = offsetX;
+    *pResolvedY = offsetY;
+    return true;
+  }
+
+  int numDisplays = 0;
+  SDL_DisplayID* pDisplays = SDL_GetDisplays(&numDisplays);
+  if (pDisplays == nullptr)
+  {
+    return false;
+  }
+
+  const bool validDisplay = screenIndex < numDisplays;
+  SDL_DisplayID displayId = 0;
+  if (validDisplay)
+  {
+    displayId = pDisplays[screenIndex];
+  }
+  SDL_free(pDisplays);
+
+  if (!validDisplay)
+  {
+    SDL_SetError("Invalid screen index %d", screenIndex);
+    return false;
+  }
+
+  SDL_Rect displayBounds;
+  if (!SDL_GetDisplayBounds(displayId, &displayBounds))
+  {
+    return false;
+  }
+
+  *pResolvedX = displayBounds.x + offsetX;
+  *pResolvedY = displayBounds.y + offsetY;
+  return true;
+}
+
+bool PositionWindowOnScreen(SDL_Window* pWindow, int screenIndex, int offsetX = 0, int offsetY = 0)
+{
+  if (pWindow == nullptr || screenIndex < 0)
+  {
+    return true;
+  }
+
+  int resolvedX = 0;
+  int resolvedY = 0;
+  if (!ResolveWindowPositionForScreen(screenIndex, offsetX, offsetY, &resolvedX, &resolvedY))
+  {
+    return false;
+  }
+
+  SDL_SetWindowPosition(pWindow, resolvedX, resolvedY);
+  while (!SDL_SyncWindow(pWindow));
+  return true;
+}
+
 SDL_Window* pTransliteWindow;
 SDL_Renderer* pTransliteRenderer;
 SDL_Texture* pTransliteTexture;
@@ -97,6 +174,7 @@ bool opt_serum = false;
 bool opt_pup = false;
 bool opt_console_display = false;
 bool opt_hard_reset = false;
+const char* opt_virtual_dmd_renderer = "dots";
 const char* opt_rom = NULL;
 int game_state = 0;
 bool running = true;
@@ -1264,6 +1342,18 @@ static struct cag_option options[] = {
      .access_name = "virtual-dmd-screen",
      .value_name = "VALUE",
      .description = "Show virtual DMD on a specific screen"},
+    {.identifier = 'l',
+     .access_name = "virtual-dmd-renderer",
+     .value_name = "VALUE",
+     .description = "Virtual DMD renderer: dots, smooth, xbrz"},
+    {.identifier = 'j',
+     .access_name = "virtual-dmd-x",
+     .value_name = "VALUE",
+     .description = "Virtual DMD x position relative to the selected screen"},
+    {.identifier = 'k',
+     .access_name = "virtual-dmd-y",
+     .value_name = "VALUE",
+     .description = "Virtual DMD y position relative to the selected screen"},
     {.identifier = 'h', .access_letters = "h", .access_name = "help", .description = "Show help"}};
 
 void PINMAMECALLBACK Game(PinmameGame* game)
@@ -1636,6 +1726,8 @@ int main(int argc, char** argv)
   uint16_t opt_virtual_dmd_width = 1280;
   uint16_t opt_virtual_dmd_height = 320;
   int8_t opt_virtual_dmd_screen = -1;
+  int opt_virtual_dmd_x = SDL_WINDOWPOS_UNDEFINED;
+  int opt_virtual_dmd_y = SDL_WINDOWPOS_UNDEFINED;
   DMDUtil::SDLDMD* pVirtualDMD = nullptr;
 
   cag_option_init(&cag_context, options, CAG_ARRAY_SIZE(options), argc, argv);
@@ -1796,6 +1888,15 @@ int main(int argc, char** argv)
       case 'R':
         opt_virtual_dmd_screen = atoi(cag_option_get_value(&cag_context));
         break;
+      case 'l':
+        opt_virtual_dmd_renderer = cag_option_get_value(&cag_context);
+        break;
+      case 'j':
+        opt_virtual_dmd_x = atoi(cag_option_get_value(&cag_context));
+        break;
+      case 'k':
+        opt_virtual_dmd_y = atoi(cag_option_get_value(&cag_context));
+        break;
       case 'h':
         printf("Usage: ppuc [OPTION]...\n");
         cag_option_print(options, CAG_ARRAY_SIZE(options), stdout);
@@ -1943,11 +2044,7 @@ int main(int argc, char** argv)
 
   if (opt_translite || opt_virtual_dmd)
   {
-// Set the SDL video driver for Linux framebuffer
-#ifdef __linux__
-    setenv("SDL_VIDEODRIVER", "KMSDRM", 1);
-#endif
-
+    ConfigureSDLVideoDriverForHeadlessLinux();
     if (!SDL_Init(SDL_INIT_VIDEO))
     {
       printf("SDL_Init Error: %s\n", SDL_GetError());
@@ -1965,8 +2062,14 @@ int main(int argc, char** argv)
       return SDL_APP_FAILURE;
     }
 
-    SDL_SetWindowPosition(pTransliteWindow, 0, 0);
-    while (!SDL_SyncWindow(pTransliteWindow));
+    if (!PositionWindowOnScreen(pTransliteWindow, opt_translite_screen))
+    {
+      printf("Failed to position translite window: %s\n", SDL_GetError());
+      SDL_DestroyRenderer(pTransliteRenderer);
+      SDL_DestroyWindow(pTransliteWindow);
+      SDL_Quit();
+      return 1;
+    }
 
     pTransliteTexture = IMG_LoadTexture(pTransliteRenderer, opt_translite);
     if (!pTransliteTexture)
@@ -2281,9 +2384,18 @@ int main(int argc, char** argv)
 
   if (opt_virtual_dmd)
   {
+    DMDUtil::SDLDMD::RenderingMode virtualDmdRenderingMode = DMDUtil::SDLDMD::RenderingMode::Dots;
+    if (!DMDUtil::ParseSDLDMDRenderingMode(opt_virtual_dmd_renderer, &virtualDmdRenderingMode))
+    {
+      printf("Unsupported virtual DMD renderer '%s'. Use one of: dots, smooth, xbrz\n", opt_virtual_dmd_renderer);
+      return SDL_APP_FAILURE;
+    }
+
     pVirtualDMD = DMDUtil::CreateSDLDMD(*pDmd, "PPUC DMD", opt_virtual_dmd_width, opt_virtual_dmd_height,
                                         opt_virtual_dmd_window ? SDL_WINDOW_BORDERLESS : SDL_WINDOW_FULLSCREEN,
-                                        opt_virtual_dmd_hd ? 256 : 128, opt_virtual_dmd_hd ? 64 : 32);
+                                        opt_virtual_dmd_hd ? 256 : 128, opt_virtual_dmd_hd ? 64 : 32,
+                                        opt_virtual_dmd_screen, opt_virtual_dmd_x, opt_virtual_dmd_y,
+                                        virtualDmdRenderingMode);
 
     if (!pVirtualDMD)
     {
@@ -2308,7 +2420,9 @@ int main(int argc, char** argv)
 
   PinmameSetConfig(&config);
 
-  const PINMAME_DMD_MODE dmdMode = opt_serum ? PINMAME_DMD_MODE_RAW : PINMAME_DMD_MODE_BRIGHTNESS;
+  // TODO: Add support for PINMAME_DMD_MODE_BRIGHTNESS in the libdmdutil pipeline.
+  // For now, keep using RAW so monochrome DMD ROMs render correctly on ZeDMD and SDLDMD.
+  const PINMAME_DMD_MODE dmdMode = PINMAME_DMD_MODE_RAW;
   PinmameSetDmdMode(dmdMode);
   // PinmameSetSoundMode(PINMAME_SOUND_MODE_ALTSOUND);
   PinmameSetHandleKeyboard(0);

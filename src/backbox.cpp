@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <csignal>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <mutex>
@@ -37,6 +38,82 @@ bool opt_pup = false;
 const char* opt_rom = NULL;
 int game_state = 0;
 bool running = true;
+
+void ConfigureSDLVideoDriverForHeadlessLinux()
+{
+#if defined(__linux__) && !defined(__ANDROID__)
+  if (std::getenv("SDL_VIDEODRIVER") == nullptr && std::getenv("DISPLAY") == nullptr &&
+      std::getenv("WAYLAND_DISPLAY") == nullptr)
+  {
+    setenv("SDL_VIDEODRIVER", "kmsdrm", 0);
+  }
+#endif
+}
+
+bool ResolveWindowPositionForScreen(int screenIndex, int offsetX, int offsetY, int* pResolvedX, int* pResolvedY)
+{
+  if (pResolvedX == nullptr || pResolvedY == nullptr)
+  {
+    return false;
+  }
+
+  if (screenIndex < 0)
+  {
+    *pResolvedX = offsetX;
+    *pResolvedY = offsetY;
+    return true;
+  }
+
+  int numDisplays = 0;
+  SDL_DisplayID* pDisplays = SDL_GetDisplays(&numDisplays);
+  if (pDisplays == nullptr)
+  {
+    return false;
+  }
+
+  const bool validDisplay = screenIndex < numDisplays;
+  SDL_DisplayID displayId = 0;
+  if (validDisplay)
+  {
+    displayId = pDisplays[screenIndex];
+  }
+  SDL_free(pDisplays);
+
+  if (!validDisplay)
+  {
+    SDL_SetError("Invalid screen index %d", screenIndex);
+    return false;
+  }
+
+  SDL_Rect displayBounds;
+  if (!SDL_GetDisplayBounds(displayId, &displayBounds))
+  {
+    return false;
+  }
+
+  *pResolvedX = displayBounds.x + offsetX;
+  *pResolvedY = displayBounds.y + offsetY;
+  return true;
+}
+
+bool PositionWindowOnScreen(SDL_Window* pWindow, int screenIndex, int offsetX = 0, int offsetY = 0)
+{
+  if (pWindow == nullptr || screenIndex < 0)
+  {
+    return true;
+  }
+
+  int resolvedX = 0;
+  int resolvedY = 0;
+  if (!ResolveWindowPositionForScreen(screenIndex, offsetX, offsetY, &resolvedX, &resolvedY))
+  {
+    return false;
+  }
+
+  SDL_SetWindowPosition(pWindow, resolvedX, resolvedY);
+  while (!SDL_SyncWindow(pWindow));
+  return true;
+}
 
 uint32_t currentThreadId = 0;
 std::mutex threadMutex;
@@ -105,6 +182,14 @@ static struct cag_option options[] = {
      .access_name = "virtual-dmd-screen",
      .value_name = "VALUE",
      .description = "Show virtual DMD on a specific screen"},
+    {.identifier = 'T',
+     .access_name = "virtual-dmd-x",
+     .value_name = "VALUE",
+     .description = "Virtual DMD x position relative to the selected screen"},
+    {.identifier = 'U',
+     .access_name = "virtual-dmd-y",
+     .value_name = "VALUE",
+     .description = "Virtual DMD y position relative to the selected screen"},
     {.identifier = 'S',
      .access_name = "virtual-dmd-scale",
      .value_name = NULL,
@@ -189,6 +274,8 @@ int main(int argc, char* argv[])
   uint16_t opt_virtual_dmd_width = 1280;
   uint16_t opt_virtual_dmd_height = 320;
   int8_t opt_virtual_dmd_screen = -1;
+  int opt_virtual_dmd_x = SDL_WINDOWPOS_UNDEFINED;
+  int opt_virtual_dmd_y = SDL_WINDOWPOS_UNDEFINED;
   DMDUtil::SDLDMD* pVirtualDMD = nullptr;
   uint32_t threadId = 0;
 
@@ -247,6 +334,12 @@ int main(int argc, char* argv[])
       case 'R':
         opt_virtual_dmd_screen = atoi(cag_option_get_value(&cag_context));
         break;
+      case 'T':
+        opt_virtual_dmd_x = atoi(cag_option_get_value(&cag_context));
+        break;
+      case 'U':
+        opt_virtual_dmd_y = atoi(cag_option_get_value(&cag_context));
+        break;
       case 'S':
         opt_virtual_dmd_scale = true;
         break;
@@ -275,11 +368,7 @@ int main(int argc, char* argv[])
 
   if (opt_translite || opt_virtual_dmd)
   {
-// Set the SDL video driver for Linux framebuffer
-#ifdef __linux__
-    setenv("SDL_VIDEODRIVER", "KMSDRM", 1);
-#endif
-
+    ConfigureSDLVideoDriverForHeadlessLinux();
     if (!SDL_Init(SDL_INIT_VIDEO))
     {
       printf("SDL_Init Error: %s\n", SDL_GetError());
@@ -297,8 +386,14 @@ int main(int argc, char* argv[])
       return SDL_APP_FAILURE;
     }
 
-    SDL_SetWindowPosition(pTransliteWindow, 0, 0);
-    while (!SDL_SyncWindow(pTransliteWindow));
+    if (!PositionWindowOnScreen(pTransliteWindow, opt_translite_screen))
+    {
+      printf("Failed to position translite window: %s\n", SDL_GetError());
+      SDL_DestroyRenderer(pTransliteRenderer);
+      SDL_DestroyWindow(pTransliteWindow);
+      SDL_Quit();
+      return 1;
+    }
 
     pTransliteTexture = IMG_LoadTexture(pTransliteRenderer, opt_translite);
     if (!pTransliteTexture)
@@ -361,7 +456,8 @@ int main(int argc, char* argv[])
   {
     pVirtualDMD = DMDUtil::CreateSDLDMD(*pDmd, "PPUC DMD", opt_virtual_dmd_width, opt_virtual_dmd_height,
                                         opt_virtual_dmd_window ? SDL_WINDOW_BORDERLESS : SDL_WINDOW_FULLSCREEN,
-                                        opt_virtual_dmd_hd ? 256 : 128, opt_virtual_dmd_hd ? 64 : 32);
+                                        opt_virtual_dmd_hd ? 256 : 128, opt_virtual_dmd_hd ? 64 : 32,
+                                        opt_virtual_dmd_screen, opt_virtual_dmd_x, opt_virtual_dmd_y);
 
     if (!pVirtualDMD)
     {

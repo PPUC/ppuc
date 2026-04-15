@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <cctype>
+#include <cstdlib>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -80,6 +81,17 @@ std::string ToLower(std::string value)
     c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
   }
   return value;
+}
+
+void ConfigureSDLVideoDriverForHeadlessLinux()
+{
+#if defined(__linux__) && !defined(__ANDROID__)
+  if (std::getenv("SDL_VIDEODRIVER") == nullptr && std::getenv("DISPLAY") == nullptr &&
+      std::getenv("WAYLAND_DISPLAY") == nullptr)
+  {
+    setenv("SDL_VIDEODRIVER", "kmsdrm", 0);
+  }
+#endif
 }
 
 bool FileExists(const fs::path& path)
@@ -1124,6 +1136,7 @@ int main(int argc, char* argv[])
 
   const SDL_InitFlags initFlags = SDL_INIT_VIDEO |
                                   (optNoSound ? 0 : SDL_INIT_AUDIO);
+  ConfigureSDLVideoDriverForHeadlessLinux();
   if (!SDL_Init(initFlags))
   {
     fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
