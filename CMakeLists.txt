@@ -44,9 +44,28 @@ set(CMAKE_C_STANDARD 99)
 set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 set(CMAKE_C_VISIBILITY_PRESET hidden)
 
-if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/SDLDMD/SDLDMD.h")
-   message(FATAL_ERROR "Could not find staged SDLDMD headers in third-party/include/SDLDMD. Update ppuc external dependencies first.")
+set(PPUC_INCLUDE_DIRS "")
+set(PPUC_STAGED_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include")
+
+find_path(PPUC_SDLDMD_INCLUDE_DIR
+   NAMES SDLDMD/SDLDMD.h
+   PATHS "${PPUC_STAGED_INCLUDE_DIR}"
+)
+
+if(NOT PPUC_SDLDMD_INCLUDE_DIR)
+   find_path(PPUC_SDLDMD_INCLUDE_DIR NAMES SDLDMD/SDLDMD.h)
 endif()
+
+if(NOT PPUC_SDLDMD_INCLUDE_DIR)
+   message(FATAL_ERROR "Could not find SDLDMD headers (expected SDLDMD/SDLDMD.h).")
+endif()
+
+list(APPEND PPUC_INCLUDE_DIRS "${PPUC_SDLDMD_INCLUDE_DIR}")
+if(EXISTS "${PPUC_STAGED_INCLUDE_DIR}")
+   list(APPEND PPUC_INCLUDE_DIRS "${PPUC_STAGED_INCLUDE_DIR}")
+endif()
+
+message(STATUS "SDLDMD include dir: ${PPUC_SDLDMD_INCLUDE_DIR}")
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
    if(ENABLE_SANITIZERS AND (PLATFORM STREQUAL "macos" OR PLATFORM STREQUAL "linux"))
@@ -66,7 +85,7 @@ add_executable(ppuc-pinmame
 )
 
 target_include_directories(ppuc-pinmame PUBLIC
-   third-party/include
+   ${PPUC_INCLUDE_DIRS}
 )
 
 target_compile_definitions(ppuc-pinmame PRIVATE
@@ -196,7 +215,7 @@ add_executable(ppuc-menu
 )
 
 target_include_directories(ppuc-menu PUBLIC
-   third-party/include
+   ${PPUC_INCLUDE_DIRS}
 )
 
 target_compile_definitions(ppuc-menu PRIVATE
@@ -289,7 +308,7 @@ add_executable(ppuc-backbox
 )
 
 target_include_directories(ppuc-backbox PUBLIC
-   third-party/include
+   ${PPUC_INCLUDE_DIRS}
 )
 
 if(PLATFORM STREQUAL "win" OR PLATFORM STREQUAL "win-mingw")
