@@ -5,11 +5,10 @@ set -e
 source ./platforms/config.sh
 
 echo "Building libraries..."
-echo "  SDL_SHA: ${SDL_SHA}"
 echo "  SDL_IMAGE_SHA: ${SDL_IMAGE_SHA}"
 echo "  PINMAME_SHA: ${PINMAME_SHA}"
 echo "  LIBPPUC_SHA: ${LIBPPUC_SHA}"
-echo "  LIBDMDUTIL_SHA: ${LIBDMDUTIL_SHA}"
+echo "  LIBSDLDMD_SHA: ${LIBSDLDMD_SHA}"
 echo ""
 
 if [ -z "${CACHE_DIR}" ]; then
@@ -24,32 +23,50 @@ mkdir -p external ${CACHE_DIR}
 cd external
 
 #
-# build SDL3, SDL3_image
+# build libsdldmd, SDL3_image
 #
 
-SDL3_EXPECTED_SHA="${SDL_SHA}-${SDL_IMAGE_SHA}"
-SDL3_FOUND_SHA="$([ -f SDL3/cache.txt ] && cat SDL3/cache.txt || echo "")"
+LIBSDLDMD_EXPECTED_SHA="${LIBSDLDMD_SHA}"
+LIBSDLDMD_FOUND_SHA="$([ -f libsdldmd/cache.txt ] && cat libsdldmd/cache.txt || echo "")"
 
-if [ "${SDL3_EXPECTED_SHA}" != "${SDL3_FOUND_SHA}" ]; then
-   echo "Building SDL3. Expected: ${SDL3_EXPECTED_SHA}, Found: ${SDL3_FOUND_SHA}"
+if [ -n "${LIBSDLDMD_SHA}" ] && [ "${LIBSDLDMD_EXPECTED_SHA}" != "${LIBSDLDMD_FOUND_SHA}" ]; then
+   echo "Building libsdldmd. Expected: ${LIBSDLDMD_EXPECTED_SHA}, Found: ${LIBSDLDMD_FOUND_SHA}"
 
-   rm -rf SDL3
-   mkdir SDL3
-   cd SDL3
+   rm -rf libsdldmd
+   mkdir libsdldmd
+   cd libsdldmd
 
-   curl -sL https://github.com/libsdl-org/SDL/archive/${SDL_SHA}.tar.gz -o SDL-${SDL_SHA}.tar.gz
-   tar xzf SDL-${SDL_SHA}.tar.gz
-   mv SDL-${SDL_SHA} SDL
-   cd SDL
+   curl -sL https://github.com/PPUC/libsdldmd/archive/${LIBSDLDMD_SHA}.tar.gz -o libsdldmd-${LIBSDLDMD_SHA}.tar.gz
+   tar xzf libsdldmd-${LIBSDLDMD_SHA}.tar.gz
+   mv libsdldmd-${LIBSDLDMD_SHA} libsdldmd
+   cd libsdldmd
+
+   BUILD_TYPE=${BUILD_TYPE} platforms/win/x86/external.sh
    cmake \
       -G "Visual Studio 17 2022" \
       -A Win32 \
-      -DSDL_SHARED=ON \
-      -DSDL_STATIC=OFF \
-      -DSDL_TEST_LIBRARY=OFF \
+      -DPLATFORM=win \
+      -DARCH=x86 \
+      -DBUILD_SHARED=ON \
+      -DBUILD_STATIC=OFF \
       -B build
    cmake --build build --config ${BUILD_TYPE}
    cd ..
+
+   echo "$LIBSDLDMD_EXPECTED_SHA" > cache.txt
+
+   cd ..
+fi
+
+SDL3_IMAGE_EXPECTED_SHA="${SDL_IMAGE_SHA}-${LIBSDLDMD_SHA}"
+SDL3_IMAGE_FOUND_SHA="$([ -f SDL3_image/cache.txt ] && cat SDL3_image/cache.txt || echo "")"
+
+if [ "${SDL3_IMAGE_EXPECTED_SHA}" != "${SDL3_IMAGE_FOUND_SHA}" ]; then
+   echo "Building SDL3_image. Expected: ${SDL3_IMAGE_EXPECTED_SHA}, Found: ${SDL3_IMAGE_FOUND_SHA}"
+
+   rm -rf SDL3_image
+   mkdir SDL3_image
+   cd SDL3_image
 
    curl -sL https://github.com/libsdl-org/SDL_image/archive/${SDL_IMAGE_SHA}.tar.gz -o SDL_image-${SDL_IMAGE_SHA}.tar.gz
    tar xzf SDL_image-${SDL_IMAGE_SHA}.tar.gz --exclude='*/Xcode/*'
@@ -65,49 +82,12 @@ if [ "${SDL3_EXPECTED_SHA}" != "${SDL3_FOUND_SHA}" ]; then
       -DSDLIMAGE_VENDORED=ON \
       -DSDLIMAGE_AVIF=OFF \
       -DSDLIMAGE_WEBP=OFF \
-      -DSDL3_DIR=../SDL/build \
+      -DSDL3_DIR=../../libsdldmd/libsdldmd/external/SDL/build \
       -B build
    cmake --build build --config ${BUILD_TYPE}
    cd ..
 
-   echo "$SDL3_EXPECTED_SHA" > cache.txt
-
-   cd ..
-fi
-
-#
-# libdmdutil
-#
-
-CACHE_NAME="libdmdutil-${LIBDMDUTIL_SHA}"
-
-LIBDMDUTIL_EXPECTED_SHA="${LIBDMDUTIL_SHA}"
-LIBDMDUTIL_FOUND_SHA="$([ -f libdmdutil/cache.txt ] && cat libdmdutil/cache.txt || echo "")"
-
-if [ "${LIBDMDUTIL_EXPECTED_SHA}" != "${LIBDMDUTIL_FOUND_SHA}" ]; then
-   echo "Building libdmdutil. Expected: ${LIBDMDUTIL_EXPECTED_SHA}, Found: ${LIBDMDUTIL_FOUND_SHA}"
-
-   rm -rf libdmdutil
-   mkdir libdmdutil
-   cd libdmdutil
-
-   curl -sL https://github.com/PPUC/libdmdutil/archive/${LIBDMDUTIL_SHA}.tar.gz -o libdmdutil-${LIBDMDUTIL_SHA}.tar.gz
-   tar xzf libdmdutil-${LIBDMDUTIL_SHA}.tar.gz
-   mv libdmdutil-${LIBDMDUTIL_SHA} libdmdutil
-   cd libdmdutil
-   ./platforms/win/x86/external.sh
-   cmake \
-      -G "Visual Studio 17 2022" \
-      -A Win32 \
-      -DPLATFORM=win \
-      -DARCH=x86 \
-      -DBUILD_SHARED=ON \
-      -DBUILD_STATIC=OFF \
-      -B build
-   cmake --build build --config ${BUILD_TYPE}
-   cd ..
-
-   echo "$LIBDMDUTIL_EXPECTED_SHA" > cache.txt
+   echo "$SDL3_IMAGE_EXPECTED_SHA" > cache.txt
 
    cd ..
 fi
@@ -183,45 +163,52 @@ if [ "${LIBPPUC_EXPECTED_SHA}" != "${LIBPPUC_FOUND_SHA}" ]; then
    cd ..
 fi
 
-cp SDL3/SDL/build/${BUILD_TYPE}/SDL3.lib ../third-party/build-libs/win-x86/
-cp SDL3/SDL/build/${BUILD_TYPE}/SDL3.dll ../third-party/runtime-libs/win-x86/
-cp -r SDL3/SDL/include/SDL3 ../third-party/include/
+cp libsdldmd/libsdldmd/third-party/build-libs/win/x86/SDL3.lib ../third-party/build-libs/win-x86/
+cp libsdldmd/libsdldmd/third-party/runtime-libs/win/x86/SDL3.dll ../third-party/runtime-libs/win-x86/
+cp -r libsdldmd/libsdldmd/third-party/include/SDL3 ../third-party/include/
 
-cp SDL3/SDL_image/build/${BUILD_TYPE}/SDL3_image.lib ../third-party/build-libs/win-x86/
-cp SDL3/SDL_image/build/${BUILD_TYPE}/SDL3_image.dll ../third-party/runtime-libs/win-x86/
-cp -r SDL3/SDL_image/include/SDL3_image ../third-party/include/
+cp SDL3_image/SDL_image/build/${BUILD_TYPE}/SDL3_image.lib ../third-party/build-libs/win-x86/
+cp SDL3_image/SDL_image/build/${BUILD_TYPE}/SDL3_image.dll ../third-party/runtime-libs/win-x86/
+cp -r SDL3_image/SDL_image/include/SDL3_image ../third-party/include/
 
 cp pinmame/pinmame/build/${BUILD_TYPE}/pinmame.lib ../third-party/build-libs/win-x86/
 cp pinmame/pinmame/build/${BUILD_TYPE}/pinmame.dll ../third-party/runtime-libs/win-x86/
 cp pinmame/pinmame/src/libpinmame/libpinmame.h ../third-party/include/
 #cp pinmame/pinmame/src/libpinmame/pinmamedef.h ../third-party/include/
 
-cp libdmdutil/libdmdutil/build/${BUILD_TYPE}/dmdutil.lib ../third-party/build-libs/win-x86/
-cp libdmdutil/libdmdutil/build/${BUILD_TYPE}/dmdutil.dll ../third-party/runtime-libs/win-x86/
-cp -r libdmdutil/libdmdutil/include/DMDUtil ../third-party/include/
-cp libdmdutil/libdmdutil/third-party/build-libs/win/x86/libusb-1.0.lib ../third-party/build-libs/win-x86/
-cp libdmdutil/libdmdutil/third-party/runtime-libs/win/x86/libusb-1.0.dll ../third-party/runtime-libs/win-x86/
-cp libdmdutil/libdmdutil/third-party/build-libs/win/x86/vni.lib ../third-party/build-libs/win-x86/
-cp libdmdutil/libdmdutil/third-party/runtime-libs/win/x86/vni.dll ../third-party/runtime-libs/win-x86/
-cp libdmdutil/libdmdutil/third-party/build-libs/win/x86/zedmd.lib ../third-party/build-libs/win-x86/
-cp libdmdutil/libdmdutil/third-party/runtime-libs/win/x86/zedmd.dll ../third-party/runtime-libs/win-x86/
-cp libdmdutil/libdmdutil/third-party/include/ZeDMD.h ../third-party/include/
-cp libdmdutil/libdmdutil/third-party/build-libs/win/x86/serum.lib ../third-party/build-libs/win-x86/
-cp libdmdutil/libdmdutil/third-party/runtime-libs/win/x86/serum.dll ../third-party/runtime-libs/win-x86/
-cp libdmdutil/libdmdutil/third-party/include/serum.h ../third-party/include/
-cp libdmdutil/libdmdutil/third-party/include/serum-decode.h ../third-party/include/
-cp libdmdutil/libdmdutil/third-party/build-libs/win/x86/libserialport.lib ../third-party/build-libs/win-x86/
-cp libdmdutil/libdmdutil/third-party/runtime-libs/win/x86/libserialport.dll ../third-party/runtime-libs/win-x86/
-cp libdmdutil/libdmdutil/third-party/build-libs/win/x86/pupdmd.lib ../third-party/build-libs/win-x86/
-cp libdmdutil/libdmdutil/third-party/runtime-libs/win/x86/pupdmd.dll ../third-party/runtime-libs/win-x86/
-cp libdmdutil/libdmdutil/third-party/include/pupdmd.h ../third-party/include/
-cp libdmdutil/libdmdutil/third-party/build-libs/win/x86/sockpp.lib ../third-party/build-libs/win-x86/
-cp libdmdutil/libdmdutil/third-party/runtime-libs/win/x86/sockpp.dll ../third-party/runtime-libs/win-x86/
-cp -r libdmdutil/libdmdutil/third-party/include/sockpp ../third-party/include/
-cp libdmdutil/libdmdutil/third-party/build-libs/win/x86/cargs.lib ../third-party/build-libs/win-x86/
-cp libdmdutil/libdmdutil/third-party/runtime-libs/win/x86/cargs.dll ../third-party/runtime-libs/win-x86/
-cp libdmdutil/libdmdutil/third-party/include/cargs.h ../third-party/include/
-cp libdmdutil/libdmdutil/third-party/include/FrameUtil.h ../third-party/include/
+if [ -n "${LIBSDLDMD_SHA}" ]; then
+   LIBSDLDMD_DMDUTIL_THIRD_PARTY="libsdldmd/libsdldmd/external/libdmdutil/third-party"
+
+   cp libsdldmd/libsdldmd/third-party/build-libs/win/x86/dmdutil.lib ../third-party/build-libs/win-x86/
+   cp libsdldmd/libsdldmd/third-party/runtime-libs/win/x86/dmdutil.dll ../third-party/runtime-libs/win-x86/
+   cp -r libsdldmd/libsdldmd/third-party/include/DMDUtil ../third-party/include/
+   cp ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/build-libs/win/x86/libusb-1.0.lib ../third-party/build-libs/win-x86/
+   cp ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/runtime-libs/win/x86/libusb-1.0.dll ../third-party/runtime-libs/win-x86/
+   cp ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/build-libs/win/x86/vni.lib ../third-party/build-libs/win-x86/
+   cp ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/runtime-libs/win/x86/vni.dll ../third-party/runtime-libs/win-x86/
+   cp ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/build-libs/win/x86/zedmd.lib ../third-party/build-libs/win-x86/
+   cp ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/runtime-libs/win/x86/zedmd.dll ../third-party/runtime-libs/win-x86/
+   cp ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/include/ZeDMD.h ../third-party/include/
+   cp ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/build-libs/win/x86/serum.lib ../third-party/build-libs/win-x86/
+   cp ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/runtime-libs/win/x86/serum.dll ../third-party/runtime-libs/win-x86/
+   cp ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/include/serum.h ../third-party/include/
+   cp ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/include/serum-decode.h ../third-party/include/
+   cp ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/build-libs/win/x86/libserialport.lib ../third-party/build-libs/win-x86/
+   cp ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/runtime-libs/win/x86/libserialport.dll ../third-party/runtime-libs/win-x86/
+   cp ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/build-libs/win/x86/pupdmd.lib ../third-party/build-libs/win-x86/
+   cp ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/runtime-libs/win/x86/pupdmd.dll ../third-party/runtime-libs/win-x86/
+   cp ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/include/pupdmd.h ../third-party/include/
+   cp ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/build-libs/win/x86/sockpp.lib ../third-party/build-libs/win-x86/
+   cp ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/runtime-libs/win/x86/sockpp.dll ../third-party/runtime-libs/win-x86/
+   cp -r ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/include/sockpp ../third-party/include/
+   cp ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/build-libs/win/x86/cargs.lib ../third-party/build-libs/win-x86/
+   cp ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/runtime-libs/win/x86/cargs.dll ../third-party/runtime-libs/win-x86/
+   cp ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/include/cargs.h ../third-party/include/
+   cp ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/include/FrameUtil.h ../third-party/include/
+   cp libsdldmd/libsdldmd/build/${BUILD_TYPE}/sdldmd.lib ../third-party/build-libs/win-x86/
+   cp libsdldmd/libsdldmd/build/${BUILD_TYPE}/sdldmd.dll ../third-party/runtime-libs/win-x86/
+   cp -r libsdldmd/libsdldmd/include/SDLDMD ../third-party/include/
+fi
 
 cp libppuc/libppuc/src/PPUC.h ../third-party/include/
 cp libppuc/libppuc/src/PPUC_structs.h ../third-party/include/

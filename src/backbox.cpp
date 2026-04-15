@@ -13,9 +13,9 @@
 #include "DMDUtil/Config.h"
 #include "DMDUtil/DMDServer.h"
 #include "DMDUtil/DMDUtil.h"
+#include "SDLDMD/SDLDMD.h"
 #include "SDL3/SDL.h"
 #include "SDL3_image/SDL_image.h"
-#include "VirtualDMD.h"
 #include "cargs.h"
 
 SDL_AudioStream* m_pstream = nullptr;
@@ -28,8 +28,6 @@ SDL_Window* pTransliteWindow;
 SDL_Renderer* pTransliteRenderer;
 SDL_Texture* pTransliteTexture;
 SDL_Texture* pTransliteAttractTexture;
-SDL_Window* pVirtualDMDWindow;
-SDL_Renderer* pVirtualDMDRenderer;
 SDL_Event quitEvent;
 
 bool opt_debug = false;
@@ -191,7 +189,7 @@ int main(int argc, char* argv[])
   uint16_t opt_virtual_dmd_width = 1280;
   uint16_t opt_virtual_dmd_height = 320;
   int8_t opt_virtual_dmd_screen = -1;
-  VirtualDMD* pVirtualDMD;
+  DMDUtil::SDLDMD* pVirtualDMD = nullptr;
   uint32_t threadId = 0;
 
   cag_option_init(&cag_context, options, CAG_ARRAY_SIZE(options), argc, argv);
@@ -336,16 +334,7 @@ int main(int argc, char* argv[])
 
   if (opt_virtual_dmd)
   {
-    if (!SDL_CreateWindowAndRenderer("PPUC DMD", opt_virtual_dmd_width, opt_virtual_dmd_height,
-                                     opt_virtual_dmd_window ? SDL_WINDOW_BORDERLESS : SDL_WINDOW_FULLSCREEN,
-                                     &pVirtualDMDWindow, &pVirtualDMDRenderer))
-    {
-      printf("SDL couldn't create virtual DMD window/renderer: %s", SDL_GetError());
-      return SDL_APP_FAILURE;
-    }
-
-    SDL_SetWindowPosition(pVirtualDMDWindow, 0, 0);
-    while (!SDL_SyncWindow(pVirtualDMDWindow));
+    // SDLDMD now owns the SDL window/renderer lifecycle.
   }
 
   DMDUtil::Config* dmdConfig = DMDUtil::Config::GetInstance();
@@ -370,21 +359,20 @@ int main(int argc, char* argv[])
 
   if (opt_virtual_dmd)
   {
-    if (opt_virtual_dmd_hd)
+    pVirtualDMD = DMDUtil::CreateSDLDMD(*pDmd, "PPUC DMD", opt_virtual_dmd_width, opt_virtual_dmd_height,
+                                        opt_virtual_dmd_window ? SDL_WINDOW_BORDERLESS : SDL_WINDOW_FULLSCREEN,
+                                        opt_virtual_dmd_hd ? 256 : 128, opt_virtual_dmd_hd ? 64 : 32);
+
+    if (!pVirtualDMD)
     {
-      pVirtualDMD = new VirtualDMD(pVirtualDMDRenderer, 256, 64);
-    }
-    else
-    {
-      pVirtualDMD = new VirtualDMD(pVirtualDMDRenderer, 128, 32);
+      printf("SDL couldn't create virtual DMD window/renderer: %s", SDL_GetError());
+      return SDL_APP_FAILURE;
     }
 
     if (opt_virtual_dmd_scale)
     {
-      pVirtualDMD->SetRenderingMode(VirtualDMD::RenderingMode::XBRZ);
+      pVirtualDMD->SetRenderingMode(DMDUtil::SDLDMD::RenderingMode::XBRZ);
     }
-
-    pDmd->AddRGB24DMD((DMDUtil::RGB24DMD* const)pVirtualDMD);
   }
 
   pDmd->FindDisplays();
@@ -429,8 +417,6 @@ int main(int argc, char* argv[])
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
 
-  delete pDmd;
-
   bool quitSDL = false;
 
   if (m_pstream)
@@ -453,10 +439,12 @@ int main(int argc, char* argv[])
 
   if (pVirtualDMD)
   {
-    SDL_DestroyRenderer(pVirtualDMDRenderer);
-    SDL_DestroyWindow(pVirtualDMDWindow);
+    DMDUtil::DestroySDLDMD(*pDmd, pVirtualDMD);
+    pVirtualDMD = nullptr;
     quitSDL = true;
   }
+
+  delete pDmd;
 
   if (quitSDL)
   {

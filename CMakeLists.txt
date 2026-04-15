@@ -42,6 +42,10 @@ set(CMAKE_C_STANDARD 99)
 set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 set(CMAKE_C_VISIBILITY_PRESET hidden)
 
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/SDLDMD/SDLDMD.h")
+   message(FATAL_ERROR "Could not find staged SDLDMD headers in third-party/include/SDLDMD. Update ppuc external dependencies first.")
+endif()
+
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
    if(ENABLE_SANITIZERS AND (PLATFORM STREQUAL "macos" OR PLATFORM STREQUAL "linux"))
       set(SANITIZER_FLAGS -fsanitize=address,undefined)
@@ -57,8 +61,6 @@ add_executable(ppuc-pinmame
    src/SpeechTriggerMap.cpp
    src/SpeechService.cpp
    src/ppuc.cpp
-   src/VirtualDMD.cpp
-   src/xbrz/xbrz.cpp
 )
 
 target_include_directories(ppuc-pinmame PUBLIC
@@ -83,7 +85,17 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/build-libs/${PLATFORM}-${ARCH
    set(PPUC_HAS_FLITE_LIBS TRUE)
 endif()
 
+set(PPUC_ENABLE_FLITE FALSE)
 if(PPUC_HAS_FLITE_HEADERS AND PPUC_HAS_FLITE_LIBS)
+   set(PPUC_ENABLE_FLITE TRUE)
+   message(STATUS "Flite speech backend: enabled")
+elseif(PPUC_HAS_FLITE_HEADERS OR PPUC_HAS_FLITE_LIBS)
+   message(WARNING "Flite speech backend: disabled due to incomplete staged artifacts")
+else()
+   message(STATUS "Flite speech backend: disabled")
+endif()
+
+if(PPUC_ENABLE_FLITE)
    target_compile_definitions(ppuc-pinmame PRIVATE PPUC_HAS_FLITE)
    target_sources(ppuc-pinmame PRIVATE
       src/FliteSpeechService.cpp
@@ -108,6 +120,7 @@ if(PLATFORM STREQUAL "win")
          pinmame64
          ppuc64
          dmdutil64
+         sdldmd64
          cargs64
          SDL364
          SDL3_image64
@@ -119,6 +132,7 @@ if(PLATFORM STREQUAL "win")
          pinmame
          ppuc
          dmdutil
+         sdldmd
          cargs
          SDL3
          SDL3_image
@@ -143,12 +157,13 @@ else()
       pinmame
       ppuc
       dmdutil
+      sdldmd
       cargs
       SDL3
       SDL3_image
    )
 
-   if(PPUC_HAS_FLITE_HEADERS AND PPUC_HAS_FLITE_LIBS)
+   if(PPUC_ENABLE_FLITE)
       target_link_libraries(ppuc-pinmame LINK_PUBLIC
          flite_cmu_us_kal
          flite_cmulex
@@ -186,7 +201,7 @@ target_compile_definitions(ppuc-menu PRIVATE
    PPUC_RUNTIME_LIB_SUBDIR="${PLATFORM}-${ARCH}"
 )
 
-if(PPUC_HAS_FLITE_HEADERS AND PPUC_HAS_FLITE_LIBS)
+if(PPUC_ENABLE_FLITE)
    target_compile_definitions(ppuc-menu PRIVATE PPUC_HAS_FLITE)
    target_sources(ppuc-menu PRIVATE
       src/FliteSpeechService.cpp
@@ -238,7 +253,7 @@ else()
       SDL3_image
    )
 
-   if(PPUC_HAS_FLITE_HEADERS AND PPUC_HAS_FLITE_LIBS)
+   if(PPUC_ENABLE_FLITE)
       target_link_libraries(ppuc-menu LINK_PUBLIC
          flite_cmu_us_kal
          flite_cmulex
@@ -263,8 +278,6 @@ endif()
 
 add_executable(ppuc-backbox
    src/backbox.cpp
-   src/VirtualDMD.cpp
-   src/xbrz/xbrz.cpp
 )
 
 target_include_directories(ppuc-backbox PUBLIC
@@ -279,6 +292,7 @@ if(PLATFORM STREQUAL "win")
    if(ARCH STREQUAL "x64")
       target_link_libraries(ppuc-backbox LINK_PUBLIC
          dmdutil64
+         sdldmd64
          cargs64
          SDL364
          SDL3_image64
@@ -288,6 +302,7 @@ if(PLATFORM STREQUAL "win")
    else()
       target_link_libraries(ppuc-backbox LINK_PUBLIC
          dmdutil
+         sdldmd
          cargs
          SDL3
          SDL3_image
@@ -302,6 +317,7 @@ else()
 
    target_link_libraries(ppuc-backbox LINK_PUBLIC
       dmdutil
+      sdldmd
       cargs
       SDL3
       SDL3_image

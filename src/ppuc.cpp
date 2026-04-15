@@ -29,6 +29,7 @@
 #include "DMDUtil/Config.h"
 #include "DMDUtil/ConsoleDMD.h"
 #include "DMDUtil/DMDUtil.h"
+#include "SDLDMD/SDLDMD.h"
 #include "AudioOutput.h"
 #include "PUPTriggerEngine.h"
 #include "SDL3/SDL.h"
@@ -36,7 +37,6 @@
 #include "SpeechCliSupport.h"
 #include "SpeechService.h"
 #include "SpeechTriggerMap.h"
-#include "VirtualDMD.h"
 #include "cargs.h"
 #include "io-boards/Event.h"
 #include "io-boards/PPUCPlatforms.h"
@@ -64,9 +64,6 @@ SDL_Window* pTransliteWindow;
 SDL_Renderer* pTransliteRenderer;
 SDL_Texture* pTransliteTexture;
 SDL_Texture* pTransliteAttractTexture;
-SDL_Window* pVirtualDMDWindow;
-SDL_Renderer* pVirtualDMDRenderer;
-
 enum class RenderCommand
 {
   RENDER_GAME,
@@ -1639,7 +1636,7 @@ int main(int argc, char** argv)
   uint16_t opt_virtual_dmd_width = 1280;
   uint16_t opt_virtual_dmd_height = 320;
   int8_t opt_virtual_dmd_screen = -1;
-  VirtualDMD* pVirtualDMD = nullptr;
+  DMDUtil::SDLDMD* pVirtualDMD = nullptr;
 
   cag_option_init(&cag_context, options, CAG_ARRAY_SIZE(options), argc, argv);
   while (cag_option_fetch(&cag_context))
@@ -2006,16 +2003,7 @@ int main(int argc, char** argv)
 
   if (opt_virtual_dmd)
   {
-    if (!SDL_CreateWindowAndRenderer("PPUC DMD", opt_virtual_dmd_width, opt_virtual_dmd_height,
-                                     opt_virtual_dmd_window ? SDL_WINDOW_BORDERLESS : SDL_WINDOW_FULLSCREEN,
-                                     &pVirtualDMDWindow, &pVirtualDMDRenderer))
-    {
-      printf("SDL couldn't create virtual DMD window/renderer: %s\n", SDL_GetError());
-      return SDL_APP_FAILURE;
-    }
-
-    SDL_SetWindowPosition(pVirtualDMDWindow, 0, 0);
-    while (!SDL_SyncWindow(pVirtualDMDWindow));
+    // SDLDMD now owns the SDL window/renderer lifecycle.
   }
 
   ppuc = new PPUC();
@@ -2293,16 +2281,15 @@ int main(int argc, char** argv)
 
   if (opt_virtual_dmd)
   {
-    if (opt_virtual_dmd_hd)
-    {
-      pVirtualDMD = new VirtualDMD(pVirtualDMDRenderer, 256, 64);
-    }
-    else
-    {
-      pVirtualDMD = new VirtualDMD(pVirtualDMDRenderer, 128, 32);
-    }
+    pVirtualDMD = DMDUtil::CreateSDLDMD(*pDmd, "PPUC DMD", opt_virtual_dmd_width, opt_virtual_dmd_height,
+                                        opt_virtual_dmd_window ? SDL_WINDOW_BORDERLESS : SDL_WINDOW_FULLSCREEN,
+                                        opt_virtual_dmd_hd ? 256 : 128, opt_virtual_dmd_hd ? 64 : 32);
 
-    pDmd->AddRGB24DMD((DMDUtil::RGB24DMD* const)pVirtualDMD);
+    if (!pVirtualDMD)
+    {
+      printf("SDL couldn't create virtual DMD window/renderer: %s\n", SDL_GetError());
+      return SDL_APP_FAILURE;
+    }
   }
 
   while (pDmd->IsFinding()) std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -2507,21 +2494,6 @@ int main(int argc, char** argv)
     ppuc->Disconnect();
   }
 
-  if (pDmd)
-  {
-    // Serum teardown can race in worker threads on signal-driven shutdown.
-    // Avoid deleting the DMD instance in that path and let process exit reclaim memory.
-    if (!(shutdown_requested && opt_serum))
-    {
-      delete pDmd;
-      pDmd = nullptr;
-    }
-    else
-    {
-      printf("Skipping DMD teardown after signal while Serum is active.\n");
-    }
-  }
-
   bool quitSDL = false;
 
   if (pAudioOutput)
@@ -2546,9 +2518,24 @@ int main(int argc, char** argv)
 
   if (pVirtualDMD)
   {
-    SDL_DestroyRenderer(pVirtualDMDRenderer);
-    SDL_DestroyWindow(pVirtualDMDWindow);
+    if (pDmd) DMDUtil::DestroySDLDMD(*pDmd, pVirtualDMD);
+    pVirtualDMD = nullptr;
     quitSDL = true;
+  }
+
+  if (pDmd)
+  {
+    // Serum teardown can race in worker threads on signal-driven shutdown.
+    // Avoid deleting the DMD instance in that path and let process exit reclaim memory.
+    if (!(shutdown_requested && opt_serum))
+    {
+      delete pDmd;
+      pDmd = nullptr;
+    }
+    else
+    {
+      printf("Skipping DMD teardown after signal while Serum is active.\n");
+    }
   }
 
   if (quitSDL)

@@ -7,13 +7,12 @@ source ./platforms/config.sh
 NUM_PROCS=$(nproc)
 
 echo "Building libraries..."
-echo "  SDL_SHA: ${SDL_SHA}"
 echo "  SDL_IMAGE_SHA: ${SDL_IMAGE_SHA}"
 echo "  ESPEAK_NG_SHA: ${ESPEAK_NG_SHA}"
 echo "  FLITE_SHA: ${FLITE_SHA}"
 echo "  PINMAME_SHA: ${PINMAME_SHA}"
 echo "  LIBPPUC_SHA: ${LIBPPUC_SHA}"
-echo "  LIBDMDUTIL_SHA: ${LIBDMDUTIL_SHA}"
+echo "  LIBSDLDMD_SHA: ${LIBSDLDMD_SHA}"
 echo ""
 
 if [ -z "${CACHE_DIR}" ]; then
@@ -29,32 +28,48 @@ mkdir -p external ${CACHE_DIR}
 cd external
 
 #
-# build SDL3, SDL3_image
+# build libsdldmd, SDL3_image
 #
 
-SDL3_EXPECTED_SHA="${SDL_SHA}-${SDL_IMAGE_SHA}"
-SDL3_FOUND_SHA="$([ -f SDL3/cache.txt ] && cat SDL3/cache.txt || echo "")"
+LIBSDLDMD_EXPECTED_SHA="${LIBSDLDMD_SHA}"
+LIBSDLDMD_FOUND_SHA="$([ -f libsdldmd/cache.txt ] && cat libsdldmd/cache.txt || echo "")"
 
-if [ "${SDL3_EXPECTED_SHA}" != "${SDL3_FOUND_SHA}" ]; then
-   echo "Building SDL3. Expected: ${SDL3_EXPECTED_SHA}, Found: ${SDL3_FOUND_SHA}"
+if [ -n "${LIBSDLDMD_SHA}" ] && [ "${LIBSDLDMD_EXPECTED_SHA}" != "${LIBSDLDMD_FOUND_SHA}" ]; then
+   echo "Building libsdldmd. Expected: ${LIBSDLDMD_EXPECTED_SHA}, Found: ${LIBSDLDMD_FOUND_SHA}"
 
-   rm -rf SDL3
-   mkdir SDL3
-   cd SDL3
+   rm -rf libsdldmd
+   mkdir libsdldmd
+   cd libsdldmd
 
-   curl -sL https://github.com/libsdl-org/SDL/archive/${SDL_SHA}.tar.gz -o SDL-${SDL_SHA}.tar.gz
-   tar xzf SDL-${SDL_SHA}.tar.gz
-   mv SDL-${SDL_SHA} SDL
-   cd SDL
+   curl -sL https://github.com/PPUC/libsdldmd/archive/${LIBSDLDMD_SHA}.tar.gz -o libsdldmd-${LIBSDLDMD_SHA}.tar.gz
+   tar xzf libsdldmd-${LIBSDLDMD_SHA}.tar.gz
+   mv libsdldmd-${LIBSDLDMD_SHA} libsdldmd
+   cd libsdldmd
+
+   BUILD_TYPE=${BUILD_TYPE} platforms/linux/x64/external.sh
    cmake \
-      -DSDL_SHARED=ON \
-      -DSDL_STATIC=OFF \
-      -DSDL_TEST_LIBRARY=OFF \
-      -DSDL_OPENGLES=OFF \
+      -DPLATFORM=linux \
+      -DARCH=x64 \
+      -DBUILD_STATIC=OFF \
       -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
       -B build
    cmake --build build -- -j${NUM_PROCS}
    cd ..
+
+   echo "$LIBSDLDMD_EXPECTED_SHA" > cache.txt
+
+   cd ..
+fi
+
+SDL3_IMAGE_EXPECTED_SHA="${SDL_IMAGE_SHA}-${LIBSDLDMD_SHA}"
+SDL3_IMAGE_FOUND_SHA="$([ -f SDL3_image/cache.txt ] && cat SDL3_image/cache.txt || echo "")"
+
+if [ "${SDL3_IMAGE_EXPECTED_SHA}" != "${SDL3_IMAGE_FOUND_SHA}" ]; then
+   echo "Building SDL3_image. Expected: ${SDL3_IMAGE_EXPECTED_SHA}, Found: ${SDL3_IMAGE_FOUND_SHA}"
+
+   rm -rf SDL3_image
+   mkdir SDL3_image
+   cd SDL3_image
 
    curl -sL https://github.com/libsdl-org/SDL_image/archive/${SDL_IMAGE_SHA}.tar.gz -o SDL_image-${SDL_IMAGE_SHA}.tar.gz
    tar xzf SDL_image-${SDL_IMAGE_SHA}.tar.gz
@@ -68,13 +83,13 @@ if [ "${SDL3_EXPECTED_SHA}" != "${SDL3_FOUND_SHA}" ]; then
       -DSDLIMAGE_VENDORED=ON \
       -DSDLIMAGE_AVIF=OFF \
       -DSDLIMAGE_WEBP=OFF \
-      -DSDL3_DIR=../SDL/build \
+      -DSDL3_DIR=../../libsdldmd/libsdldmd/external/SDL/build \
       -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
       -B build
    cmake --build build -- -j${NUM_PROCS}
    cd ..
 
-   echo "$SDL3_EXPECTED_SHA" > cache.txt
+   echo "$SDL3_IMAGE_EXPECTED_SHA" > cache.txt
 
    cd ..
 fi
@@ -165,35 +180,6 @@ if [ "${FLITE_EXPECTED_SHA}" != "${FLITE_FOUND_SHA}" ] || [ "${FLITE_ARTIFACTS_O
    cd ..
 fi
 
-LIBDMDUTIL_EXPECTED_SHA="${LIBDMDUTIL_SHA}"
-LIBDMDUTIL_FOUND_SHA="$([ -f libdmdutil/cache.txt ] && cat libdmdutil/cache.txt || echo "")"
-
-if [ "${LIBDMDUTIL_EXPECTED_SHA}" != "${LIBDMDUTIL_FOUND_SHA}" ]; then
-   echo "Building libdmdutil. Expected: ${LIBDMDUTIL_EXPECTED_SHA}, Found: ${LIBDMDUTIL_FOUND_SHA}"
-
-   rm -rf libdmdutil
-   mkdir libdmdutil
-   cd libdmdutil
-
-   curl -sL https://github.com/PPUC/libdmdutil/archive/${LIBDMDUTIL_SHA}.tar.gz -o libdmdutil-${LIBDMDUTIL_SHA}.tar.gz
-   tar xzf libdmdutil-${LIBDMDUTIL_SHA}.tar.gz
-   mv libdmdutil-${LIBDMDUTIL_SHA} libdmdutil
-   cd libdmdutil
-   ./platforms/linux/x64/external.sh
-   cmake \
-      -DPLATFORM=linux \
-      -DARCH=x64 \
-      -DBUILD_STATIC=OFF \
-      -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
-      -B build
-   cmake --build build -- -j${NUM_PROCS}
-   cd ..
-
-   echo "$LIBDMDUTIL_EXPECTED_SHA" > cache.txt
-
-   cd ..
-fi
-
 #
 # pinamame
 #
@@ -261,11 +247,11 @@ if [ "${LIBPPUC_EXPECTED_SHA}" != "${LIBPPUC_FOUND_SHA}" ]; then
    cd ..
 fi
 
-cp -a SDL3/SDL/build/libSDL3.{so,so.*} ../third-party/runtime-libs/linux-x64/
-cp -r SDL3/SDL/include/SDL3 ../third-party/include/
+cp -a libsdldmd/libsdldmd/third-party/runtime-libs/linux/x64/libSDL3.{so,so.*} ../third-party/runtime-libs/linux-x64/
+cp -r libsdldmd/libsdldmd/third-party/include/SDL3 ../third-party/include/
 
-cp -a SDL3/SDL_image/build/libSDL3_image.{so,so.*} ../third-party/runtime-libs/linux-x64/
-cp -r SDL3/SDL_image/include/SDL3_image ../third-party/include/
+cp -a SDL3_image/SDL_image/build/libSDL3_image.{so,so.*} ../third-party/runtime-libs/linux-x64/
+cp -r SDL3_image/SDL_image/include/SDL3_image ../third-party/include/
 
 cp -r espeak-ng/espeak-ng/install/include/espeak-ng ../third-party/include/
 cp -a espeak-ng/espeak-ng/install/lib/libespeak-ng*.so* ../third-party/runtime-libs/linux-x64/
@@ -279,23 +265,29 @@ cp -a pinmame/pinmame/build/libpinmame.{so,so.*} ../third-party/runtime-libs/lin
 cp pinmame/pinmame/src/libpinmame/libpinmame.h ../third-party/include/
 #cp pinmame/pinmame/src/libpinmame/pinmamedef.h ../third-party/include/
 
-cp -a libdmdutil/libdmdutil/build/libdmdutil.{so,so.*} ../third-party/runtime-libs/linux-x64/
-cp -r libdmdutil/libdmdutil/include/DMDUtil ../third-party/include/
-cp -a libdmdutil/libdmdutil/third-party/runtime-libs/linux/x64/libusb-1.0.{so,so.*} ../third-party/runtime-libs/linux-x64/
-cp -a libdmdutil/libdmdutil/third-party/runtime-libs/linux/x64/libvni.{so,so.*} ../third-party/runtime-libs/linux-x64/
-cp -a libdmdutil/libdmdutil/third-party/runtime-libs/linux/x64/libzedmd.{so,so.*} ../third-party/runtime-libs/linux-x64/
-cp libdmdutil/libdmdutil/third-party/include/ZeDMD.h ../third-party/include/
-cp -a libdmdutil/libdmdutil/third-party/runtime-libs/linux/x64/libserum.{so,so.*} ../third-party/runtime-libs/linux-x64/
-cp libdmdutil/libdmdutil/third-party/include/serum.h ../third-party/include/
-cp libdmdutil/libdmdutil/third-party/include/serum-decode.h ../third-party/include/
-cp -a libdmdutil/libdmdutil/third-party/runtime-libs/linux/x64/libserialport.{so,so.*} ../third-party/runtime-libs/linux-x64/
-cp -a libdmdutil/libdmdutil/third-party/runtime-libs/linux/x64/libpupdmd.{so,so.*} ../third-party/runtime-libs/linux-x64/
-cp libdmdutil/libdmdutil/third-party/include/pupdmd.h ../third-party/include/
-cp -a libdmdutil/libdmdutil/third-party/runtime-libs/linux/x64/libsockpp.{so,so.*} ../third-party/runtime-libs/linux-x64/
-cp libdmdutil/libdmdutil/third-party/runtime-libs/linux/x64/libcargs.so ../third-party/runtime-libs/linux-x64/
-cp -r libdmdutil/libdmdutil/third-party/include/sockpp ../third-party/include/
-cp libdmdutil/libdmdutil/third-party/include/cargs.h ../third-party/include/
-cp libdmdutil/libdmdutil/third-party/include/FrameUtil.h ../third-party/include/
+if [ -n "${LIBSDLDMD_SHA}" ]; then
+   LIBSDLDMD_DMDUTIL_THIRD_PARTY="libsdldmd/libsdldmd/external/libdmdutil/third-party"
+
+   cp -a libsdldmd/libsdldmd/third-party/runtime-libs/linux/x64/libdmdutil.{so,so.*} ../third-party/runtime-libs/linux-x64/
+   cp -r libsdldmd/libsdldmd/third-party/include/DMDUtil ../third-party/include/
+   cp -a ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/runtime-libs/linux/x64/libusb-1.0.{so,so.*} ../third-party/runtime-libs/linux-x64/
+   cp -a ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/runtime-libs/linux/x64/libvni.{so,so.*} ../third-party/runtime-libs/linux-x64/
+   cp -a ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/runtime-libs/linux/x64/libzedmd.{so,so.*} ../third-party/runtime-libs/linux-x64/
+   cp ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/include/ZeDMD.h ../third-party/include/
+   cp -a ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/runtime-libs/linux/x64/libserum.{so,so.*} ../third-party/runtime-libs/linux-x64/
+   cp ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/include/serum.h ../third-party/include/
+   cp ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/include/serum-decode.h ../third-party/include/
+   cp -a ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/runtime-libs/linux/x64/libserialport.{so,so.*} ../third-party/runtime-libs/linux-x64/
+   cp -a ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/runtime-libs/linux/x64/libpupdmd.{so,so.*} ../third-party/runtime-libs/linux-x64/
+   cp ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/include/pupdmd.h ../third-party/include/
+   cp -a ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/runtime-libs/linux/x64/libsockpp.{so,so.*} ../third-party/runtime-libs/linux-x64/
+   cp ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/runtime-libs/linux/x64/libcargs.so ../third-party/runtime-libs/linux-x64/
+   cp -r ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/include/sockpp ../third-party/include/
+   cp ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/include/cargs.h ../third-party/include/
+   cp ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/include/FrameUtil.h ../third-party/include/
+   cp -r libsdldmd/libsdldmd/include/SDLDMD ../third-party/include/
+   cp -a libsdldmd/libsdldmd/build/libsdldmd.{so,so.*} ../third-party/runtime-libs/linux-x64/
+fi
 
 cp libppuc/libppuc/src/PPUC.h ../third-party/include/
 cp libppuc/libppuc/src/PPUC_structs.h ../third-party/include/
