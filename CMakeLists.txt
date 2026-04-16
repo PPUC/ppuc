@@ -277,7 +277,6 @@ else()
       cargs
       SDL3
       SDL3_image
-      yaml-cpp
    )
 
    if(PPUC_ENABLE_FLITE)
