@@ -1403,7 +1403,7 @@ static struct cag_option options[] = {
     {.identifier = 'l',
      .access_name = "virtual-dmd-renderer",
      .value_name = "VALUE",
-     .description = "Virtual DMD renderer: dots, smooth, xbrz"},
+     .description = "Virtual DMD renderer: dots, squares, scale2x, scale4x, scale2x-dots, scale4x-dots, scale2x-squares, scale4x-squares, smooth, xbrz"},
     {.identifier = 'j',
      .access_name = "virtual-dmd-x",
      .value_name = "VALUE",
@@ -2664,7 +2664,9 @@ int main(int argc, char** argv)
     DMDUtil::SDLDMD::RenderingMode virtualDmdRenderingMode = DMDUtil::SDLDMD::RenderingMode::Dots;
     if (!DMDUtil::ParseSDLDMDRenderingMode(opt_virtual_dmd_renderer, &virtualDmdRenderingMode))
     {
-      printf("Unsupported virtual DMD renderer '%s'. Use one of: dots, smooth, xbrz\n", opt_virtual_dmd_renderer);
+      printf("Unsupported virtual DMD renderer '%s'. Use one of: dots, squares, scale2x, scale4x, "
+             "scale2x-dots, scale4x-dots, scale2x-squares, scale4x-squares, smooth, xbrz\n",
+             opt_virtual_dmd_renderer);
       return SDL_APP_FAILURE;
     }
 
