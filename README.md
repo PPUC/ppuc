@@ -36,6 +36,10 @@ These components are still in an early development stage and the documentation w
 * -c path
     * path to config file
     * required
+* --ini-file path
+    * path to a ppuc runtime ini file
+    * optional
+    * values from dedicated command line options override values from the ini file at runtime
 * -r rom name
     * rom to use, overwrites *rom* setting in config file
     * optional
@@ -77,6 +81,8 @@ These components are still in an early development stage and the documentation w
     * optional
 * -h
     * help
+
+An example runtime ini file is available at `examples/ppuc-pinmame.ini`.
 
 ### PUP Trigger Rules
 

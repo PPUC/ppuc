@@ -22,6 +22,7 @@
 #include <memory>
 #include <mutex>
 #include <queue>
+#include <fstream>
 #include <string>
 #include <thread>
 #include <type_traits>
@@ -175,6 +176,7 @@ bool opt_pup = false;
 bool opt_console_display = false;
 bool opt_hard_reset = false;
 const char* opt_virtual_dmd_renderer = "dots";
+const char* opt_pinmame_path = NULL;
 const char* opt_rom = NULL;
 int game_state = 0;
 bool running = true;
@@ -286,6 +288,54 @@ static bool ValidateSkippedBoardsCsv(const char* csv)
     }
     token.push_back(c);
   }
+}
+
+static std::string TrimIniValue(const std::string& value)
+{
+  size_t start = 0;
+  while (start < value.size() && isspace(static_cast<unsigned char>(value[start])))
+  {
+    ++start;
+  }
+
+  size_t end = value.size();
+  while (end > start && isspace(static_cast<unsigned char>(value[end - 1])))
+  {
+    --end;
+  }
+
+  return value.substr(start, end - start);
+}
+
+static bool ParseIniBool(const std::string& value, bool defaultValue = false)
+{
+  std::string normalized;
+  normalized.reserve(value.size());
+  for (const unsigned char ch : value)
+  {
+    normalized.push_back(static_cast<char>(tolower(ch)));
+  }
+
+  if (normalized == "1" || normalized == "true" || normalized == "yes" || normalized == "on")
+  {
+    return true;
+  }
+  if (normalized == "0" || normalized == "false" || normalized == "no" || normalized == "off")
+  {
+    return false;
+  }
+  return defaultValue;
+}
+
+static const char* DuplicateIniString(const std::string& value)
+{
+  char* copy = static_cast<char*>(malloc(value.size() + 1));
+  if (copy == nullptr)
+  {
+    return nullptr;
+  }
+  memcpy(copy, value.c_str(), value.size() + 1);
+  return copy;
 }
 
 static const char* kAnsiStrikeOn = "\033[9m";
@@ -1166,6 +1216,10 @@ static struct cag_option options[] = {
      .access_name = "config",
      .value_name = "VALUE",
      .description = "Path to config file (required)"},
+    {.identifier = 'z',
+     .access_name = "ini-file",
+     .value_name = "VALUE",
+     .description = "Path to ppuc runtime INI file (optional)"},
     {.identifier = 'r',
      .access_letters = "r",
      .access_name = "rom",
@@ -1185,6 +1239,10 @@ static struct cag_option options[] = {
      .access_name = "serial",
      .value_name = "VALUE",
      .description = "Serial device (optional, overwrites setting in config file)"},
+    {.identifier = 'A',
+     .access_name = "pinmame-path",
+     .value_name = "VALUE",
+     .description = "PinMAME base folder (optional, default is the per-user pinmame folder)"},
     {.identifier = 'n',
      .access_letters = "n",
      .access_name = "no-serial",
@@ -1697,6 +1755,7 @@ int main(int argc, char** argv)
   char identifier;
   cag_option_context cag_context;
   const char* config_file = NULL;
+  const char* opt_ini_file = NULL;
   const char* opt_pup_triggers = NULL;
   const char* opt_backbox_address = NULL;
   uint16_t opt_backbox_port = 6789;
@@ -1730,6 +1789,197 @@ int main(int argc, char** argv)
   int opt_virtual_dmd_y = SDL_WINDOWPOS_UNDEFINED;
   DMDUtil::SDLDMD* pVirtualDMD = nullptr;
 
+  for (int i = 1; i < argc; ++i)
+  {
+    const char* arg = argv[i];
+    if (strcmp(arg, "-z") == 0 || strcmp(arg, "--ini-file") == 0)
+    {
+      if (i + 1 < argc)
+      {
+        opt_ini_file = argv[++i];
+      }
+    }
+    else if (strncmp(arg, "--ini-file=", 11) == 0)
+    {
+      opt_ini_file = arg + 11;
+    }
+  }
+
+  const auto loadIniFile = [&](const char* iniFile) -> bool {
+    if (iniFile == nullptr || iniFile[0] == '\0')
+    {
+      return true;
+    }
+
+    std::ifstream file(iniFile);
+    if (!file.is_open())
+    {
+      fprintf(stderr, "Unable to open ini file: %s\n", iniFile);
+      return false;
+    }
+
+    std::string section;
+    std::string line;
+    while (std::getline(file, line))
+    {
+      std::string trimmed = TrimIniValue(line);
+      if (trimmed.empty() || trimmed[0] == '#' || trimmed[0] == ';')
+      {
+        continue;
+      }
+
+      if (trimmed.front() == '[' && trimmed.back() == ']')
+      {
+        section = TrimIniValue(trimmed.substr(1, trimmed.size() - 2));
+        continue;
+      }
+
+      const size_t equals = trimmed.find('=');
+      if (equals == std::string::npos)
+      {
+        continue;
+      }
+
+      const std::string key = TrimIniValue(trimmed.substr(0, equals));
+      const std::string value = TrimIniValue(trimmed.substr(equals + 1));
+
+      if (section == "Paths")
+      {
+        if (key == "ConfigFile")
+          config_file = DuplicateIniString(value);
+        else if (key == "Rom")
+          opt_rom = DuplicateIniString(value);
+        else if (key == "Serial")
+          opt_serial = DuplicateIniString(value);
+        else if (key == "PinmamePath")
+          opt_pinmame_path = DuplicateIniString(value);
+        else if (key == "PUPTriggers")
+          opt_pup_triggers = DuplicateIniString(value);
+        else if (key == "SpeechFile")
+          opt_speech_file = DuplicateIniString(value);
+        else if (key == "Translite")
+          opt_translite = DuplicateIniString(value);
+        else if (key == "TransliteAttract")
+          opt_translite_attract = DuplicateIniString(value);
+      }
+      else if (section == "Backbox")
+      {
+        if (key == "Address")
+          opt_backbox_address = DuplicateIniString(value);
+        else if (key == "Port")
+          opt_backbox_port = static_cast<uint16_t>(atoi(value.c_str()));
+      }
+      else if (section == "Runtime")
+      {
+        if (key == "NoSerial")
+          opt_no_serial = ParseIniBool(value);
+        else if (key == "NoSound")
+          opt_no_sound = ParseIniBool(value);
+        else if (key == "Debug")
+          opt_debug = ParseIniBool(value);
+        else if (key == "DebugErrors")
+          opt_debug_errors = ParseIniBool(value);
+        else if (key == "DebugSwitches")
+          opt_debug_switches = ParseIniBool(value);
+        else if (key == "DebugCoils")
+          opt_debug_coils = ParseIniBool(value);
+        else if (key == "DebugLamps")
+          opt_debug_lamps = ParseIniBool(value);
+        else if (key == "Serum")
+          opt_serum = ParseIniBool(value);
+        else if (key == "SerumTimeout")
+          opt_serum_timeout = static_cast<uint8_t>(atoi(value.c_str()));
+        else if (key == "SerumSkipFrames")
+          opt_serum_skip_frames = static_cast<uint8_t>(atoi(value.c_str()));
+        else if (key == "PUP")
+          opt_pup = ParseIniBool(value);
+        else if (key == "ConsoleDisplay")
+          opt_console_display = ParseIniBool(value);
+        else if (key == "DumpDisplay" || key == "DumpDmdTxt")
+          opt_dump = ParseIniBool(value);
+        else if (key == "SkipBoards")
+          opt_skip_boards = DuplicateIniString(value);
+        else if (key == "SwitchReplyDelayUs")
+          opt_switch_reply_delay_us_arg = DuplicateIniString(value);
+        else if (key == "CloseCoinDoor")
+          opt_close_coin_door = ParseIniBool(value);
+        else if (key == "HardReset")
+          opt_hard_reset = ParseIniBool(value);
+      }
+      else if (section == "Speech")
+      {
+        if (key == "Enabled")
+          opt_speech = ParseIniBool(value);
+        else if (key == "Greeting")
+          opt_greeting = ParseIniBool(value);
+        else if (key == "Backend")
+          opt_speech_backend = DuplicateIniString(value);
+        else if (key == "Voice")
+          opt_speech_voice = DuplicateIniString(value);
+        else if (key == "Rate")
+          opt_speech_rate_arg = DuplicateIniString(value);
+        else if (key == "Pitch")
+          opt_speech_pitch_arg = DuplicateIniString(value);
+      }
+      else if (section == "BenchTest")
+      {
+        if (key == "SwitchTest")
+          opt_switch_test = ParseIniBool(value);
+        else if (key == "CoilTest")
+          opt_coil_test = ParseIniBool(value);
+        else if (key == "LampTest")
+          opt_lamp_test = ParseIniBool(value);
+        else if (key == "GITest")
+          opt_gi_test = ParseIniBool(value);
+        else if (key == "FlasherTest")
+          opt_flasher_test = ParseIniBool(value);
+        else if (key == "Interactive")
+          opt_interactive = ParseIniBool(value);
+        else if (key == "Number")
+          opt_number = static_cast<uint8_t>(atoi(value.c_str()));
+      }
+      else if (section == "Translite")
+      {
+        if (key == "Window")
+          opt_translite_window = ParseIniBool(value);
+        else if (key == "Width")
+          opt_translite_width = static_cast<uint16_t>(atoi(value.c_str()));
+        else if (key == "Height")
+          opt_translite_height = static_cast<uint16_t>(atoi(value.c_str()));
+        else if (key == "Screen")
+          opt_translite_screen = static_cast<int8_t>(atoi(value.c_str()));
+      }
+      else if (section == "VirtualDMD")
+      {
+        if (key == "Enabled")
+          opt_virtual_dmd = ParseIniBool(value);
+        else if (key == "HD")
+          opt_virtual_dmd_hd = ParseIniBool(value);
+        else if (key == "Window")
+          opt_virtual_dmd_window = ParseIniBool(value);
+        else if (key == "Width")
+          opt_virtual_dmd_width = static_cast<uint16_t>(atoi(value.c_str()));
+        else if (key == "Height")
+          opt_virtual_dmd_height = static_cast<uint16_t>(atoi(value.c_str()));
+        else if (key == "Screen")
+          opt_virtual_dmd_screen = static_cast<int8_t>(atoi(value.c_str()));
+        else if (key == "X")
+          opt_virtual_dmd_x = atoi(value.c_str());
+        else if (key == "Y")
+          opt_virtual_dmd_y = atoi(value.c_str());
+        else if (key == "Renderer")
+          opt_virtual_dmd_renderer = DuplicateIniString(value);
+      }
+    }
+
+    return true;
+  };
+
+  if (!loadIniFile(opt_ini_file))
+  {
+    return 1;
+  }
+
   cag_option_init(&cag_context, options, CAG_ARRAY_SIZE(options), argc, argv);
   while (cag_option_fetch(&cag_context))
   {
@@ -1738,6 +1988,9 @@ int main(int argc, char** argv)
     {
       case 'c':
         config_file = cag_option_get_value(&cag_context);
+        break;
+      case 'z':
+        opt_ini_file = cag_option_get_value(&cag_context);
         break;
       case 'r':
         opt_rom = cag_option_get_value(&cag_context);
@@ -1780,6 +2033,9 @@ int main(int argc, char** argv)
         break;
       case 'u':
         opt_serum = true;
+        break;
+      case 'A':
+        opt_pinmame_path = cag_option_get_value(&cag_context);
         break;
       case 't':
         opt_serum_timeout = atoi(cag_option_get_value(&cag_context));
@@ -2315,9 +2571,30 @@ int main(int argc, char** argv)
   };
 
 #if defined(_WIN32) || defined(_WIN64)
-  snprintf((char*)config.vpmPath, PINMAME_MAX_PATH, "%s%s\\pinmame\\", getenv("HOMEDRIVE"), getenv("HOMEPATH"));
+  if (opt_pinmame_path != nullptr)
+  {
+    snprintf((char*)config.vpmPath, PINMAME_MAX_PATH, "%s%s", opt_pinmame_path,
+             (opt_pinmame_path[0] != '\0' && opt_pinmame_path[strlen(opt_pinmame_path) - 1] != '\\' &&
+              opt_pinmame_path[strlen(opt_pinmame_path) - 1] != '/')
+                 ? "\\"
+                 : "");
+  }
+  else
+  {
+    snprintf((char*)config.vpmPath, PINMAME_MAX_PATH, "%s%s\\pinmame\\", getenv("HOMEDRIVE"), getenv("HOMEPATH"));
+  }
 #else
-  snprintf((char*)config.vpmPath, PINMAME_MAX_PATH, "%s/.pinmame/", getenv("HOME"));
+  if (opt_pinmame_path != nullptr)
+  {
+    snprintf((char*)config.vpmPath, PINMAME_MAX_PATH, "%s%s", opt_pinmame_path,
+             (opt_pinmame_path[0] != '\0' && opt_pinmame_path[strlen(opt_pinmame_path) - 1] != '/')
+                 ? "/"
+                 : "");
+  }
+  else
+  {
+    snprintf((char*)config.vpmPath, PINMAME_MAX_PATH, "%s/.pinmame/", getenv("HOME"));
+  }
 #endif
 
   if (opt_backbox_address)
