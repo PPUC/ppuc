@@ -1787,6 +1787,7 @@ int main(int argc, char** argv)
   int8_t opt_virtual_dmd_screen = -1;
   int opt_virtual_dmd_x = SDL_WINDOWPOS_UNDEFINED;
   int opt_virtual_dmd_y = SDL_WINDOWPOS_UNDEFINED;
+  int opt_rounded_corners = 0;
   DMDUtil::SDLDMD* pVirtualDMD = nullptr;
 
   for (int i = 1; i < argc; ++i)
@@ -1920,6 +1921,11 @@ int main(int argc, char** argv)
           opt_speech_rate_arg = DuplicateIniString(value);
         else if (key == "Pitch")
           opt_speech_pitch_arg = DuplicateIniString(value);
+      }
+      else if (section == "OutputFilters")
+      {
+        if (key == "RoundedCorners")
+          opt_rounded_corners = atoi(value.c_str());
       }
       else if (section == "BenchTest")
       {
@@ -2494,6 +2500,7 @@ int main(int argc, char** argv)
   // So it is important to start that search before the RS485 BUS gets
   // initialized.
   DMDUtil::Config* dmdConfig = DMDUtil::Config::GetInstance();
+  dmdConfig->SetRoundedCorners(opt_rounded_corners);
 
   if (opt_pup_triggers)
   {
