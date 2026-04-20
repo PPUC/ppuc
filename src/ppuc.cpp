@@ -31,7 +31,11 @@
 #include "DMDUtil/Config.h"
 #include "DMDUtil/ConsoleDMD.h"
 #include "DMDUtil/DMDUtil.h"
+#ifdef PPUC_USE_KMSDMD
+#include "KMSDMD/KMSDMD.h"
+#else
 #include "SDLDMD/SDLDMD.h"
+#endif
 #include "AudioOutput.h"
 #include "PUPTriggerEngine.h"
 #include "SDL3/SDL.h"
@@ -138,10 +142,69 @@ bool PositionWindowOnScreen(SDL_Window* pWindow, int screenIndex, int offsetX = 
   return true;
 }
 
+#ifdef PPUC_USE_KMSDMD
+struct LoadedRGB24Image
+{
+  uint16_t width = 0;
+  uint16_t height = 0;
+  std::vector<uint8_t> pixels;
+};
+
+bool LoadRGB24Image(const char* path, LoadedRGB24Image* pImage, std::string* pError)
+{
+  if (path == nullptr || pImage == nullptr)
+  {
+    if (pError) *pError = "invalid translite image parameters";
+    return false;
+  }
+
+  SDL_Surface* pSurface = IMG_Load(path);
+  if (pSurface == nullptr)
+  {
+    if (pError) *pError = std::string("IMG_Load Error: ") + SDL_GetError();
+    return false;
+  }
+
+  SDL_Surface* pConverted = SDL_ConvertSurface(pSurface, SDL_PIXELFORMAT_RGB24);
+  SDL_DestroySurface(pSurface);
+  if (pConverted == nullptr)
+  {
+    if (pError) *pError = std::string("SDL_ConvertSurface Error: ") + SDL_GetError();
+    return false;
+  }
+
+  pImage->width = static_cast<uint16_t>(pConverted->w);
+  pImage->height = static_cast<uint16_t>(pConverted->h);
+  pImage->pixels.resize(static_cast<size_t>(pImage->width) * pImage->height * 3u);
+
+  for (uint16_t y = 0; y < pImage->height; ++y)
+  {
+    const uint8_t* pSourceRow = static_cast<const uint8_t*>(pConverted->pixels) + static_cast<size_t>(y) * pConverted->pitch;
+    uint8_t* pDestinationRow = pImage->pixels.data() + static_cast<size_t>(y) * pImage->width * 3u;
+    std::memcpy(pDestinationRow, pSourceRow, static_cast<size_t>(pImage->width) * 3u);
+  }
+
+  SDL_DestroySurface(pConverted);
+  return true;
+}
+
+bool RenderTransliteImage(const LoadedRGB24Image& image, DMDUtil::KMSDMD* pDisplay)
+{
+  if (pDisplay == nullptr || image.pixels.empty()) return false;
+  pDisplay->Update(const_cast<uint8_t*>(image.pixels.data()), image.width, image.height);
+  return true;
+}
+#endif
+
 SDL_Window* pTransliteWindow;
 SDL_Renderer* pTransliteRenderer;
 SDL_Texture* pTransliteTexture;
 SDL_Texture* pTransliteAttractTexture;
+#ifdef PPUC_USE_KMSDMD
+std::unique_ptr<DMDUtil::KMSDMD> pTransliteDisplay;
+LoadedRGB24Image transliteImage;
+LoadedRGB24Image transliteAttractImage;
+#endif
 enum class RenderCommand
 {
   RENDER_GAME,
@@ -1788,7 +1851,11 @@ int main(int argc, char** argv)
   int opt_virtual_dmd_x = SDL_WINDOWPOS_UNDEFINED;
   int opt_virtual_dmd_y = SDL_WINDOWPOS_UNDEFINED;
   int opt_rounded_corners = 0;
+#ifdef PPUC_USE_KMSDMD
+  DMDUtil::KMSDMD* pVirtualDMD = nullptr;
+#else
   DMDUtil::SDLDMD* pVirtualDMD = nullptr;
+#endif
 
   for (int i = 1; i < argc; ++i)
   {
@@ -2304,6 +2371,7 @@ int main(int argc, char** argv)
     pSpeechService->SpeakText("P P U C, the pinball power-up controller.");
   }
 
+#ifndef PPUC_USE_KMSDMD
   if (opt_translite || opt_virtual_dmd)
   {
     ConfigureSDLVideoDriverForHeadlessLinux();
@@ -2313,9 +2381,53 @@ int main(int argc, char** argv)
       return 1;
     }
   }
+#endif
 
   if (opt_translite)
   {
+#ifdef PPUC_USE_KMSDMD
+    std::string transliteLoadError;
+    if (!LoadRGB24Image(opt_translite, &transliteImage, &transliteLoadError))
+    {
+      printf("%s\n", transliteLoadError.c_str());
+      return 1;
+    }
+
+    if (opt_translite_attract &&
+        !LoadRGB24Image(opt_translite_attract, &transliteAttractImage, &transliteLoadError))
+    {
+      printf("%s\n", transliteLoadError.c_str());
+      return 1;
+    }
+
+    const LoadedRGB24Image& initialImage =
+        !transliteAttractImage.pixels.empty() ? transliteAttractImage : transliteImage;
+    pTransliteDisplay = std::make_unique<DMDUtil::KMSDMD>(
+        "PPUC Translite",
+        opt_translite_width,
+        opt_translite_height,
+        initialImage.width,
+        initialImage.height,
+        opt_translite_screen,
+        0,
+        0,
+        DMDUtil::KMSDMD::RenderingMode::SmoothScaling,
+        DMDUtil::KMSDMD::Rotation::Rotate0);
+
+    if (!pTransliteDisplay || !pTransliteDisplay->IsReady())
+    {
+      printf("KMS translite setup failed: %s\n",
+             pTransliteDisplay ? pTransliteDisplay->GetError() : "unknown error");
+      pTransliteDisplay.reset();
+      return 1;
+    }
+
+    if (!RenderTransliteImage(initialImage, pTransliteDisplay.get()))
+    {
+      printf("Failed to render initial translite image\n");
+      return 1;
+    }
+#else
     if (!SDL_CreateWindowAndRenderer("PPUC Translite", opt_translite_width, opt_translite_height,
                                      opt_translite_window ? SDL_WINDOW_BORDERLESS : SDL_WINDOW_FULLSCREEN,
                                      &pTransliteWindow, &pTransliteRenderer))
@@ -2364,6 +2476,7 @@ int main(int argc, char** argv)
 
     SDL_RenderPresent(pTransliteRenderer);
     SDL_FlushRenderer(pTransliteRenderer);
+#endif
   }
 
   if (opt_virtual_dmd)
@@ -2668,6 +2781,29 @@ int main(int argc, char** argv)
 
   if (opt_virtual_dmd)
   {
+#ifdef PPUC_USE_KMSDMD
+    DMDUtil::KMSDMD::RenderingMode virtualDmdRenderingMode = DMDUtil::KMSDMD::RenderingMode::Dots;
+    if (!DMDUtil::ParseKMSDMDRenderingMode(opt_virtual_dmd_renderer, &virtualDmdRenderingMode))
+    {
+      printf("Unsupported virtual DMD renderer '%s'. Use one of: dots, squares, scale2x, scale4x, "
+             "scale2x-dots, scale4x-dots, scale2x-squares, scale4x-squares, smooth, xbrz\n",
+             opt_virtual_dmd_renderer);
+      return 1;
+    }
+
+    const int kmsVirtualDmdX = opt_virtual_dmd_x == SDL_WINDOWPOS_UNDEFINED ? 0 : opt_virtual_dmd_x;
+    const int kmsVirtualDmdY = opt_virtual_dmd_y == SDL_WINDOWPOS_UNDEFINED ? 0 : opt_virtual_dmd_y;
+    pVirtualDMD = DMDUtil::CreateKMSDMD(*pDmd, "PPUC DMD", opt_virtual_dmd_width, opt_virtual_dmd_height,
+                                        opt_virtual_dmd_hd ? 256 : 128, opt_virtual_dmd_hd ? 64 : 32,
+                                        opt_virtual_dmd_screen, kmsVirtualDmdX, kmsVirtualDmdY,
+                                        virtualDmdRenderingMode, DMDUtil::KMSDMD::Rotation::Rotate0);
+
+    if (!pVirtualDMD)
+    {
+      printf("KMS couldn't create virtual DMD output.\n");
+      return 1;
+    }
+#else
     DMDUtil::SDLDMD::RenderingMode virtualDmdRenderingMode = DMDUtil::SDLDMD::RenderingMode::Dots;
     if (!DMDUtil::ParseSDLDMDRenderingMode(opt_virtual_dmd_renderer, &virtualDmdRenderingMode))
     {
@@ -2688,6 +2824,7 @@ int main(int argc, char** argv)
       printf("SDL couldn't create virtual DMD window/renderer: %s\n", SDL_GetError());
       return SDL_APP_FAILURE;
     }
+#endif
   }
 
   while (pDmd->IsFinding()) std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -2819,28 +2956,44 @@ int main(int argc, char** argv)
           {
             case RenderCommand::RENDER_GAME:
               printf("Rendering translite\n");
+#ifdef PPUC_USE_KMSDMD
+              if (!RenderTransliteImage(transliteImage, pTransliteDisplay.get()))
+              {
+                printf("Failed to render translite\n");
+              }
+#else
               if (!SDL_SetRenderDrawColor(pTransliteRenderer, 0, 0, 0, 255) || !SDL_RenderClear(pTransliteRenderer) ||
                   !SDL_RenderTexture(pTransliteRenderer, pTransliteTexture, nullptr, nullptr) ||
                   !SDL_RenderPresent(pTransliteRenderer) || !SDL_FlushRenderer(pTransliteRenderer))
               {
                 printf("Failed to render translite: %s\n", SDL_GetError());
               }
+#endif
               break;
 
             case RenderCommand::RENDER_ATTRACT:
               printf("Rendering attract translite\n");
+#ifdef PPUC_USE_KMSDMD
+              if (!RenderTransliteImage(transliteAttractImage.pixels.empty() ? transliteImage : transliteAttractImage,
+                                        pTransliteDisplay.get()))
+              {
+                printf("Failed to render attract translite\n");
+              }
+#else
               if (!SDL_SetRenderDrawColor(pTransliteRenderer, 0, 0, 0, 255) || !SDL_RenderClear(pTransliteRenderer) ||
                   !SDL_RenderTexture(pTransliteRenderer, pTransliteAttractTexture, nullptr, nullptr) ||
                   !SDL_RenderPresent(pTransliteRenderer) || !SDL_FlushRenderer(pTransliteRenderer))
               {
                 printf("Failed to render attract translite: %s\n", SDL_GetError());
               }
+#endif
               break;
           }
           renderQueue.pop();
         }
       }
 
+#ifndef PPUC_USE_KMSDMD
       SDL_Event event;
       if (SDL_PollEvent(&event))
       {
@@ -2868,6 +3021,7 @@ int main(int argc, char** argv)
             break;
         }
       }
+#endif
     }
 
     if (shutdown_requested && opt_serum)
@@ -2916,11 +3070,24 @@ int main(int argc, char** argv)
     quitSDL = true;
   }
 
+#ifdef PPUC_USE_KMSDMD
+  if (pTransliteDisplay)
+  {
+    pTransliteDisplay.reset();
+  }
+#endif
+
   if (pVirtualDMD)
   {
+#ifdef PPUC_USE_KMSDMD
+    if (pDmd) DMDUtil::DestroyKMSDMD(*pDmd, pVirtualDMD);
+#else
     if (pDmd) DMDUtil::DestroySDLDMD(*pDmd, pVirtualDMD);
+#endif
     pVirtualDMD = nullptr;
+#ifndef PPUC_USE_KMSDMD
     quitSDL = true;
+#endif
   }
 
   if (pDmd)

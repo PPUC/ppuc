@@ -3,10 +3,16 @@ cmake_minimum_required(VERSION 3.25)
 set(PLATFORM "win" CACHE STRING "Platform")
 set(ARCH "x64" CACHE STRING "Arch")
 option(ENABLE_SANITIZERS "Enable AddressSanitizer and UBSan for Debug builds" OFF)
+option(PPUC_USE_KMSDMD "Use libkmsdmd instead of SDL/libsdldmd for graphics" OFF)
+option(PPUC_BUILD_MENU "Build ppuc-menu" ON)
+option(PPUC_BUILD_BACKBOX "Build ppuc-backbox" ON)
 
 message(STATUS "PLATFORM: ${PLATFORM}")
 message(STATUS "ARCH: ${ARCH}")
 message(STATUS "ENABLE_SANITIZERS: ${ENABLE_SANITIZERS}")
+message(STATUS "PPUC_USE_KMSDMD: ${PPUC_USE_KMSDMD}")
+message(STATUS "PPUC_BUILD_MENU: ${PPUC_BUILD_MENU}")
+message(STATUS "PPUC_BUILD_BACKBOX: ${PPUC_BUILD_BACKBOX}")
 
 file(READ src/ppuc_version.h version)
 string(REGEX MATCH "PPUC_EXECUTABLE_VERSION_MAJOR[ ]+([0-9]+)" _tmp ${version})
@@ -47,25 +53,42 @@ set(CMAKE_C_VISIBILITY_PRESET hidden)
 set(PPUC_INCLUDE_DIRS "")
 set(PPUC_STAGED_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include")
 
-find_path(PPUC_SDLDMD_INCLUDE_DIR
-   NAMES SDLDMD/SDLDMD.h
-   PATHS "${PPUC_STAGED_INCLUDE_DIR}"
-)
+if(PPUC_USE_KMSDMD)
+   find_path(PPUC_KMSDMD_INCLUDE_DIR
+      NAMES KMSDMD/KMSDMD.h
+      PATHS "${PPUC_STAGED_INCLUDE_DIR}"
+   )
 
-if(NOT PPUC_SDLDMD_INCLUDE_DIR)
-   find_path(PPUC_SDLDMD_INCLUDE_DIR NAMES SDLDMD/SDLDMD.h)
+   if(NOT PPUC_KMSDMD_INCLUDE_DIR)
+      find_path(PPUC_KMSDMD_INCLUDE_DIR NAMES KMSDMD/KMSDMD.h)
+   endif()
+
+   if(NOT PPUC_KMSDMD_INCLUDE_DIR)
+      message(FATAL_ERROR "Could not find KMSDMD headers (expected KMSDMD/KMSDMD.h).")
+   endif()
+
+   list(APPEND PPUC_INCLUDE_DIRS "${PPUC_KMSDMD_INCLUDE_DIR}")
+   message(STATUS "KMSDMD include dir: ${PPUC_KMSDMD_INCLUDE_DIR}")
+else()
+   find_path(PPUC_SDLDMD_INCLUDE_DIR
+      NAMES SDLDMD/SDLDMD.h
+      PATHS "${PPUC_STAGED_INCLUDE_DIR}"
+   )
+
+   if(NOT PPUC_SDLDMD_INCLUDE_DIR)
+      find_path(PPUC_SDLDMD_INCLUDE_DIR NAMES SDLDMD/SDLDMD.h)
+   endif()
+
+   if(NOT PPUC_SDLDMD_INCLUDE_DIR)
+      message(FATAL_ERROR "Could not find SDLDMD headers (expected SDLDMD/SDLDMD.h).")
+   endif()
+
+   list(APPEND PPUC_INCLUDE_DIRS "${PPUC_SDLDMD_INCLUDE_DIR}")
+   message(STATUS "SDLDMD include dir: ${PPUC_SDLDMD_INCLUDE_DIR}")
 endif()
-
-if(NOT PPUC_SDLDMD_INCLUDE_DIR)
-   message(FATAL_ERROR "Could not find SDLDMD headers (expected SDLDMD/SDLDMD.h).")
-endif()
-
-list(APPEND PPUC_INCLUDE_DIRS "${PPUC_SDLDMD_INCLUDE_DIR}")
 if(EXISTS "${PPUC_STAGED_INCLUDE_DIR}")
    list(APPEND PPUC_INCLUDE_DIRS "${PPUC_STAGED_INCLUDE_DIR}")
 endif()
-
-message(STATUS "SDLDMD include dir: ${PPUC_SDLDMD_INCLUDE_DIR}")
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
    if(ENABLE_SANITIZERS AND (PLATFORM STREQUAL "macos" OR PLATFORM STREQUAL "linux"))
@@ -91,6 +114,10 @@ target_include_directories(ppuc-pinmame PUBLIC
 target_compile_definitions(ppuc-pinmame PRIVATE
    PPUC_RUNTIME_LIB_SUBDIR="${PLATFORM}-${ARCH}"
 )
+
+if(PPUC_USE_KMSDMD)
+   target_compile_definitions(ppuc-pinmame PRIVATE PPUC_USE_KMSDMD=1)
+endif()
 
 set(PPUC_HAS_FLITE_HEADERS FALSE)
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/flite/flite.h" OR
@@ -174,15 +201,27 @@ else()
       third-party/runtime-libs/${PLATFORM}-${ARCH}
    )
 
-   target_link_libraries(ppuc-pinmame LINK_PUBLIC
-      pinmame
-      ppuc
-      dmdutil
-      sdldmd
-      cargs
-      SDL3
-      SDL3_image
-   )
+   if(PPUC_USE_KMSDMD)
+      target_link_libraries(ppuc-pinmame LINK_PUBLIC
+         pinmame
+         ppuc
+         dmdutil
+         kmsdmd
+         cargs
+         SDL3
+         SDL3_image
+      )
+   else()
+      target_link_libraries(ppuc-pinmame LINK_PUBLIC
+         pinmame
+         ppuc
+         dmdutil
+         sdldmd
+         cargs
+         SDL3
+         SDL3_image
+      )
+   endif()
 
    if(PPUC_ENABLE_FLITE)
       target_link_libraries(ppuc-pinmame LINK_PUBLIC
@@ -207,6 +246,7 @@ else()
    endif()
 endif()
 
+if(PPUC_BUILD_MENU)
 add_executable(ppuc-menu
    src/AudioOutput.cpp
    src/menu.cpp
@@ -301,7 +341,9 @@ else()
       )
    endif()
 endif()
+endif()
 
+if(PPUC_BUILD_BACKBOX)
 add_executable(ppuc-backbox
    src/backbox.cpp
 )
@@ -349,4 +391,5 @@ else()
       SDL3_image
       sockpp
    )
+endif()
 endif()
