@@ -1850,6 +1850,7 @@ int main(int argc, char** argv)
   int8_t opt_virtual_dmd_screen = -1;
   int opt_virtual_dmd_x = SDL_WINDOWPOS_UNDEFINED;
   int opt_virtual_dmd_y = SDL_WINDOWPOS_UNDEFINED;
+  int opt_virtual_dmd_rotation = 0;
   int opt_rounded_corners = 0;
 #ifdef PPUC_USE_KMSDMD
   DMDUtil::KMSDMD* pVirtualDMD = nullptr;
@@ -2040,6 +2041,8 @@ int main(int argc, char** argv)
           opt_virtual_dmd_x = atoi(value.c_str());
         else if (key == "Y")
           opt_virtual_dmd_y = atoi(value.c_str());
+        else if (key == "Rotation")
+          opt_virtual_dmd_rotation = atoi(value.c_str());
         else if (key == "Renderer")
           opt_virtual_dmd_renderer = DuplicateIniString(value);
       }
@@ -2791,12 +2794,19 @@ int main(int argc, char** argv)
       return 1;
     }
 
+    DMDUtil::KMSDMD::Rotation virtualDmdRotation = DMDUtil::KMSDMD::Rotation::Rotate0;
+    if (!DMDUtil::ParseKMSDMDRotation(std::to_string(opt_virtual_dmd_rotation).c_str(), &virtualDmdRotation))
+    {
+      printf("Unsupported virtual DMD rotation '%d'. Use one of: 0, 90, 180, 270\n", opt_virtual_dmd_rotation);
+      return 1;
+    }
+
     const int kmsVirtualDmdX = opt_virtual_dmd_x == SDL_WINDOWPOS_UNDEFINED ? 0 : opt_virtual_dmd_x;
     const int kmsVirtualDmdY = opt_virtual_dmd_y == SDL_WINDOWPOS_UNDEFINED ? 0 : opt_virtual_dmd_y;
     pVirtualDMD = DMDUtil::CreateKMSDMD(*pDmd, "PPUC DMD", opt_virtual_dmd_width, opt_virtual_dmd_height,
                                         opt_virtual_dmd_hd ? 256 : 128, opt_virtual_dmd_hd ? 64 : 32,
                                         opt_virtual_dmd_screen, kmsVirtualDmdX, kmsVirtualDmdY,
-                                        virtualDmdRenderingMode, DMDUtil::KMSDMD::Rotation::Rotate0);
+                                        virtualDmdRenderingMode, virtualDmdRotation);
 
     if (!pVirtualDMD)
     {
@@ -2813,11 +2823,18 @@ int main(int argc, char** argv)
       return SDL_APP_FAILURE;
     }
 
+    DMDUtil::SDLDMD::Rotation virtualDmdRotation = DMDUtil::SDLDMD::Rotation::Rotate0;
+    if (!DMDUtil::ParseSDLDMDRotation(std::to_string(opt_virtual_dmd_rotation).c_str(), &virtualDmdRotation))
+    {
+      printf("Unsupported virtual DMD rotation '%d'. Use one of: 0, 90, 180, 270\n", opt_virtual_dmd_rotation);
+      return SDL_APP_FAILURE;
+    }
+
     pVirtualDMD = DMDUtil::CreateSDLDMD(*pDmd, "PPUC DMD", opt_virtual_dmd_width, opt_virtual_dmd_height,
                                         opt_virtual_dmd_window ? SDL_WINDOW_BORDERLESS : SDL_WINDOW_FULLSCREEN,
                                         opt_virtual_dmd_hd ? 256 : 128, opt_virtual_dmd_hd ? 64 : 32,
                                         opt_virtual_dmd_screen, opt_virtual_dmd_x, opt_virtual_dmd_y,
-                                        virtualDmdRenderingMode);
+                                        virtualDmdRenderingMode, virtualDmdRotation);
 
     if (!pVirtualDMD)
     {
