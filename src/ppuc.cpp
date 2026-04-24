@@ -390,6 +390,11 @@ static bool ParseIniBool(const std::string& value, bool defaultValue = false)
   return defaultValue;
 }
 
+static bool HasOptionValue(const char* value)
+{
+  return value != nullptr && value[0] != '\0';
+}
+
 static const char* DuplicateIniString(const std::string& value)
 {
   char* copy = static_cast<char*>(malloc(value.size() + 1));
@@ -2309,8 +2314,9 @@ int main(int argc, char** argv)
 
   if (!ValidateSpeechAudioUsage(
           opt_no_sound,
-          (opt_speech || opt_speech_voice || opt_speech_rate_arg ||
-           opt_speech_pitch_arg),
+          (opt_speech || HasOptionValue(opt_speech_voice) ||
+           HasOptionValue(opt_speech_rate_arg) ||
+           HasOptionValue(opt_speech_pitch_arg)),
           opt_greeting, opt_speech_file, &speechValidationError))
   {
     fprintf(stderr, "%s\n", speechValidationError.c_str());
@@ -2616,6 +2622,7 @@ int main(int argc, char** argv)
   // So it is important to start that search before the RS485 BUS gets
   // initialized.
   DMDUtil::Config* dmdConfig = DMDUtil::Config::GetInstance();
+  dmdConfig->parseConfigFile(opt_ini_file);
   dmdConfig->SetRoundedCorners(opt_rounded_corners);
 
   if (opt_pup_triggers)

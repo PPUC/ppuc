@@ -9,6 +9,8 @@
 
 namespace
 {
+bool HasCliValue(const char* text) { return text != nullptr && text[0] != '\0'; }
+
 bool ParseIntStrict(const char* text, int* outValue)
 {
   if (!text || !outValue || text[0] == '\0')
@@ -81,7 +83,7 @@ bool ParseSpeechCliOptions(const char* backendArg,
     return false;
   }
 
-  const char* effectiveBackend = backendArg ? backendArg : "auto";
+  const char* effectiveBackend = HasCliValue(backendArg) ? backendArg : "auto";
   if (!ParseSpeechBackend(effectiveBackend, outBackend))
   {
     if (errorMessage != nullptr)
@@ -93,12 +95,12 @@ bool ParseSpeechCliOptions(const char* backendArg,
   }
 
   SpeechOptions options;
-  if (voiceArg != nullptr && voiceArg[0] != '\0')
+  if (HasCliValue(voiceArg))
   {
     options.voice = voiceArg;
   }
 
-  if (rateArg != nullptr && !ParseIntStrict(rateArg, &options.rate))
+  if (HasCliValue(rateArg) && !ParseIntStrict(rateArg, &options.rate))
   {
     if (errorMessage != nullptr)
     {
@@ -108,7 +110,7 @@ bool ParseSpeechCliOptions(const char* backendArg,
     return false;
   }
 
-  if (pitchArg != nullptr && !ParseIntStrict(pitchArg, &options.pitch))
+  if (HasCliValue(pitchArg) && !ParseIntStrict(pitchArg, &options.pitch))
   {
     if (errorMessage != nullptr)
     {
