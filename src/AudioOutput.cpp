@@ -55,13 +55,6 @@ void AudioOutput::ConfigureGameFormat(int frequency, int channels)
   std::lock_guard<std::mutex> lock(mutex_);
   gameFrequency_ = frequency;
   gameChannels_ = channels;
-
-  SDL_AudioSpec desiredSpec{
-      .format = SDL_AUDIO_S16LE,
-      .channels = static_cast<Uint8>(channels),
-      .freq = frequency,
-  };
-  EnsureStreamLocked(desiredSpec);
 }
 
 void AudioOutput::QueueGameFrames(const int16_t* samples, size_t frameCount)

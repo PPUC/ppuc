@@ -45,11 +45,11 @@ private:
   SDL_AudioStream* stream_ = nullptr;
   SDL_AudioSpec deviceSpec_{
       .format = SDL_AUDIO_S16LE,
-      .channels = 1,
-      .freq = 22050,
+      .channels = 2,
+      .freq = 48000,
   };
-  int gameFrequency_ = 22050;
-  int gameChannels_ = 1;
+  int gameFrequency_ = 48000;
+  int gameChannels_ = 2;
   std::deque<PendingBuffer> gameQueue_;
   std::deque<PendingBuffer> speechQueue_;
 };
