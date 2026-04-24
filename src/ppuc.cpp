@@ -2635,6 +2635,7 @@ int main(int argc, char** argv)
   // So it is important to start that search before the RS485 BUS gets
   // initialized.
   DMDUtil::Config* dmdConfig = DMDUtil::Config::GetInstance();
+  dmdConfig->SetLogCallback(DMDUtilLogCallback);
   dmdConfig->parseConfigFile(opt_ini_file);
   dmdConfig->SetRoundedCorners(opt_rounded_corners);
 
