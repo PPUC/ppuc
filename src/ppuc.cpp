@@ -406,6 +406,15 @@ static const char* DuplicateIniString(const std::string& value)
   return copy;
 }
 
+static const char* DuplicateOptionalIniString(const std::string& value)
+{
+  if (value.empty())
+  {
+    return nullptr;
+  }
+  return DuplicateIniString(value);
+}
+
 static const char* kAnsiStrikeOn = "\033[9m";
 static const char* kAnsiStrikeOff = "\033[0m";
 
@@ -1916,30 +1925,34 @@ int main(int argc, char** argv)
 
       const std::string key = TrimIniValue(trimmed.substr(0, equals));
       const std::string value = TrimIniValue(trimmed.substr(equals + 1));
+      if (value.empty())
+      {
+        continue;
+      }
 
       if (section == "Paths")
       {
         if (key == "ConfigFile")
           config_file = DuplicateIniString(value);
         else if (key == "Rom")
-          opt_rom = DuplicateIniString(value);
+          opt_rom = DuplicateOptionalIniString(value);
         else if (key == "Serial")
-          opt_serial = DuplicateIniString(value);
+          opt_serial = DuplicateOptionalIniString(value);
         else if (key == "PinmamePath")
-          opt_pinmame_path = DuplicateIniString(value);
+          opt_pinmame_path = DuplicateOptionalIniString(value);
         else if (key == "PUPTriggers")
-          opt_pup_triggers = DuplicateIniString(value);
+          opt_pup_triggers = DuplicateOptionalIniString(value);
         else if (key == "SpeechFile")
-          opt_speech_file = DuplicateIniString(value);
+          opt_speech_file = DuplicateOptionalIniString(value);
         else if (key == "Translite")
-          opt_translite = DuplicateIniString(value);
+          opt_translite = DuplicateOptionalIniString(value);
         else if (key == "TransliteAttract")
-          opt_translite_attract = DuplicateIniString(value);
+          opt_translite_attract = DuplicateOptionalIniString(value);
       }
       else if (section == "Backbox")
       {
         if (key == "Address")
-          opt_backbox_address = DuplicateIniString(value);
+          opt_backbox_address = DuplicateOptionalIniString(value);
         else if (key == "Port")
           opt_backbox_port = static_cast<uint16_t>(atoi(value.c_str()));
       }
@@ -1972,9 +1985,9 @@ int main(int argc, char** argv)
         else if (key == "DumpDisplay" || key == "DumpDmdTxt")
           opt_dump = ParseIniBool(value);
         else if (key == "SkipBoards")
-          opt_skip_boards = DuplicateIniString(value);
+          opt_skip_boards = DuplicateOptionalIniString(value);
         else if (key == "SwitchReplyDelayUs")
-          opt_switch_reply_delay_us_arg = DuplicateIniString(value);
+          opt_switch_reply_delay_us_arg = DuplicateOptionalIniString(value);
         else if (key == "CloseCoinDoor")
           opt_close_coin_door = ParseIniBool(value);
         else if (key == "HardReset")
@@ -1987,13 +2000,13 @@ int main(int argc, char** argv)
         else if (key == "Greeting")
           opt_greeting = ParseIniBool(value);
         else if (key == "Backend")
-          opt_speech_backend = DuplicateIniString(value);
+          opt_speech_backend = DuplicateOptionalIniString(value);
         else if (key == "Voice")
-          opt_speech_voice = DuplicateIniString(value);
+          opt_speech_voice = DuplicateOptionalIniString(value);
         else if (key == "Rate")
-          opt_speech_rate_arg = DuplicateIniString(value);
+          opt_speech_rate_arg = DuplicateOptionalIniString(value);
         else if (key == "Pitch")
-          opt_speech_pitch_arg = DuplicateIniString(value);
+          opt_speech_pitch_arg = DuplicateOptionalIniString(value);
       }
       else if (section == "OutputFilters")
       {
@@ -2048,8 +2061,8 @@ int main(int argc, char** argv)
           opt_virtual_dmd_y = atoi(value.c_str());
         else if (key == "Rotation")
           opt_virtual_dmd_rotation = atoi(value.c_str());
-        else if (key == "Renderer")
-          opt_virtual_dmd_renderer = DuplicateIniString(value);
+        else if (key == "Renderer" && !value.empty())
+          opt_virtual_dmd_renderer = DuplicateOptionalIniString(value);
       }
     }
 
