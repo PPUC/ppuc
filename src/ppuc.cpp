@@ -2326,6 +2326,16 @@ int main(int argc, char** argv)
     return 1;
   }
 
+  ppuc = new PPUC();
+
+  // Load config file. But options set via command line are preferred.
+  ppuc->LoadConfiguration(config_file);
+
+  if (!opt_debug)
+  {
+    opt_debug = ppuc->GetDebug();
+  }
+
   if (!ValidateSpeechAudioUsage(
           opt_no_sound,
           (opt_speech || HasOptionValue(opt_speech_voice) ||
@@ -2392,6 +2402,18 @@ int main(int argc, char** argv)
     PrintSpeechConfiguration(opt_speech_backend, speechOptions,
                              opt_speech_rate_arg, opt_speech_pitch_arg);
     pSpeechService->SpeakText("P P U C, the pinball power-up controller.");
+  }
+
+  const bool bench_test_mode =
+      opt_switch_test || opt_coil_test || opt_lamp_test || opt_gi_test ||
+      opt_flasher_test;
+  const bool diagnostic_mode =
+      bench_test_mode || opt_debug || opt_debug_errors || opt_debug_switches ||
+      opt_debug_coils || opt_debug_lamps;
+  if (diagnostic_mode)
+  {
+    opt_translite = NULL;
+    opt_translite_attract = NULL;
   }
 
 #ifndef PPUC_USE_KMSDMD
@@ -2507,15 +2529,6 @@ int main(int argc, char** argv)
     // SDLDMD now owns the SDL window/renderer lifecycle.
   }
 
-  ppuc = new PPUC();
-
-  // Load config file. But options set via command line are preferred.
-  ppuc->LoadConfiguration(config_file);
-
-  if (!opt_debug)
-  {
-    opt_debug = ppuc->GetDebug();
-  }
   ppuc->SetDebug(opt_debug);
   ppuc->SetDebugErrors(opt_debug_errors);
   ppuc->SetForceHardReset(opt_hard_reset);
