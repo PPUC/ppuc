@@ -13,6 +13,7 @@
 #include <inttypes.h>
 #include <stdlib.h>
 
+#include <atomic>
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
@@ -241,7 +242,7 @@ bool opt_hard_reset = false;
 const char* opt_virtual_dmd_renderer = "dots";
 const char* opt_pinmame_path = NULL;
 const char* opt_rom = NULL;
-int game_state = 0;
+std::atomic<int> game_state{0};
 bool running = true;
 volatile std::sig_atomic_t shutdown_requested = 0;
 
@@ -1529,7 +1530,7 @@ void PINMAMECALLBACK OnStateUpdated(int state, const void* p_userData)
     PinmameSetMech(0, &mechConfig);
     */
 
-    game_state = state;
+    game_state.store(state, std::memory_order_release);
   }
 }
 
@@ -2918,7 +2919,7 @@ int main(int argc, char** argv)
     {
       std::this_thread::sleep_for(std::chrono::microseconds(MAIN_LOOP_SLEEP_US));
 
-      if (!game_state)
+      if (game_state.load(std::memory_order_acquire) == 0)
       {
         continue;
       }
