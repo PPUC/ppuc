@@ -219,6 +219,27 @@ struct RenderRequest
 
 std::queue<RenderRequest> renderQueue;
 std::mutex renderMutex;
+RenderCommand currentTransliteCommand = RenderCommand::RENDER_ATTRACT;
+
+static bool HasTransliteAttractImage()
+{
+#ifdef PPUC_USE_KMSDMD
+  return !transliteAttractImage.pixels.empty();
+#else
+  return pTransliteAttractTexture != nullptr;
+#endif
+}
+
+static void QueueTransliteRender(RenderCommand command)
+{
+  std::lock_guard<std::mutex> lock(renderMutex);
+  if (currentTransliteCommand == command)
+  {
+    return;
+  }
+  currentTransliteCommand = command;
+  renderQueue.push(RenderRequest{command});
+}
 
 bool opt_debug = false;
 bool opt_debug_errors = false;
@@ -1753,29 +1774,22 @@ void PINMAMECALLBACK OnSolenoidUpdated(PinmameSolenoidState* p_solenoidState, co
 
   if (isGameOnCoil)
   {
-    RenderRequest request;
     if (coilState)
     {
       if (opt_debug || opt_debug_coils)
       {
         printf("Game started: solenoid=%d, state=%d\n", p_solenoidState->solNo, coilState);
       }
-      request.command = RenderCommand::RENDER_GAME;
+      QueueTransliteRender(RenderCommand::RENDER_GAME);
     }
-    else
+    else if (HasTransliteAttractImage())
     {
       if (opt_debug || opt_debug_coils)
       {
         printf("Game stopped: solenoid=%d, state=%d\n", p_solenoidState->solNo, coilState);
       }
-      if (pTransliteAttractTexture)
-      {
-        request.command = RenderCommand::RENDER_ATTRACT;
-      }
+      QueueTransliteRender(RenderCommand::RENDER_ATTRACT);
     }
-
-    std::lock_guard<std::mutex> lock(renderMutex);
-    renderQueue.push(request);
   }
 }
 
