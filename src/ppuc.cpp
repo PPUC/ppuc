@@ -1423,7 +1423,7 @@ static struct cag_option options[] = {
     {.identifier = '7',
      .access_name = "switch-reply-delay-us",
      .value_name = "VALUE",
-     .description = "Experimental per-board switch reply delay in microseconds"},
+     .description = "Per-board switch reply delay in microseconds"},
     {.identifier = '8',
      .access_name = "close-coin-door",
      .value_name = NULL,
@@ -1761,15 +1761,6 @@ void PINMAMECALLBACK OnSolenoidUpdated(PinmameSolenoidState* p_solenoidState, co
     printf("OnSolenoidUpdated: solenoid=%d, state=%d\n", p_solenoidState->solNo, coilState);
   }
 
-  if (pPUPTriggerEngine)
-  {
-    if (isGameOnCoil)
-    {
-      pPUPTriggerEngine->SetAttractMode(coilState == 0);
-    }
-    pPUPTriggerEngine->OnCoilState(p_solenoidState->solNo, coilState);
-  }
-
   ppuc->SetSolenoidState(p_solenoidState->solNo, coilState);
 
   if (isGameOnCoil)
@@ -1790,6 +1781,15 @@ void PINMAMECALLBACK OnSolenoidUpdated(PinmameSolenoidState* p_solenoidState, co
       }
       QueueTransliteRender(RenderCommand::RENDER_ATTRACT);
     }
+  }
+
+  if (pPUPTriggerEngine)
+  {
+    if (isGameOnCoil)
+    {
+      pPUPTriggerEngine->SetAttractMode(coilState == 0);
+    }
+    pPUPTriggerEngine->OnCoilState(p_solenoidState->solNo, coilState);
   }
 }
 
