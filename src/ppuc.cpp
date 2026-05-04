@@ -6,24 +6,23 @@
 #endif
 
 #include "PPUC.h"
-#include "ppuc_version.h" // <--- HINZUGEFÜGT
 
 #include <ctype.h>
-#include <climits>
 #include <inttypes.h>
 #include <stdlib.h>
 
 #include <atomic>
 #include <chrono>
+#include <climits>
 #include <csignal>
-#include <cstdlib>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <fstream>
 #include <memory>
 #include <mutex>
 #include <queue>
-#include <fstream>
 #include <string>
 #include <thread>
 #include <type_traits>
@@ -32,6 +31,7 @@
 #include "DMDUtil/Config.h"
 #include "DMDUtil/ConsoleDMD.h"
 #include "DMDUtil/DMDUtil.h"
+#include "ppuc_version.h"  // <--- HINZUGEFÜGT
 #ifdef PPUC_USE_KMSDMD
 #include "KMSDMD/KMSDMD.h"
 #else
@@ -180,7 +180,8 @@ bool LoadRGB24Image(const char* path, LoadedRGB24Image* pImage, std::string* pEr
 
   for (uint16_t y = 0; y < pImage->height; ++y)
   {
-    const uint8_t* pSourceRow = static_cast<const uint8_t*>(pConverted->pixels) + static_cast<size_t>(y) * pConverted->pitch;
+    const uint8_t* pSourceRow =
+        static_cast<const uint8_t*>(pConverted->pixels) + static_cast<size_t>(y) * pConverted->pitch;
     uint8_t* pDestinationRow = pImage->pixels.data() + static_cast<size_t>(y) * pImage->width * 3u;
     std::memcpy(pDestinationRow, pSourceRow, static_cast<size_t>(pImage->width) * 3u);
   }
@@ -278,7 +279,7 @@ struct LogCallbackTraits<R (*)(A1, A2, A3, A4)>
 
 #if defined(_WIN32) && !defined(_WIN64)
 template <typename R, typename A1, typename A2, typename A3, typename A4>
-struct LogCallbackTraits<R(__stdcall *)(A1, A2, A3, A4)>
+struct LogCallbackTraits<R(__stdcall*)(A1, A2, A3, A4)>
 {
   using Arg3 = A3;
 };
@@ -412,10 +413,7 @@ static bool ParseIniBool(const std::string& value, bool defaultValue = false)
   return defaultValue;
 }
 
-static bool HasOptionValue(const char* value)
-{
-  return value != nullptr && value[0] != '\0';
-}
+static bool HasOptionValue(const char* value) { return value != nullptr && value[0] != '\0'; }
 
 static const char* DuplicateIniString(const std::string& value)
 {
@@ -460,19 +458,12 @@ static void PrintMaybeStruckLine(bool struck, const char* format, ...)
 
 static bool IsVirtualizedBenchSwitch(PPUC* ppuc, const PPUCSwitch& vswitch)
 {
-  return ppuc->IsBoardVirtualized(vswitch.board) ||
-         ppuc->IsSwitchVirtualized(vswitch.number);
+  return ppuc->IsBoardVirtualized(vswitch.board) || ppuc->IsSwitchVirtualized(vswitch.number);
 }
 
-static bool IsVirtualizedBenchCoil(PPUC* ppuc, const PPUCCoil& coil)
-{
-  return ppuc->IsBoardVirtualized(coil.board);
-}
+static bool IsVirtualizedBenchCoil(PPUC* ppuc, const PPUCCoil& coil) { return ppuc->IsBoardVirtualized(coil.board); }
 
-static bool IsVirtualizedBenchLamp(PPUC* ppuc, const PPUCLamp& lamp)
-{
-  return ppuc->IsBoardVirtualized(lamp.board);
-}
+static bool IsVirtualizedBenchLamp(PPUC* ppuc, const PPUCLamp& lamp) { return ppuc->IsBoardVirtualized(lamp.board); }
 
 enum class BenchTestMode
 {
@@ -530,7 +521,7 @@ struct BenchTestRunner
 #if !defined(_WIN32) && !defined(_WIN64)
 class ScopedRawTerminalMode
 {
-public:
+ public:
   explicit ScopedRawTerminalMode(bool enable)
   {
     if (!enable || !isatty(STDIN_FILENO))
@@ -561,20 +552,19 @@ public:
     }
   }
 
-private:
+ private:
   bool active_ = false;
   termios original_{};
 };
 #else
 class ScopedRawTerminalMode
 {
-public:
+ public:
   explicit ScopedRawTerminalMode(bool /*enable*/) {}
 };
 #endif
 
-static bool ComputeSwitchFeedbackGiOn(const BenchTestRunner& runner,
-                                      std::chrono::steady_clock::time_point now)
+static bool ComputeSwitchFeedbackGiOn(const BenchTestRunner& runner, std::chrono::steady_clock::time_point now)
 {
   return now >= runner.switchFeedbackOffUntil;
 }
@@ -599,8 +589,8 @@ static void UpdateSwitchFeedbackGi(PPUC* ppuc, BenchTestRunner& runner)
 
 static void PrintBenchStepDetails(const BenchOutputStep& step)
 {
-  printf("\nBoard: %d\nPort: %d\nNumber: %d\nDescription: %s\n",
-         step.board, step.port, step.number, step.description.c_str());
+  printf("\nBoard: %d\nPort: %d\nNumber: %d\nDescription: %s\n", step.board, step.port, step.number,
+         step.description.c_str());
   if (step.kind == BenchOutputKind::LAMP)
   {
     printf("Color: %08X\n", step.color);
@@ -629,8 +619,7 @@ static void PrintInteractiveBenchPrompt(const BenchTestRunner& runner)
       break;
   }
 
-  printf("Enter %s number, or q/ESC to quit: %s", label,
-         runner.interactiveInput.c_str());
+  printf("Enter %s number, or q/ESC to quit: %s", label, runner.interactiveInput.c_str());
   fflush(stdout);
 }
 
@@ -687,8 +676,8 @@ static std::vector<BenchOutputStep> BuildCoilTestSteps(PPUC* ppuc, uint8_t numbe
     {
       continue;
     }
-    steps.push_back({BenchOutputKind::SOLENOID, coil.board, coil.port, coil.number, 1, coil.type,
-                     coil.description, 0, 200, 1000});
+    steps.push_back(
+        {BenchOutputKind::SOLENOID, coil.board, coil.port, coil.number, 1, coil.type, coil.description, 0, 200, 1000});
   }
   return steps;
 }
@@ -710,8 +699,8 @@ static std::vector<BenchOutputStep> BuildLampTestSteps(PPUC* ppuc, uint8_t numbe
     {
       continue;
     }
-    steps.push_back({BenchOutputKind::LAMP, lamp.board, lamp.port, lamp.number, 1, lamp.type,
-                     lamp.description, lamp.color, number != 0 ? 10000 : 2000, number != 0 ? 0 : 1000});
+    steps.push_back({BenchOutputKind::LAMP, lamp.board, lamp.port, lamp.number, 1, lamp.type, lamp.description,
+                     lamp.color, number != 0 ? 10000 : 2000, number != 0 ? 0 : 1000});
   }
 
   for (const auto& coil : ppuc->GetCoils())
@@ -728,8 +717,8 @@ static std::vector<BenchOutputStep> BuildLampTestSteps(PPUC* ppuc, uint8_t numbe
     {
       continue;
     }
-    steps.push_back({BenchOutputKind::LAMP, coil.board, coil.port, coil.number, 1, coil.type,
-                     coil.description, 0, number != 0 ? 10000 : 2000, number != 0 ? 0 : 1000});
+    steps.push_back({BenchOutputKind::LAMP, coil.board, coil.port, coil.number, 1, coil.type, coil.description, 0,
+                     number != 0 ? 10000 : 2000, number != 0 ? 0 : 1000});
   }
 
   return steps;
@@ -754,8 +743,8 @@ static std::vector<BenchOutputStep> BuildFlasherTestSteps(PPUC* ppuc, uint8_t nu
     }
     for (uint8_t i = 0; i < 3; ++i)
     {
-      steps.push_back({BenchOutputKind::SOLENOID, lamp.board, lamp.port, lamp.number, 1, lamp.type,
-                       lamp.description, lamp.color, 200, 1000});
+      steps.push_back({BenchOutputKind::SOLENOID, lamp.board, lamp.port, lamp.number, 1, lamp.type, lamp.description,
+                       lamp.color, 200, 1000});
     }
   }
 
@@ -775,8 +764,8 @@ static std::vector<BenchOutputStep> BuildFlasherTestSteps(PPUC* ppuc, uint8_t nu
     }
     for (uint8_t i = 0; i < 3; ++i)
     {
-      steps.push_back({BenchOutputKind::SOLENOID, coil.board, coil.port, coil.number, 1, coil.type,
-                       coil.description, 0, 200, 1000});
+      steps.push_back({BenchOutputKind::SOLENOID, coil.board, coil.port, coil.number, 1, coil.type, coil.description, 0,
+                       200, 1000});
     }
   }
 
@@ -809,10 +798,8 @@ static void PrintSwitchTestHeader(PPUC* ppuc)
     printf("Configured switches:\n");
     for (const auto& vswitch : switches)
     {
-      PrintMaybeStruckLine(IsVirtualizedBenchSwitch(ppuc, vswitch),
-                           "  #%d  board=%d port=%d  %s", vswitch.number,
-                           vswitch.board, vswitch.port,
-                           vswitch.description.c_str());
+      PrintMaybeStruckLine(IsVirtualizedBenchSwitch(ppuc, vswitch), "  #%d  board=%d port=%d  %s", vswitch.number,
+                           vswitch.board, vswitch.port, vswitch.description.c_str());
     }
     printf("\nWaiting for switch activity...\n");
     fflush(stdout);
@@ -834,9 +821,8 @@ static void PrintCoilTestHeader(PPUC* ppuc, uint8_t number)
     {
       continue;
     }
-    PrintMaybeStruckLine(IsVirtualizedBenchCoil(ppuc, coil),
-                         "  #%d  board=%d port=%d  %s", coil.number,
-                         coil.board, coil.port, coil.description.c_str());
+    PrintMaybeStruckLine(IsVirtualizedBenchCoil(ppuc, coil), "  #%d  board=%d port=%d  %s", coil.number, coil.board,
+                         coil.port, coil.description.c_str());
   }
   printf("\n");
 }
@@ -856,9 +842,8 @@ static void PrintLampTestHeader(PPUC* ppuc, uint8_t number)
     {
       continue;
     }
-    PrintMaybeStruckLine(IsVirtualizedBenchLamp(ppuc, lamp),
-                         "  #%d  board=%d port=%d  %s", lamp.number,
-                         lamp.board, lamp.port, lamp.description.c_str());
+    PrintMaybeStruckLine(IsVirtualizedBenchLamp(ppuc, lamp), "  #%d  board=%d port=%d  %s", lamp.number, lamp.board,
+                         lamp.port, lamp.description.c_str());
   }
   for (const auto& coil : ppuc->GetCoils())
   {
@@ -870,9 +855,8 @@ static void PrintLampTestHeader(PPUC* ppuc, uint8_t number)
     {
       continue;
     }
-    PrintMaybeStruckLine(IsVirtualizedBenchCoil(ppuc, coil),
-                         "  #%d  board=%d port=%d  %s", coil.number,
-                         coil.board, coil.port, coil.description.c_str());
+    PrintMaybeStruckLine(IsVirtualizedBenchCoil(ppuc, coil), "  #%d  board=%d port=%d  %s", coil.number, coil.board,
+                         coil.port, coil.description.c_str());
   }
   printf("\n");
 }
@@ -892,9 +876,8 @@ static void PrintFlasherTestHeader(PPUC* ppuc, uint8_t number)
     {
       continue;
     }
-    PrintMaybeStruckLine(IsVirtualizedBenchLamp(ppuc, lamp),
-                         "  #%d  board=%d port=%d  %s", lamp.number,
-                         lamp.board, lamp.port, lamp.description.c_str());
+    PrintMaybeStruckLine(IsVirtualizedBenchLamp(ppuc, lamp), "  #%d  board=%d port=%d  %s", lamp.number, lamp.board,
+                         lamp.port, lamp.description.c_str());
   }
   for (const auto& coil : ppuc->GetCoils())
   {
@@ -906,22 +889,18 @@ static void PrintFlasherTestHeader(PPUC* ppuc, uint8_t number)
     {
       continue;
     }
-    PrintMaybeStruckLine(IsVirtualizedBenchCoil(ppuc, coil),
-                         "  #%d  board=%d port=%d  %s", coil.number,
-                         coil.board, coil.port, coil.description.c_str());
+    PrintMaybeStruckLine(IsVirtualizedBenchCoil(ppuc, coil), "  #%d  board=%d port=%d  %s", coil.number, coil.board,
+                         coil.port, coil.description.c_str());
   }
   printf("\n");
 }
 
-static BenchTestRunner CreateBenchTestRunner(PPUC* ppuc, BenchTestMode mode,
-                                             uint8_t number)
+static BenchTestRunner CreateBenchTestRunner(PPUC* ppuc, BenchTestMode mode, uint8_t number)
 {
   BenchTestRunner runner;
   runner.mode = mode;
-  runner.interactive =
-      opt_interactive &&
-      (mode == BenchTestMode::COILS || mode == BenchTestMode::LAMPS ||
-       mode == BenchTestMode::FLASHERS);
+  runner.interactive = opt_interactive && (mode == BenchTestMode::COILS || mode == BenchTestMode::LAMPS ||
+                                           mode == BenchTestMode::FLASHERS);
 
   switch (mode)
   {
@@ -963,8 +942,7 @@ static BenchTestRunner CreateBenchTestRunner(PPUC* ppuc, BenchTestMode mode,
       orderedNumbers.push_back(entry.first);
     }
     std::sort(orderedNumbers.begin(), orderedNumbers.end());
-    orderedNumbers.erase(std::unique(orderedNumbers.begin(), orderedNumbers.end()),
-                         orderedNumbers.end());
+    orderedNumbers.erase(std::unique(orderedNumbers.begin(), orderedNumbers.end()), orderedNumbers.end());
 
     for (const int itemNumber : orderedNumbers)
     {
@@ -976,8 +954,8 @@ static BenchTestRunner CreateBenchTestRunner(PPUC* ppuc, BenchTestMode mode,
 
       const BenchOutputStep& step = it->second.front();
       char buffer[512];
-      snprintf(buffer, sizeof(buffer), "  #%d  board=%d port=%d  %s",
-               step.number, step.board, step.port, step.description.c_str());
+      snprintf(buffer, sizeof(buffer), "  #%d  board=%d port=%d  %s", step.number, step.board, step.port,
+               step.description.c_str());
       runner.interactiveMenuLines.emplace_back(buffer);
     }
 
@@ -999,9 +977,7 @@ static void PrimeBenchSwitchStates(PPUC* ppuc, BenchTestRunner& runner)
   while ((switchState = ppuc->GetNextSwitchState()) != nullptr)
   {
     auto it = std::find_if(switches.begin(), switches.end(),
-                           [switchState](const PPUCSwitch& vswitch) {
-                             return vswitch.number == switchState->number;
-                           });
+                           [switchState](const PPUCSwitch& vswitch) { return vswitch.number == switchState->number; });
     if (it != switches.end() && IsVirtualizedBenchSwitch(ppuc, *it))
     {
       continue;
@@ -1017,8 +993,7 @@ static void PrimeBenchSwitchStates(PPUC* ppuc, BenchTestRunner& runner)
 
 static void WaitForCleanSwitchReplyCycle(PPUC* ppuc, uint32_t baselineCount)
 {
-  const auto deadline =
-      std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
   while (std::chrono::steady_clock::now() < deadline)
   {
     while (ppuc->GetNextSwitchState() != nullptr)
@@ -1030,8 +1005,7 @@ static void WaitForCleanSwitchReplyCycle(PPUC* ppuc, uint32_t baselineCount)
       return;
     }
 
-    std::this_thread::sleep_for(
-        std::chrono::microseconds(MAIN_LOOP_SLEEP_US));
+    std::this_thread::sleep_for(std::chrono::microseconds(MAIN_LOOP_SLEEP_US));
   }
 }
 
@@ -1050,9 +1024,7 @@ static void DrainSwitchUpdatesForTest(PPUC* ppuc, BenchTestRunner& runner)
   while ((switchState = ppuc->GetNextSwitchState()) != nullptr)
   {
     auto it = std::find_if(switches.begin(), switches.end(),
-                           [switchState](const PPUCSwitch& vswitch) {
-                             return vswitch.number == switchState->number;
-                           });
+                           [switchState](const PPUCSwitch& vswitch) { return vswitch.number == switchState->number; });
     if (it != switches.end() && IsVirtualizedBenchSwitch(ppuc, *it))
     {
       continue;
@@ -1065,10 +1037,9 @@ static void DrainSwitchUpdatesForTest(PPUC* ppuc, BenchTestRunner& runner)
     }
 
     const auto currentIt = runner.currentSwitchStates.find(switchState->number);
-    const uint8_t previousState =
-        currentIt == runner.currentSwitchStates.end()
-            ? runner.initialSwitchStates[switchState->number]
-            : currentIt->second;
+    const uint8_t previousState = currentIt == runner.currentSwitchStates.end()
+                                      ? runner.initialSwitchStates[switchState->number]
+                                      : currentIt->second;
     const auto initialIt = runner.initialSwitchStates.find(switchState->number);
     if (initialIt == runner.initialSwitchStates.end())
     {
@@ -1080,8 +1051,7 @@ static void DrainSwitchUpdatesForTest(PPUC* ppuc, BenchTestRunner& runner)
     const bool isActive = normalizedState != initialState;
     if (!wasActive && isActive)
     {
-      const auto offUntil =
-          std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
+      const auto offUntil = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
       if (offUntil > runner.switchFeedbackOffUntil)
       {
         runner.switchFeedbackOffUntil = offUntil;
@@ -1095,14 +1065,12 @@ static void DrainSwitchUpdatesForTest(PPUC* ppuc, BenchTestRunner& runner)
 
     if (it != switches.end())
     {
-      printf("Switch updated: #%d, %d (%s)\nBoard: %d\nPort: %d\nDescription: %s\n\n",
-             switchState->number, switchState->state, stateName, it->board,
-             it->port, it->description.c_str());
+      printf("Switch updated: #%d, %d (%s)\nBoard: %d\nPort: %d\nDescription: %s\n\n", switchState->number,
+             switchState->state, stateName, it->board, it->port, it->description.c_str());
     }
     else
     {
-      printf("Switch updated: #%d, %d (%s)\n\n", switchState->number,
-             switchState->state, stateName);
+      printf("Switch updated: #%d, %d (%s)\n\n", switchState->number, switchState->state, stateName);
     }
     fflush(stdout);
   }
@@ -1125,8 +1093,7 @@ static bool PollInteractiveBenchInput(BenchTestRunner& runner)
   FD_SET(STDIN_FILENO, &readSet);
   timeval timeout{0, 0};
 
-  if (select(STDIN_FILENO + 1, &readSet, nullptr, nullptr, &timeout) <= 0 ||
-      !FD_ISSET(STDIN_FILENO, &readSet))
+  if (select(STDIN_FILENO + 1, &readSet, nullptr, nullptr, &timeout) <= 0 || !FD_ISSET(STDIN_FILENO, &readSet))
   {
     return true;
   }
@@ -1302,8 +1269,7 @@ static void CleanupBenchTestRunner(PPUC* ppuc, const BenchTestRunner& runner)
     printf("\nRestoring GI String 1 to brightness %d\n", 8);
     ppuc->SetGIState(/* string */ 1, /* full brightness */ 8);
   }
-  else if (runner.mode == BenchTestMode::SWITCHES &&
-           ppuc->GetPlatform() != PLATFORM_WPC)
+  else if (runner.mode == BenchTestMode::SWITCHES && ppuc->GetPlatform() != PLATFORM_WPC)
   {
     ppuc->SetGIState(/* string */ 1, /* full brightness */ 8);
   }
@@ -1348,8 +1314,14 @@ static struct cag_option options[] = {
      .value_name = NULL,
      .description = "No serial communication to controllers (optional)"},
     {.identifier = 'M', .access_name = "no-sound", .value_name = NULL, .description = "Turn off sound (optional)"},
-    {.identifier = 'W', .access_name = "speech", .value_name = NULL, .description = "Enable speech callouts (optional)"},
-    {.identifier = 'Y', .access_name = "greeting", .value_name = NULL, .description = "Speak a startup greeting for speech debugging (optional)"},
+    {.identifier = 'W',
+     .access_name = "speech",
+     .value_name = NULL,
+     .description = "Enable speech callouts (optional)"},
+    {.identifier = 'Y',
+     .access_name = "greeting",
+     .value_name = NULL,
+     .description = "Speak a startup greeting for speech debugging (optional)"},
     {.identifier = '9',
      .access_name = "speech-file",
      .value_name = "VALUE",
@@ -1449,7 +1421,10 @@ static struct cag_option options[] = {
     {.identifier = '2', .access_name = "lamp-test", .value_name = NULL, .description = "Run lamp test"},
     {.identifier = '3', .access_name = "gi-test", .value_name = NULL, .description = "Run lamp test"},
     {.identifier = '4', .access_name = "flasher-test", .value_name = NULL, .description = "Run flasher test"},
-    {.identifier = 'Z', .access_name = "interactive", .value_name = NULL, .description = "Interactive coil/lamp/flasher test selection"},
+    {.identifier = 'Z',
+     .access_name = "interactive",
+     .value_name = NULL,
+     .description = "Interactive coil/lamp/flasher test selection"},
     {.identifier = '5',
      .access_name = "number",
      .value_name = "VALUE",
@@ -1502,7 +1477,8 @@ static struct cag_option options[] = {
     {.identifier = 'l',
      .access_name = "virtual-dmd-renderer",
      .value_name = "VALUE",
-     .description = "Virtual DMD renderer: dots, squares, scale2x, scale4x, scale2x-dots, scale4x-dots, scale2x-squares, scale4x-squares, smooth, xbrz"},
+     .description = "Virtual DMD renderer: dots, squares, scale2x, scale4x, scale2x-dots, scale4x-dots, "
+                    "scale2x-squares, scale4x-squares, smooth, xbrz"},
     {.identifier = 'j',
      .access_name = "virtual-dmd-x",
      .value_name = "VALUE",
@@ -1698,7 +1674,7 @@ void PINMAMECALLBACK OnDisplayUpdated(int index, void* p_displayData, PinmameDis
         // @todo
         break;
 
-      case PINMAME_DISPLAY_TYPE_DMD:     // DMD Display
+      case PINMAME_DISPLAY_TYPE_DMD:  // DMD Display
         // handled above, just surpress a warning of missing cases here.
         break;
 
@@ -1730,8 +1706,7 @@ int PINMAMECALLBACK OnAudioAvailable(PinmameAudioInfo* p_audioInfo, const void* 
   {
     if (pAudioOutput != nullptr)
     {
-      pAudioOutput->ConfigureGameFormat(static_cast<int>(p_audioInfo->sampleRate),
-                                        p_audioInfo->channels);
+      pAudioOutput->ConfigureGameFormat(static_cast<int>(p_audioInfo->sampleRate), p_audioInfo->channels);
     }
     else
     {
@@ -1745,8 +1720,7 @@ int PINMAMECALLBACK OnAudioUpdated(void* p_buffer, int samples, const void* p_us
 {
   if (pAudioOutput != nullptr)
   {
-    pAudioOutput->QueueGameFrames(reinterpret_cast<const int16_t*>(p_buffer),
-                                  static_cast<size_t>(samples));
+    pAudioOutput->QueueGameFrames(reinterpret_cast<const int16_t*>(p_buffer), static_cast<size_t>(samples));
   }
   return samples;
 }
@@ -1903,7 +1877,8 @@ int main(int argc, char** argv)
     }
   }
 
-  const auto loadIniFile = [&](const char* iniFile) -> bool {
+  const auto loadIniFile = [&](const char* iniFile) -> bool
+  {
     if (iniFile == nullptr || iniFile[0] == '\0')
     {
       return true;
@@ -2025,8 +2000,7 @@ int main(int argc, char** argv)
       }
       else if (section == "OutputFilters")
       {
-        if (key == "RoundedCorners")
-          opt_rounded_corners = atoi(value.c_str());
+        if (key == "RoundedCorners") opt_rounded_corners = atoi(value.c_str());
       }
       else if (section == "BenchTest")
       {
@@ -2299,27 +2273,21 @@ int main(int argc, char** argv)
 
   if (!ValidateSkippedBoardsCsv(opt_skip_boards))
   {
-    fprintf(stderr, "Invalid value for --skip-boards: %s\n",
-            opt_skip_boards ? opt_skip_boards : "(null)");
+    fprintf(stderr, "Invalid value for --skip-boards: %s\n", opt_skip_boards ? opt_skip_boards : "(null)");
     return 1;
   }
 
-  if (opt_switch_reply_delay_us_arg &&
-      !ParseUint32Strict(opt_switch_reply_delay_us_arg,
-                         &opt_switch_reply_delay_us))
+  if (opt_switch_reply_delay_us_arg && !ParseUint32Strict(opt_switch_reply_delay_us_arg, &opt_switch_reply_delay_us))
   {
-    fprintf(stderr, "Invalid value for --switch-reply-delay-us: %s\n",
-            opt_switch_reply_delay_us_arg);
+    fprintf(stderr, "Invalid value for --switch-reply-delay-us: %s\n", opt_switch_reply_delay_us_arg);
     return 1;
   }
 
   SpeechBackend speechBackend = SpeechBackend::Auto;
   SpeechOptions speechOptions;
   std::string speechValidationError;
-  if (!ParseSpeechCliOptions(opt_speech_backend, opt_speech_voice,
-                             opt_speech_rate_arg, opt_speech_pitch_arg,
-                             &speechBackend, &speechOptions,
-                             &speechValidationError))
+  if (!ParseSpeechCliOptions(opt_speech_backend, opt_speech_voice, opt_speech_rate_arg, opt_speech_pitch_arg,
+                             &speechBackend, &speechOptions, &speechValidationError))
   {
     fprintf(stderr, "%s\n", speechValidationError.c_str());
     return 1;
@@ -2327,16 +2295,13 @@ int main(int argc, char** argv)
 
   if (opt_close_coin_door && opt_no_serial)
   {
-    fprintf(stderr,
-            "--close-coin-door requires serial communication and cannot be used with --no-serial\n");
+    fprintf(stderr, "--close-coin-door requires serial communication and cannot be used with --no-serial\n");
     return 1;
   }
 
-  if (opt_interactive &&
-      !(opt_coil_test || opt_lamp_test || opt_flasher_test))
+  if (opt_interactive && !(opt_coil_test || opt_lamp_test || opt_flasher_test))
   {
-    fprintf(stderr,
-            "--interactive is only supported with --coil-test, --lamp-test, or --flasher-test\n");
+    fprintf(stderr, "--interactive is only supported with --coil-test, --lamp-test, or --flasher-test\n");
     return 1;
   }
 
@@ -2350,12 +2315,10 @@ int main(int argc, char** argv)
     opt_debug = ppuc->GetDebug();
   }
 
-  if (!ValidateSpeechAudioUsage(
-          opt_no_sound,
-          (opt_speech || HasOptionValue(opt_speech_voice) ||
-           HasOptionValue(opt_speech_rate_arg) ||
-           HasOptionValue(opt_speech_pitch_arg)),
-          opt_greeting, opt_speech_file, &speechValidationError))
+  if (!ValidateSpeechAudioUsage(opt_no_sound,
+                                (opt_speech || HasOptionValue(opt_speech_voice) ||
+                                 HasOptionValue(opt_speech_rate_arg) || HasOptionValue(opt_speech_pitch_arg)),
+                                opt_greeting, opt_speech_file, &speechValidationError))
   {
     fprintf(stderr, "%s\n", speechValidationError.c_str());
     return 1;
@@ -2378,25 +2341,22 @@ int main(int argc, char** argv)
     }
   }
 
-  const auto initializeSpeechIfNeeded = [&]() -> bool {
-    if (pSpeechService != nullptr ||
-        !(opt_speech || opt_greeting || opt_speech_file))
+  const auto initializeSpeechIfNeeded = [&]() -> bool
+  {
+    if (pSpeechService != nullptr || !(opt_speech || opt_greeting || opt_speech_file))
     {
       return true;
     }
 
     std::string speechBackendError;
-    if (!CreateConfiguredSpeechService(*pAudioOutput, speechBackend,
-                                       speechOptions, &pSpeechService,
+    if (!CreateConfiguredSpeechService(*pAudioOutput, speechBackend, speechOptions, &pSpeechService,
                                        &speechBackendError))
     {
       fprintf(stderr, "Speech init failed: %s\n",
-              speechBackendError.empty() ? "unknown backend error"
-                                         : speechBackendError.c_str());
+              speechBackendError.empty() ? "unknown backend error" : speechBackendError.c_str());
       return false;
     }
-    PrintSpeechConfiguration(opt_speech_backend, speechOptions,
-                             opt_speech_rate_arg, opt_speech_pitch_arg);
+    PrintSpeechConfiguration(opt_speech_backend, speechOptions, opt_speech_rate_arg, opt_speech_pitch_arg);
 
     return true;
   };
@@ -2404,26 +2364,20 @@ int main(int argc, char** argv)
   if (opt_greeting)
   {
     std::string speechBackendError;
-    if (!CreateConfiguredSpeechService(*pAudioOutput, speechBackend,
-                                       speechOptions, &pSpeechService,
+    if (!CreateConfiguredSpeechService(*pAudioOutput, speechBackend, speechOptions, &pSpeechService,
                                        &speechBackendError))
     {
       fprintf(stderr, "Speech init failed: %s\n",
-              speechBackendError.empty() ? "unknown backend error"
-                                         : speechBackendError.c_str());
+              speechBackendError.empty() ? "unknown backend error" : speechBackendError.c_str());
       return 1;
     }
-    PrintSpeechConfiguration(opt_speech_backend, speechOptions,
-                             opt_speech_rate_arg, opt_speech_pitch_arg);
+    PrintSpeechConfiguration(opt_speech_backend, speechOptions, opt_speech_rate_arg, opt_speech_pitch_arg);
     pSpeechService->SpeakText("P P U C, the pinball power-up controller.");
   }
 
-  const bool bench_test_mode =
-      opt_switch_test || opt_coil_test || opt_lamp_test || opt_gi_test ||
-      opt_flasher_test;
+  const bool bench_test_mode = opt_switch_test || opt_coil_test || opt_lamp_test || opt_gi_test || opt_flasher_test;
   const bool diagnostic_mode =
-      bench_test_mode || opt_debug || opt_debug_errors || opt_debug_switches ||
-      opt_debug_coils || opt_debug_lamps;
+      bench_test_mode || opt_debug || opt_debug_errors || opt_debug_switches || opt_debug_coils || opt_debug_lamps;
   if (diagnostic_mode)
   {
     opt_translite = NULL;
@@ -2452,8 +2406,7 @@ int main(int argc, char** argv)
       return 1;
     }
 
-    if (opt_translite_attract &&
-        !LoadRGB24Image(opt_translite_attract, &transliteAttractImage, &transliteLoadError))
+    if (opt_translite_attract && !LoadRGB24Image(opt_translite_attract, &transliteAttractImage, &transliteLoadError))
     {
       printf("%s\n", transliteLoadError.c_str());
       return 1;
@@ -2462,21 +2415,12 @@ int main(int argc, char** argv)
     const LoadedRGB24Image& initialImage =
         !transliteAttractImage.pixels.empty() ? transliteAttractImage : transliteImage;
     pTransliteDisplay = std::make_unique<DMDUtil::KMSDMD>(
-        "PPUC Translite",
-        opt_translite_width,
-        opt_translite_height,
-        initialImage.width,
-        initialImage.height,
-        opt_translite_screen,
-        0,
-        0,
-        DMDUtil::KMSDMD::RenderingMode::SmoothScaling,
-        DMDUtil::KMSDMD::Rotation::Rotate0);
+        "PPUC Translite", opt_translite_width, opt_translite_height, initialImage.width, initialImage.height,
+        opt_translite_screen, 0, 0, DMDUtil::KMSDMD::RenderingMode::SmoothScaling, DMDUtil::KMSDMD::Rotation::Rotate0);
 
     if (!pTransliteDisplay || !pTransliteDisplay->IsReady())
     {
-      printf("KMS translite setup failed: %s\n",
-             pTransliteDisplay ? pTransliteDisplay->GetError() : "unknown error");
+      printf("KMS translite setup failed: %s\n", pTransliteDisplay ? pTransliteDisplay->GetError() : "unknown error");
       pTransliteDisplay.reset();
       return 1;
     }
@@ -2548,8 +2492,7 @@ int main(int argc, char** argv)
   ppuc->SetForceHardReset(opt_hard_reset);
   ppuc->SetSkippedBoardsCsv(opt_skip_boards);
   ppuc->SetSwitchReplyDelayUs(opt_switch_reply_delay_us);
-  ppuc->SetDisableFastFlipForTests(opt_switch_test || opt_coil_test ||
-                                   opt_lamp_test || opt_gi_test ||
+  ppuc->SetDisableFastFlipForTests(opt_switch_test || opt_coil_test || opt_lamp_test || opt_gi_test ||
                                    opt_flasher_test);
 
   if (opt_debug || opt_debug_errors)
@@ -2578,13 +2521,11 @@ int main(int argc, char** argv)
     opt_serial = ppuc->GetSerial();
   }
 
-  if (opt_switch_test || opt_coil_test || opt_lamp_test || opt_gi_test ||
-      opt_flasher_test)
+  if (opt_switch_test || opt_coil_test || opt_lamp_test || opt_gi_test || opt_flasher_test)
   {
     if (!ppuc->Connect())
     {
-      printf("Unable to open serial communication to PPUC boards on %s.\n",
-             opt_serial ? opt_serial : "(null)");
+      printf("Unable to open serial communication to PPUC boards on %s.\n", opt_serial ? opt_serial : "(null)");
       return 1;
     }
 
@@ -2596,15 +2537,13 @@ int main(int argc, char** argv)
     ppuc->StartUpdates();
     const bool testRequiresHighPower = opt_coil_test || opt_flasher_test;
     const bool closeVirtualCoinDoorForTest =
-        testRequiresHighPower && opt_close_coin_door &&
-        ppuc->IsSwitchVirtualized(ppuc->GetCoinDoorClosedSwitch());
+        testRequiresHighPower && opt_close_coin_door && ppuc->IsSwitchVirtualized(ppuc->GetCoinDoorClosedSwitch());
 
     if (closeVirtualCoinDoorForTest)
     {
       ppuc->SetSwitchState(ppuc->GetCoinDoorClosedSwitch(), 1);
     }
-    ppuc->SetSolenoidState(ppuc->GetGameOnSolenoid(),
-                           testRequiresHighPower ? 1 : 0);
+    ppuc->SetSolenoidState(ppuc->GetGameOnSolenoid(), testRequiresHighPower ? 1 : 0);
 
     BenchTestMode testMode = BenchTestMode::SWITCHES;
     if (opt_lamp_test)
@@ -2635,8 +2574,7 @@ int main(int argc, char** argv)
       ScopedRawTerminalMode rawTerminal(testRunner.interactive);
       if (testRunner.mode == BenchTestMode::SWITCHES)
       {
-        const uint32_t cleanChainBaseline =
-            ppuc->GetCleanSwitchReplyChainCount();
+        const uint32_t cleanChainBaseline = ppuc->GetCleanSwitchReplyChainCount();
         WaitForCleanSwitchReplyCycle(ppuc, cleanChainBaseline);
       }
       PrimeBenchSwitchStates(ppuc, testRunner);
@@ -2671,34 +2609,36 @@ int main(int argc, char** argv)
   {
     pPUPTriggerEngine = std::make_unique<PUPTriggerEngine>();
     pPUPTriggerEngine->SetDebug(opt_debug);
-    pPUPTriggerEngine->SetTriggerCallback([](const char source, const uint16_t id, const uint8_t value) {
-      if (source == kBoardEffectTriggerSource)
-      {
-        if (ppuc != nullptr)
+    pPUPTriggerEngine->SetTriggerCallback(
+        [](const char source, const uint16_t id, const uint8_t value)
         {
-          ppuc->TriggerEvent(EVENT_SOURCE_EFFECT, id, value);
-        }
-        return;
-      }
-
-      if (source == kSpeechTriggerSource)
-      {
-        if (pSpeechService && pSpeechTriggerMap)
-        {
-          const std::string* text = pSpeechTriggerMap->Find(id);
-          if (text)
+          if (source == kBoardEffectTriggerSource)
           {
-            pSpeechService->SpeakText(*text);
+            if (ppuc != nullptr)
+            {
+              ppuc->TriggerEvent(EVENT_SOURCE_EFFECT, id, value);
+            }
+            return;
           }
-        }
-        return;
-      }
 
-      if (pDmd)
-      {
-        pDmd->SetPUPTrigger(source, id, value);
-      }
-    });
+          if (source == kSpeechTriggerSource)
+          {
+            if (pSpeechService && pSpeechTriggerMap)
+            {
+              const std::string* text = pSpeechTriggerMap->Find(id);
+              if (text)
+              {
+                pSpeechService->SpeakText(*text);
+              }
+            }
+            return;
+          }
+
+          if (pDmd)
+          {
+            pDmd->SetPUPTrigger(source, id, value);
+          }
+        });
 
     std::string error;
     if (!pPUPTriggerEngine->LoadRules(opt_pup_triggers, error))
@@ -2718,10 +2658,8 @@ int main(int argc, char** argv)
       printf("%s: %s\n", error.c_str(), opt_speech_file);
       return 1;
     }
-    printf("Loaded %zu speech trigger text entr%s from %s\n",
-           pSpeechTriggerMap->GetEntryCount(),
-           pSpeechTriggerMap->GetEntryCount() == 1 ? "y" : "ies",
-           opt_speech_file);
+    printf("Loaded %zu speech trigger text entr%s from %s\n", pSpeechTriggerMap->GetEntryCount(),
+           pSpeechTriggerMap->GetEntryCount() == 1 ? "y" : "ies", opt_speech_file);
   }
 
   PinmameConfig config = {
@@ -2759,9 +2697,7 @@ int main(int argc, char** argv)
   if (opt_pinmame_path != nullptr)
   {
     snprintf((char*)config.vpmPath, PINMAME_MAX_PATH, "%s%s", opt_pinmame_path,
-             (opt_pinmame_path[0] != '\0' && opt_pinmame_path[strlen(opt_pinmame_path) - 1] != '/')
-                 ? "/"
-                 : "");
+             (opt_pinmame_path[0] != '\0' && opt_pinmame_path[strlen(opt_pinmame_path) - 1] != '/') ? "/" : "");
   }
   else
   {
@@ -2837,9 +2773,10 @@ int main(int argc, char** argv)
     DMDUtil::KMSDMD::RenderingMode virtualDmdRenderingMode = DMDUtil::KMSDMD::RenderingMode::Dots;
     if (!DMDUtil::ParseKMSDMDRenderingMode(opt_virtual_dmd_renderer, &virtualDmdRenderingMode))
     {
-      printf("Unsupported virtual DMD renderer '%s'. Use one of: dots, squares, scale2x, scale4x, "
-             "scale2x-dots, scale4x-dots, scale2x-squares, scale4x-squares, smooth, xbrz\n",
-             opt_virtual_dmd_renderer);
+      printf(
+          "Unsupported virtual DMD renderer '%s'. Use one of: dots, squares, scale2x, scale4x, "
+          "scale2x-dots, scale4x-dots, scale2x-squares, scale4x-squares, smooth, xbrz\n",
+          opt_virtual_dmd_renderer);
       return 1;
     }
 
@@ -2852,10 +2789,10 @@ int main(int argc, char** argv)
 
     const int kmsVirtualDmdX = opt_virtual_dmd_x == SDL_WINDOWPOS_UNDEFINED ? 0 : opt_virtual_dmd_x;
     const int kmsVirtualDmdY = opt_virtual_dmd_y == SDL_WINDOWPOS_UNDEFINED ? 0 : opt_virtual_dmd_y;
-    pVirtualDMD = DMDUtil::CreateKMSDMD(*pDmd, "PPUC DMD", opt_virtual_dmd_width, opt_virtual_dmd_height,
-                                        opt_virtual_dmd_hd ? 256 : 128, opt_virtual_dmd_hd ? 64 : 32,
-                                        opt_virtual_dmd_screen, kmsVirtualDmdX, kmsVirtualDmdY,
-                                        virtualDmdRenderingMode, virtualDmdRotation);
+    pVirtualDMD =
+        DMDUtil::CreateKMSDMD(*pDmd, "PPUC DMD", opt_virtual_dmd_width, opt_virtual_dmd_height,
+                              opt_virtual_dmd_hd ? 256 : 128, opt_virtual_dmd_hd ? 64 : 32, opt_virtual_dmd_screen,
+                              kmsVirtualDmdX, kmsVirtualDmdY, virtualDmdRenderingMode, virtualDmdRotation);
 
     if (!pVirtualDMD)
     {
@@ -2866,9 +2803,10 @@ int main(int argc, char** argv)
     DMDUtil::SDLDMD::RenderingMode virtualDmdRenderingMode = DMDUtil::SDLDMD::RenderingMode::Dots;
     if (!DMDUtil::ParseSDLDMDRenderingMode(opt_virtual_dmd_renderer, &virtualDmdRenderingMode))
     {
-      printf("Unsupported virtual DMD renderer '%s'. Use one of: dots, squares, scale2x, scale4x, "
-             "scale2x-dots, scale4x-dots, scale2x-squares, scale4x-squares, smooth, xbrz\n",
-             opt_virtual_dmd_renderer);
+      printf(
+          "Unsupported virtual DMD renderer '%s'. Use one of: dots, squares, scale2x, scale4x, "
+          "scale2x-dots, scale4x-dots, scale2x-squares, scale4x-squares, smooth, xbrz\n",
+          opt_virtual_dmd_renderer);
       return SDL_APP_FAILURE;
     }
 
@@ -2879,11 +2817,11 @@ int main(int argc, char** argv)
       return SDL_APP_FAILURE;
     }
 
-    pVirtualDMD = DMDUtil::CreateSDLDMD(*pDmd, "PPUC DMD", opt_virtual_dmd_width, opt_virtual_dmd_height,
-                                        opt_virtual_dmd_window ? SDL_WINDOW_BORDERLESS : SDL_WINDOW_FULLSCREEN,
-                                        opt_virtual_dmd_hd ? 256 : 128, opt_virtual_dmd_hd ? 64 : 32,
-                                        opt_virtual_dmd_screen, opt_virtual_dmd_x, opt_virtual_dmd_y,
-                                        virtualDmdRenderingMode, virtualDmdRotation);
+    pVirtualDMD =
+        DMDUtil::CreateSDLDMD(*pDmd, "PPUC DMD", opt_virtual_dmd_width, opt_virtual_dmd_height,
+                              opt_virtual_dmd_window ? SDL_WINDOW_BORDERLESS : SDL_WINDOW_FULLSCREEN,
+                              opt_virtual_dmd_hd ? 256 : 128, opt_virtual_dmd_hd ? 64 : 32, opt_virtual_dmd_screen,
+                              opt_virtual_dmd_x, opt_virtual_dmd_y, virtualDmdRenderingMode, virtualDmdRotation);
 
     if (!pVirtualDMD)
     {
@@ -2897,8 +2835,7 @@ int main(int argc, char** argv)
 
   if (!opt_no_serial && !ppuc->Connect())
   {
-    printf("Unable to open serial communication to PPUC boards on %s.\n",
-           opt_serial ? opt_serial : "(null)");
+    printf("Unable to open serial communication to PPUC boards on %s.\n", opt_serial ? opt_serial : "(null)");
     return 1;
   }
 
@@ -2938,7 +2875,8 @@ int main(int argc, char** argv)
     int index_recv = 0;
 
     ppuc->StartUpdates();
-    if (opt_close_coin_door) {
+    if (opt_close_coin_door)
+    {
       ppuc->SetSwitchState(ppuc->GetCoinDoorClosedSwitch(), 1);
     }
 
@@ -2956,6 +2894,14 @@ int main(int argc, char** argv)
       {
         const uint8_t newSwitchState = switchState->state == 0 ? 0 : 1;
 
+        // Switches between 200 and 240 are custom switches within the io-boards which should not be sent to
+        // pinmame. Switches above 240 will become negative values, for example 243 => -3.
+        if (switchState->number < 200 || switchState->number > 241)
+        {
+          const int switchNumber = (switchState->number < 241) ? switchState->number : 240 - switchState->number;
+          PinmameSetSwitch(switchNumber, newSwitchState);
+        }
+
         if (opt_debug || opt_debug_switches)
         {
           printf("Switch updated: #%d, %d\n", switchState->number, newSwitchState);
@@ -2964,14 +2910,6 @@ int main(int argc, char** argv)
         if (pPUPTriggerEngine)
         {
           pPUPTriggerEngine->OnSwitchState(switchState->number, newSwitchState);
-        }
-
-        // Switches between 200 and 240 are custom switches within the io-boards which should not be sent to
-        // pinmame. Switches above 240 will become negative values, for example 243 => -3.
-        if (switchState->number < 200 || switchState->number > 241)
-        {
-          const int switchNumber = (switchState->number < 241) ? switchState->number : 240 - switchState->number;
-          PinmameSetSwitch(switchNumber, newSwitchState);
         }
       }
 

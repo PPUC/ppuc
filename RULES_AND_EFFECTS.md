@@ -1,13 +1,13 @@
 # Flash Rules And Effects
 
-This document describes the behavior added by the PPUC layer on top of the original `Flash` ROM when the game is run through PinMAME.
+This document describes the behavior added by the PPUC layer on top of the original ROM when the game is run through PinMAME.
 
 The original ROM still owns the game rules, scoring, lamp logic, solenoid timing, switch matrix behavior, ball flow, and attract/game modes.
 PPUC adds extra outputs and trigger-driven presentation around that baseline.
 
 ## What PPUC Adds
 
-PPUC currently adds four kinds of enhancements for `Flash`:
+PPUC currently adds four kinds of enhancements:
 
 1. Extra addressable LEDs that do not exist in the original machine.
 2. A shaker motor effect layer.
@@ -17,19 +17,20 @@ PPUC currently adds four kinds of enhancements for `Flash`:
 PPUC does not replace the ROM logic here.
 It observes ROM-driven switch, lamp, and coil activity and uses that activity to drive modern extras.
 
-## Cabinet LED String
+## Flash Example
+### Cabinet LED String
 
 The Flash game config defines an addressable LED string named `Cabinet` on IO board `1`, port `29`.
 
 Source:
 [Flash_877888bc-06a9-428a-91ab-6d821e104107.yml](../ppuc_games/flash/Flash_877888bc-06a9-428a-91ab-6d821e104107.yml)
 
-### Physical Layout
+#### Physical Layout
 
 - LEDs `0-7` are assigned individually.
 - LEDs `8-93` are grouped into segment `1`.
 
-### LEDs 0-7
+#### LEDs 0-7
 
 These are configured as GI-linked cabinet/button/status lights:
 
@@ -44,7 +45,7 @@ These are configured as GI-linked cabinet/button/status lights:
 
 All of these map to GI string `1`, so they follow ROM-driven GI state rather than acting as independent PinMAME lamps.
 
-### LEDs 8-93
+#### LEDs 8-93
 
 This range is configured as `segment 1`.
 The intent of this segment is effect playback, not direct PinMAME lamp ownership.
@@ -63,7 +64,7 @@ Current configured effect:
 Under the new model, this segment should be defined in YAML only as an effect target.
 The logic deciding when it starts should live only in the rule file.
 
-## Shaker Motor
+### Shaker Motor
 
 The Flash game config also defines a shaker on IO board `1`, port `19`.
 
@@ -78,7 +79,7 @@ PPUC adds it as a modern feedback device.
 
 ### Configured Shaker Effects
 
-Two PWM effects are currently defined in the Flash YAML.
+Two PWM effects should be defined in the Flash YAML.
 
 #### Jet Bumper Shaker
 
@@ -127,7 +128,7 @@ F cabinet-flash-attract 1 : lamp_rising(5) && attract
 
 Here:
 
-- `F` is the target channel for the effect event that will be emitted
+- `F` is the target channel for the effect event that will be emitted. It means effect.
 - `cabinet-flash-attract` is the effect trigger ID or name
 - `lamp_rising(5) && attract` is the condition
 
@@ -262,11 +263,14 @@ So the intended setup is now:
 - `flash.rules` defines all boolean logic and trigger conditions
 - YAML effect `trigger:` blocks are no longer needed for named effects
 
-## TODO
+## Config Tool Status
 
-- `../config-tool` still generates effect `trigger:` blocks in YAML.
-- Update `../config-tool` so generated LED and PWM effect entries only emit static effect definitions.
-- After that change, all trigger logic should live exclusively in the rule file.
+`../config-tool` now needs one explicit machine effect name per LED or PWM effect.
+
+- That field is exported as YAML `name:`.
+- The old effect-level `trigger:` field has been removed from LED and PWM effect content types.
+- Generated YAML now emits only static effect definitions plus the machine effect name.
+- All trigger logic now belongs exclusively in the `*.rules` file.
 
 ## Effect Names
 
