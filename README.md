@@ -49,6 +49,9 @@ These components are still in an early development stage and the documentation w
 * -d
     * enable debug mode, overwrites *debug* setting in config file
     * optional
+* --debug-effects
+    * enable effect trigger debug output
+    * optional
 * -u
     * enable Serum colorization
     * optional

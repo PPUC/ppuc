@@ -247,6 +247,7 @@ bool opt_debug_errors = false;
 bool opt_debug_switches = false;
 bool opt_debug_coils = false;
 bool opt_debug_lamps = false;
+bool opt_debug_effects = false;
 bool opt_no_serial = false;
 bool opt_no_sound = false;
 bool opt_speech = false;
@@ -1416,6 +1417,10 @@ static struct cag_option options[] = {
      .access_name = "debug-lamps",
      .value_name = NULL,
      .description = "Enable lamps debug output (optional)"},
+    {.identifier = 'f',
+     .access_name = "debug-effects",
+     .value_name = NULL,
+     .description = "Enable effect trigger debug output (optional)"},
     {.identifier = '0', .access_name = "switch-test", .value_name = NULL, .description = "Run switch test"},
     {.identifier = '1', .access_name = "coil-test", .value_name = NULL, .description = "Run coil test"},
     {.identifier = '2', .access_name = "lamp-test", .value_name = NULL, .description = "Run lamp test"},
@@ -1962,6 +1967,8 @@ int main(int argc, char** argv)
           opt_debug_coils = ParseIniBool(value);
         else if (key == "DebugLamps")
           opt_debug_lamps = ParseIniBool(value);
+        else if (key == "DebugEffects")
+          opt_debug_effects = ParseIniBool(value);
         else if (key == "Serum")
           opt_serum = ParseIniBool(value);
         else if (key == "SerumTimeout")
@@ -2168,6 +2175,9 @@ int main(int argc, char** argv)
         break;
       case 'L':
         opt_debug_lamps = true;
+        break;
+      case 'f':
+        opt_debug_effects = true;
         break;
       case '0':
         opt_switch_test = true;
@@ -2377,7 +2387,8 @@ int main(int argc, char** argv)
 
   const bool bench_test_mode = opt_switch_test || opt_coil_test || opt_lamp_test || opt_gi_test || opt_flasher_test;
   const bool diagnostic_mode =
-      bench_test_mode || opt_debug || opt_debug_errors || opt_debug_switches || opt_debug_coils || opt_debug_lamps;
+      bench_test_mode || opt_debug || opt_debug_errors || opt_debug_switches || opt_debug_coils || opt_debug_lamps ||
+      opt_debug_effects;
   if (diagnostic_mode)
   {
     opt_translite = NULL;
@@ -2614,6 +2625,10 @@ int main(int argc, char** argv)
         {
           if (source == kBoardEffectTriggerSource)
           {
+            if (opt_debug || opt_debug_effects)
+            {
+              printf("Effect trigger emitted: id=%u value=%u\n", id, value);
+            }
             if (ppuc != nullptr)
             {
               ppuc->TriggerEvent(EVENT_SOURCE_EFFECT, id, value);
