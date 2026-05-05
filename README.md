@@ -67,6 +67,11 @@ These components are still in an early development stage and the documentation w
 * --speech-file path
     * path to a speech trigger text file used with speech trigger rules
     * optional
+* --music-files csv
+    * comma-separated MP3 playlist for gameplay background music
+    * plays only while the game is not in attract mode
+    * ducks while PinMAME or speech audio is active
+    * optional
 * --speech-backend value
     * speech backend to use: `auto`, `flite`, `espeak-ng`
     * optional

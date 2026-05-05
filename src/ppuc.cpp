@@ -253,6 +253,7 @@ bool opt_no_sound = false;
 bool opt_speech = false;
 bool opt_greeting = false;
 const char* opt_speech_file = NULL;
+const char* opt_music_files = NULL;
 const char* opt_speech_backend = "auto";
 const char* opt_speech_voice = NULL;
 const char* opt_speech_rate_arg = NULL;
@@ -1327,6 +1328,10 @@ static struct cag_option options[] = {
      .access_name = "speech-file",
      .value_name = "VALUE",
      .description = "Path to speech trigger text file (optional)"},
+    {.identifier = 'o',
+     .access_name = "music-files",
+     .value_name = "VALUE",
+     .description = "Comma-separated MP3 playlist for in-game background music (optional)"},
     {.identifier = 'U',
      .access_name = "speech-backend",
      .value_name = "VALUE",
@@ -1744,6 +1749,11 @@ void PINMAMECALLBACK OnSolenoidUpdated(PinmameSolenoidState* p_solenoidState, co
 
   if (isGameOnCoil)
   {
+    if (pAudioOutput != nullptr)
+    {
+      pAudioOutput->SetMusicEnabled(coilState != 0);
+    }
+
     if (coilState)
     {
       if (opt_debug || opt_debug_coils)
@@ -1939,6 +1949,8 @@ int main(int argc, char** argv)
           opt_pup_triggers = DuplicateOptionalIniString(value);
         else if (key == "SpeechFile")
           opt_speech_file = DuplicateOptionalIniString(value);
+        else if (key == "MusicFiles")
+          opt_music_files = DuplicateOptionalIniString(value);
         else if (key == "Translite")
           opt_translite = DuplicateOptionalIniString(value);
         else if (key == "TransliteAttract")
@@ -2108,6 +2120,9 @@ int main(int argc, char** argv)
         break;
       case '9':
         opt_speech_file = cag_option_get_value(&cag_context);
+        break;
+      case 'o':
+        opt_music_files = cag_option_get_value(&cag_context);
         break;
       case 'U':
         opt_speech_backend = cag_option_get_value(&cag_context);
@@ -2334,6 +2349,12 @@ int main(int argc, char** argv)
     return 1;
   }
 
+  if (opt_no_sound && HasOptionValue(opt_music_files))
+  {
+    fprintf(stderr, "--music-files requires audio output and cannot be used with --no-sound\n");
+    return 1;
+  }
+
   if (!opt_no_sound)
   {
     // Initialize the sound device
@@ -2348,6 +2369,17 @@ int main(int argc, char** argv)
     {
       printf("Audio output init failed: %s\n", SDL_GetError());
       return 1;
+    }
+
+    if (HasOptionValue(opt_music_files))
+    {
+      std::string musicError;
+      if (!pAudioOutput->LoadMusicFilesCsv(opt_music_files, &musicError))
+      {
+        fprintf(stderr, "Music init failed: %s\n", musicError.c_str());
+        return 1;
+      }
+      pAudioOutput->SetMusicEnabled(false);
     }
   }
 

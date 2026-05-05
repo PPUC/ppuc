@@ -8,6 +8,7 @@ NUM_PROCS=$(nproc)
 
 echo "Building libraries..."
 echo "  SDL_IMAGE_SHA: ${SDL_IMAGE_SHA}"
+echo "  SDL_MIXER_SHA: ${SDL_MIXER_SHA}"
 echo "  FLITE_SHA: ${FLITE_SHA}"
 echo "  ESPEAK_NG_SHA: ${ESPEAK_NG_SHA}"
 echo "  PINMAME_SHA: ${PINMAME_SHA}"
@@ -28,7 +29,7 @@ mkdir -p external ${CACHE_DIR}
 cd external
 
 #
-# build libsdldmd, SDL3_image
+# build libsdldmd, SDL3_image, SDL3_mixer
 #
 
 LIBSDLDMD_EXPECTED_SHA="${LIBSDLDMD_SHA}"
@@ -90,6 +91,45 @@ if [ "${SDL3_IMAGE_EXPECTED_SHA}" != "${SDL3_IMAGE_FOUND_SHA}" ]; then
    cd ..
 
    echo "$SDL3_IMAGE_EXPECTED_SHA" > cache.txt
+
+   cd ..
+fi
+
+SDL3_MIXER_EXPECTED_SHA="${SDL_MIXER_SHA}-${LIBSDLDMD_SHA}-mp3only-v1"
+SDL3_MIXER_FOUND_SHA="$([ -f SDL3_mixer/cache.txt ] && cat SDL3_mixer/cache.txt || echo "")"
+
+if [ "${SDL3_MIXER_EXPECTED_SHA}" != "${SDL3_MIXER_FOUND_SHA}" ]; then
+   echo "Building SDL3_mixer. Expected: ${SDL3_MIXER_EXPECTED_SHA}, Found: ${SDL3_MIXER_FOUND_SHA}"
+
+   rm -rf SDL3_mixer
+   mkdir SDL3_mixer
+   cd SDL3_mixer
+
+   curl -sL https://github.com/libsdl-org/SDL_mixer/archive/${SDL_MIXER_SHA}.tar.gz -o SDL_mixer-${SDL_MIXER_SHA}.tar.gz
+   tar xzf SDL_mixer-${SDL_MIXER_SHA}.tar.gz
+   mv SDL_mixer-${SDL_MIXER_SHA#release-} SDL_mixer 2>/dev/null || mv SDL_mixer-${SDL_MIXER_SHA} SDL_mixer
+   cd SDL_mixer
+   cmake \
+      -DBUILD_SHARED_LIBS=ON \
+      -DSDLMIXER_SAMPLES=OFF \
+      -DSDLMIXER_FLAC=OFF \
+      -DSDLMIXER_GME=OFF \
+      -DSDLMIXER_MOD=OFF \
+      -DSDLMIXER_MP3=ON \
+      -DSDLMIXER_MP3_DRMP3=ON \
+      -DSDLMIXER_MP3_MPG123=OFF \
+      -DSDLMIXER_OPUS=OFF \
+      -DSDLMIXER_VORBIS_STB=OFF \
+      -DSDLMIXER_VORBIS_VORBISFILE=OFF \
+      -DSDLMIXER_VORBIS_TREMOR=OFF \
+      -DSDLMIXER_WAVPACK=OFF \
+      -DSDL3_DIR=../../libsdldmd/libsdldmd/external/SDL/build \
+      -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
+      -B build
+   cmake --build build -- -j${NUM_PROCS}
+   cd ..
+
+   echo "$SDL3_MIXER_EXPECTED_SHA" > cache.txt
 
    cd ..
 fi
@@ -254,6 +294,9 @@ cp -r libsdldmd/libsdldmd/third-party/include/SDL3 ../third-party/include/
 
 cp -a SDL3_image/SDL_image/build/libSDL3_image.{so,so.*} ../third-party/runtime-libs/linux-aarch64/
 cp -r SDL3_image/SDL_image/include/SDL3_image ../third-party/include/
+
+cp -a SDL3_mixer/SDL_mixer/build/libSDL3_mixer.{so,so.*} ../third-party/runtime-libs/linux-aarch64/
+cp -r SDL3_mixer/SDL_mixer/include/SDL3_mixer ../third-party/include/
 
 cp -r espeak-ng/espeak-ng/install/include/espeak-ng ../third-party/include/
 cp -a espeak-ng/espeak-ng/install/lib/libespeak-ng*.so* ../third-party/runtime-libs/linux-aarch64/

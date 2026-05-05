@@ -52,6 +52,8 @@ set(CMAKE_C_VISIBILITY_PRESET hidden)
 
 set(PPUC_INCLUDE_DIRS "")
 set(PPUC_STAGED_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include")
+set(PPUC_STAGED_BUILD_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third-party/build-libs/${PLATFORM}-${ARCH}")
+set(PPUC_STAGED_RUNTIME_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third-party/runtime-libs/${PLATFORM}-${ARCH}")
 
 if(PPUC_USE_KMSDMD)
    find_path(PPUC_KMSDMD_INCLUDE_DIR
@@ -170,11 +172,61 @@ else()
    message(STATUS "espeak-ng speech backend: disabled")
 endif()
 
+set(PPUC_HAS_SDL3_MIXER_HEADERS FALSE)
+if(EXISTS "${PPUC_STAGED_INCLUDE_DIR}/SDL3_mixer/SDL_mixer.h")
+   set(PPUC_HAS_SDL3_MIXER_HEADERS TRUE)
+endif()
+
+set(PPUC_HAS_SDL3_MIXER_LIBS FALSE)
+set(PPUC_SDL3_MIXER_LINK_NAME "")
+if(PLATFORM STREQUAL "win")
+   if(ARCH STREQUAL "x64")
+      if(EXISTS "${PPUC_STAGED_BUILD_LIB_DIR}/SDL3_mixer64.lib")
+         set(PPUC_HAS_SDL3_MIXER_LIBS TRUE)
+         set(PPUC_SDL3_MIXER_LINK_NAME SDL3_mixer64)
+      endif()
+   else()
+      if(EXISTS "${PPUC_STAGED_BUILD_LIB_DIR}/SDL3_mixer.lib")
+         set(PPUC_HAS_SDL3_MIXER_LIBS TRUE)
+         set(PPUC_SDL3_MIXER_LINK_NAME SDL3_mixer)
+      endif()
+   endif()
+elseif(PLATFORM STREQUAL "win-mingw")
+   if(ARCH STREQUAL "x64")
+      if(EXISTS "${PPUC_STAGED_BUILD_LIB_DIR}/libSDL3_mixer64.dll.a")
+         set(PPUC_HAS_SDL3_MIXER_LIBS TRUE)
+         set(PPUC_SDL3_MIXER_LINK_NAME SDL3_mixer64)
+      endif()
+   endif()
+else()
+   find_library(PPUC_SDL3_MIXER_LIBRARY
+      NAMES SDL3_mixer
+      PATHS "${PPUC_STAGED_RUNTIME_LIB_DIR}"
+   )
+   if(PPUC_SDL3_MIXER_LIBRARY)
+      set(PPUC_HAS_SDL3_MIXER_LIBS TRUE)
+      set(PPUC_SDL3_MIXER_LINK_NAME SDL3_mixer)
+   endif()
+endif()
+
+set(PPUC_ENABLE_SDL3_MIXER FALSE)
+if(PPUC_HAS_SDL3_MIXER_HEADERS AND PPUC_HAS_SDL3_MIXER_LIBS)
+   set(PPUC_ENABLE_SDL3_MIXER TRUE)
+   message(STATUS "SDL3_mixer background music: enabled")
+elseif(PPUC_HAS_SDL3_MIXER_HEADERS OR PPUC_HAS_SDL3_MIXER_LIBS)
+   message(WARNING "SDL3_mixer background music: disabled due to incomplete staged artifacts")
+else()
+   message(STATUS "SDL3_mixer background music: disabled")
+endif()
+
 if(PPUC_ENABLE_ESPEAK_NG)
    target_compile_definitions(ppuc-pinmame PRIVATE PPUC_HAS_ESPEAK_NG)
    target_sources(ppuc-pinmame PRIVATE
       src/ESpeakNgSpeechService.cpp
    )
+endif()
+if(PPUC_ENABLE_SDL3_MIXER)
+   target_compile_definitions(ppuc-pinmame PRIVATE PPUC_HAS_SDL3_MIXER)
 endif()
 
 if(PLATFORM STREQUAL "win" OR PLATFORM STREQUAL "win-mingw")
@@ -211,6 +263,11 @@ if(PLATFORM STREQUAL "win" OR PLATFORM STREQUAL "win-mingw")
    if(PPUC_ENABLE_ESPEAK_NG)
       target_link_libraries(ppuc-pinmame LINK_PUBLIC
          ${PPUC_ESPEAK_NG_LIBRARY}
+      )
+   endif()
+   if(PPUC_ENABLE_SDL3_MIXER)
+      target_link_libraries(ppuc-pinmame LINK_PUBLIC
+         ${PPUC_SDL3_MIXER_LINK_NAME}
       )
    endif()
 else()
@@ -261,6 +318,11 @@ else()
          ${PPUC_ESPEAK_NG_LIBRARY}
       )
    endif()
+   if(PPUC_ENABLE_SDL3_MIXER)
+      target_link_libraries(ppuc-pinmame LINK_PUBLIC
+         ${PPUC_SDL3_MIXER_LINK_NAME}
+      )
+   endif()
 endif()
 
 if(PPUC_BUILD_MENU)
@@ -278,6 +340,9 @@ target_include_directories(ppuc-menu PUBLIC
 target_compile_definitions(ppuc-menu PRIVATE
    PPUC_RUNTIME_LIB_SUBDIR="${PLATFORM}-${ARCH}"
 )
+if(PPUC_ENABLE_SDL3_MIXER)
+   target_compile_definitions(ppuc-menu PRIVATE PPUC_HAS_SDL3_MIXER)
+endif()
 
 if(PPUC_ENABLE_FLITE)
    target_compile_definitions(ppuc-menu PRIVATE PPUC_HAS_FLITE)
@@ -321,6 +386,11 @@ if(PLATFORM STREQUAL "win" OR PLATFORM STREQUAL "win-mingw")
          ${PPUC_ESPEAK_NG_LIBRARY}
       )
    endif()
+   if(PPUC_ENABLE_SDL3_MIXER)
+      target_link_libraries(ppuc-menu LINK_PUBLIC
+         ${PPUC_SDL3_MIXER_LINK_NAME}
+      )
+   endif()
 else()
    target_link_directories(ppuc-menu PUBLIC
       third-party/build-libs/${PLATFORM}-${ARCH}
@@ -352,6 +422,11 @@ else()
    if(PPUC_ENABLE_ESPEAK_NG)
       target_link_libraries(ppuc-menu LINK_PUBLIC
          ${PPUC_ESPEAK_NG_LIBRARY}
+      )
+   endif()
+   if(PPUC_ENABLE_SDL3_MIXER)
+      target_link_libraries(ppuc-menu LINK_PUBLIC
+         ${PPUC_SDL3_MIXER_LINK_NAME}
       )
    endif()
 endif()
