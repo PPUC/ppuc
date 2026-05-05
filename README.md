@@ -92,7 +92,7 @@ This trigger feature is independent from `--pup`, and can also drive speech call
 Rule syntax:
 
 ```text
-<source> <id-or-name> [value] [cooldown=<milliseconds>] : <expression>
+<source> <id-or-name> [value] [cooldown=<milliseconds>] [delay=<milliseconds>] : <expression>
 ```
 
 Expression functions:
@@ -113,11 +113,20 @@ Operators:
 * `||`
 * parentheses `(...)`
 
+Rule options:
+* `cooldown=<milliseconds>`
+  * suppress retriggering until the cooldown window has elapsed
+* `delay=<milliseconds>`
+  * wait before firing after the expression matches
+  * for state-based expressions, the condition must still be true when the delay expires
+  * for edge expressions like `switch_rising(...)`, the matching edge arms the delayed trigger once
+
 Example:
 
 ```text
 P 100 1 : switch_rising(13) && lamp(42)
 P 101 1 cooldown=500 : switch_rising(13) && attract
+P 102 1 delay=750 : switch(13) && attract
 O 60010 1 : lamp_rising(23) && !attract
 F cabinet-attract 1 : lamp_rising(5) && attract
 ```

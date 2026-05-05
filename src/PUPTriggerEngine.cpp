@@ -545,6 +545,17 @@ bool PUPTriggerEngine::LoadRules(const char* path, std::string& error)
         continue;
       }
 
+      if (option.rfind("delay=", 0) == 0)
+      {
+        const std::string msToken = option.substr(6);
+        if (!ParseUInt32Token(msToken, rule.delayMs))
+        {
+          error = "Invalid PUP trigger line " + std::to_string(lineNo) + ": delay must be uint32 milliseconds.";
+          return false;
+        }
+        continue;
+      }
+
       if (!hasValue)
       {
         if (!ParseUInt8Token(option, rule.value))
@@ -567,6 +578,8 @@ bool PUPTriggerEngine::LoadRules(const char* path, std::string& error)
       error = "Invalid PUP trigger expression on line " + std::to_string(lineNo) + ": " + parser.Error();
       return false;
     }
+
+    rule.eventTriggered = UsesEventEdges(rule.expression.get());
 
     loadedRules.push_back(std::move(rule));
   }
@@ -601,6 +614,34 @@ size_t PUPTriggerEngine::GetRuleCount() const
 {
   std::lock_guard<std::mutex> lock(m_mutex);
   return m_rules.size();
+}
+
+void PUPTriggerEngine::Update()
+{
+  const uint64_t nowMs = GetNowMs();
+  std::vector<std::tuple<char, uint16_t, uint8_t, size_t>> matched;
+  TriggerCallback triggerCallback;
+  bool debug = false;
+  {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    CollectDueTriggers(nowMs, matched);
+    triggerCallback = m_triggerCallback;
+    debug = m_debug;
+  }
+
+  for (const auto& match : matched)
+  {
+    if (debug)
+    {
+      printf("PUP trigger matched (line=%zu): source=%c id=%u value=%u\n", std::get<3>(match), std::get<0>(match),
+             std::get<1>(match), std::get<2>(match));
+    }
+
+    if (triggerCallback)
+    {
+      triggerCallback(std::get<0>(match), std::get<1>(match), std::get<2>(match));
+    }
+  }
 }
 
 uint8_t PUPTriggerEngine::GetState(const std::unordered_map<int, uint8_t>& states, int number) const
@@ -657,11 +698,64 @@ bool PUPTriggerEngine::EvaluateExpression(const ExprNode* node, const TriggerEve
   return false;
 }
 
-void PUPTriggerEngine::HandleStateChange(EventType type, int number, uint8_t state, std::unordered_map<int, uint8_t>& states)
+bool PUPTriggerEngine::UsesEventEdges(const ExprNode* node) const
 {
-  const uint64_t nowMs = static_cast<uint64_t>(
+  if (!node)
+  {
+    return false;
+  }
+
+  switch (node->type)
+  {
+    case ExprNodeType::SwitchRising:
+    case ExprNodeType::SwitchFalling:
+    case ExprNodeType::LampRising:
+    case ExprNodeType::LampFalling:
+    case ExprNodeType::CoilRising:
+    case ExprNodeType::CoilFalling:
+      return true;
+    default:
+      return UsesEventEdges(node->left.get()) || UsesEventEdges(node->right.get());
+  }
+}
+
+uint64_t PUPTriggerEngine::GetNowMs() const
+{
+  return static_cast<uint64_t>(
       std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
           .count());
+}
+
+bool PUPTriggerEngine::CanTriggerNow(const Rule& rule, uint64_t nowMs) const
+{
+  return rule.cooldownMs == 0 || nowMs >= (rule.lastTriggeredMs + static_cast<uint64_t>(rule.cooldownMs));
+}
+
+void PUPTriggerEngine::CollectDueTriggers(uint64_t nowMs,
+                                          std::vector<std::tuple<char, uint16_t, uint8_t, size_t>>& matched)
+{
+  for (auto& rule : m_rules)
+  {
+    if (!rule.pending || nowMs < rule.pendingTriggerMs)
+    {
+      continue;
+    }
+
+    if (!CanTriggerNow(rule, nowMs))
+    {
+      continue;
+    }
+
+    rule.lastTriggeredMs = nowMs;
+    rule.pending = false;
+    rule.pendingTriggerMs = 0;
+    matched.emplace_back(rule.source, rule.id, rule.value, rule.line);
+  }
+}
+
+void PUPTriggerEngine::HandleStateChange(EventType type, int number, uint8_t state, std::unordered_map<int, uint8_t>& states)
+{
+  const uint64_t nowMs = GetNowMs();
   std::vector<std::tuple<char, uint16_t, uint8_t, size_t>> matched;
   TriggerCallback triggerCallback;
   bool debug = false;
@@ -674,17 +768,57 @@ void PUPTriggerEngine::HandleStateChange(EventType type, int number, uint8_t sta
     const TriggerEvent event = {type, number, oldState, state};
     for (auto& rule : m_rules)
     {
-      if (EvaluateExpression(rule.expression.get(), event))
-      {
-        if (rule.cooldownMs > 0 && nowMs < (rule.lastTriggeredMs + static_cast<uint64_t>(rule.cooldownMs)))
-        {
-          continue;
-        }
+      const bool expressionMatched = EvaluateExpression(rule.expression.get(), event);
 
-        rule.lastTriggeredMs = nowMs;
-        matched.emplace_back(rule.source, rule.id, rule.value, rule.line);
+      if (rule.delayMs > 0)
+      {
+        if (rule.eventTriggered)
+        {
+          if (expressionMatched && !rule.pending)
+          {
+            rule.pending = true;
+            rule.pendingTriggerMs = nowMs + static_cast<uint64_t>(rule.delayMs);
+          }
+        }
+        else
+        {
+          if (expressionMatched)
+          {
+            if (!rule.conditionActive)
+            {
+              rule.conditionActive = true;
+              if (!rule.pending)
+              {
+                rule.pending = true;
+                rule.pendingTriggerMs = nowMs + static_cast<uint64_t>(rule.delayMs);
+              }
+            }
+          }
+          else
+          {
+            rule.conditionActive = false;
+            rule.pending = false;
+            rule.pendingTriggerMs = 0;
+          }
+        }
+        continue;
       }
+
+      if (!expressionMatched)
+      {
+        continue;
+      }
+
+      if (!CanTriggerNow(rule, nowMs))
+      {
+        continue;
+      }
+
+      rule.lastTriggeredMs = nowMs;
+      matched.emplace_back(rule.source, rule.id, rule.value, rule.line);
     }
+
+    CollectDueTriggers(nowMs, matched);
 
     triggerCallback = m_triggerCallback;
     debug = m_debug;

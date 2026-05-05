@@ -2886,6 +2886,10 @@ int main(int argc, char** argv)
 
       if (game_state.load(std::memory_order_acquire) == 0)
       {
+        if (pPUPTriggerEngine)
+        {
+          pPUPTriggerEngine->Update();
+        }
         continue;
       }
 
@@ -2947,6 +2951,11 @@ int main(int argc, char** argv)
 
           ppuc->SetGIState(giNo, giState);
         }
+      }
+
+      if (pPUPTriggerEngine)
+      {
+        pPUPTriggerEngine->Update();
       }
 
       {  // Needs to be a separate scope for the lock_guard

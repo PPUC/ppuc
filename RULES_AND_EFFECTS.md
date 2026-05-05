@@ -246,6 +246,8 @@ The sample `flash.rules` now also contains:
 - `F cabinet-flash-attract 1 cooldown=20000 : lamp_rising(5) && attract`
 - `F shaker-flash-hit 1 : coil_rising(6) && !attract`
 
+Rules can also use `delay=<milliseconds>` when an effect should fire after a hold time instead of immediately.
+
 These demonstrate the intended future direction:
 
 - cabinet segment effects triggered by game state

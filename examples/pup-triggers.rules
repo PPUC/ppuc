@@ -1,5 +1,5 @@
 # Format:
-# <source> <id> [value] [cooldown=<milliseconds>] : <expression>
+# <source> <id> [value] [cooldown=<milliseconds>] [delay=<milliseconds>] : <expression>
 #
 # Expression functions:
 # - switch(<number>)        current switch state (true when closed)
@@ -30,3 +30,7 @@ P 103 1 : coil_rising(20) && lamp(42)
 
 # Trigger at most every 500ms while in attract mode.
 P 104 1 cooldown=500 : switch_rising(13) && attract
+
+# Trigger 750ms after switch 13 closes in attract mode.
+# If switch 13 opens again before 750ms, this delayed trigger is cancelled.
+P 105 1 delay=750 : switch(13) && attract

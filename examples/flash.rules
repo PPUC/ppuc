@@ -1,5 +1,5 @@
 # Format:
-# <source> <id> [value] [cooldown=<milliseconds>] : <expression>
+# <source> <id> [value] [cooldown=<milliseconds>] [delay=<milliseconds>] : <expression>
 #
 # Expression functions:
 # - switch(<number>)        current switch state (true when closed)
