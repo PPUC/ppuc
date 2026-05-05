@@ -150,8 +150,27 @@ if(PPUC_ENABLE_FLITE)
    )
 endif()
 
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/espeak-ng/speak_lib.h" OR
-   EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/espeak-ng/espeak-ng/speak_lib.h")
+find_path(PPUC_ESPEAK_NG_INCLUDE_DIR
+   NAMES espeak-ng/speak_lib.h espeak-ng/espeak-ng/speak_lib.h
+   PATHS "${PPUC_STAGED_INCLUDE_DIR}"
+)
+
+find_library(PPUC_ESPEAK_NG_LIBRARY
+   NAMES espeak-ng
+   PATHS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/runtime-libs/${PLATFORM}-${ARCH}"
+)
+
+set(PPUC_ENABLE_ESPEAK_NG FALSE)
+if(PPUC_ESPEAK_NG_INCLUDE_DIR AND PPUC_ESPEAK_NG_LIBRARY)
+   set(PPUC_ENABLE_ESPEAK_NG TRUE)
+   message(STATUS "espeak-ng speech backend: enabled")
+elseif(PPUC_ESPEAK_NG_INCLUDE_DIR OR PPUC_ESPEAK_NG_LIBRARY)
+   message(WARNING "espeak-ng speech backend: disabled due to incomplete staged artifacts")
+else()
+   message(STATUS "espeak-ng speech backend: disabled")
+endif()
+
+if(PPUC_ENABLE_ESPEAK_NG)
    target_compile_definitions(ppuc-pinmame PRIVATE PPUC_HAS_ESPEAK_NG)
    target_sources(ppuc-pinmame PRIVATE
       src/ESpeakNgSpeechService.cpp
@@ -189,10 +208,9 @@ if(PLATFORM STREQUAL "win" OR PLATFORM STREQUAL "win-mingw")
       )
    endif()
 
-   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/espeak-ng/speak_lib.h" OR
-      EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/espeak-ng/espeak-ng/speak_lib.h")
+   if(PPUC_ENABLE_ESPEAK_NG)
       target_link_libraries(ppuc-pinmame LINK_PUBLIC
-         espeak-ng
+         ${PPUC_ESPEAK_NG_LIBRARY}
       )
    endif()
 else()
@@ -238,10 +256,9 @@ else()
       endif()
    endif()
 
-   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/espeak-ng/speak_lib.h" OR
-      EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/espeak-ng/espeak-ng/speak_lib.h")
+   if(PPUC_ENABLE_ESPEAK_NG)
       target_link_libraries(ppuc-pinmame LINK_PUBLIC
-         espeak-ng
+         ${PPUC_ESPEAK_NG_LIBRARY}
       )
    endif()
 endif()
@@ -269,8 +286,7 @@ if(PPUC_ENABLE_FLITE)
    )
 endif()
 
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/espeak-ng/speak_lib.h" OR
-   EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/espeak-ng/espeak-ng/speak_lib.h")
+if(PPUC_ENABLE_ESPEAK_NG)
    target_compile_definitions(ppuc-menu PRIVATE PPUC_HAS_ESPEAK_NG)
    target_sources(ppuc-menu PRIVATE
       src/ESpeakNgSpeechService.cpp
@@ -300,10 +316,9 @@ if(PLATFORM STREQUAL "win" OR PLATFORM STREQUAL "win-mingw")
       )
    endif()
 
-   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/espeak-ng/speak_lib.h" OR
-      EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/espeak-ng/espeak-ng/speak_lib.h")
+   if(PPUC_ENABLE_ESPEAK_NG)
       target_link_libraries(ppuc-menu LINK_PUBLIC
-         espeak-ng
+         ${PPUC_ESPEAK_NG_LIBRARY}
       )
    endif()
 else()
@@ -334,10 +349,9 @@ else()
       endif()
    endif()
 
-   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/espeak-ng/speak_lib.h" OR
-      EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/include/espeak-ng/espeak-ng/speak_lib.h")
+   if(PPUC_ENABLE_ESPEAK_NG)
       target_link_libraries(ppuc-menu LINK_PUBLIC
-         espeak-ng
+         ${PPUC_ESPEAK_NG_LIBRARY}
       )
    endif()
 endif()
