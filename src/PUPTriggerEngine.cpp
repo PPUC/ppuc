@@ -813,8 +813,8 @@ void PUPTriggerEngine::Update()
   {
     if (debug)
     {
-      printf("PUP trigger matched (line=%zu player=%u): source=%c id=%u value=%u\n", match.line, match.player,
-             match.source, match.id, match.value);
+      printf("PUP trigger matched (line=%zu player=%u ball=%u): source=%c id=%u value=%u\n", match.line,
+             match.player, match.ball, match.source, match.id, match.value);
     }
 
     if (match.source != kSilentTriggerSource && triggerCallback)
@@ -991,8 +991,8 @@ void PUPTriggerEngine::CollectDueTriggers(uint64_t nowMs, std::vector<MatchedTri
     rule.lastTriggeredMs = nowMs;
     rule.pending = false;
     rule.pendingTriggerMs = 0;
-    matched.push_back(
-        {rule.source, rule.id, rule.value, rule.line, rule.setPlayer != 0 ? rule.setPlayer : m_currentPlayer});
+    matched.push_back({rule.source, rule.id, rule.value, rule.line,
+                       rule.setPlayer != 0 ? rule.setPlayer : m_currentPlayer, m_currentBall});
   }
 }
 
@@ -1106,7 +1106,7 @@ void PUPTriggerEngine::HandleStateChange(EventType type, int number, uint8_t sta
       {
         ClearPlayerHistoryLocked(rule.clearPlayerHistory == 255 ? matchedPlayer : rule.clearPlayerHistory);
       }
-      matched.push_back({rule.source, rule.id, rule.value, rule.line, matchedPlayer});
+      matched.push_back({rule.source, rule.id, rule.value, rule.line, matchedPlayer, m_currentBall});
     }
 
     CollectDueTriggers(nowMs, matched);
@@ -1120,8 +1120,8 @@ void PUPTriggerEngine::HandleStateChange(EventType type, int number, uint8_t sta
   {
     if (debug)
     {
-      printf("PUP trigger matched (line=%zu player=%u): source=%c id=%u value=%u\n", match.line, match.player,
-             match.source, match.id, match.value);
+      printf("PUP trigger matched (line=%zu player=%u ball=%u): source=%c id=%u value=%u\n", match.line,
+             match.player, match.ball, match.source, match.id, match.value);
     }
 
     if (match.source != kSilentTriggerSource && triggerCallback)
@@ -1204,7 +1204,7 @@ void PUPTriggerEngine::HandleBallChange(uint8_t currentBall)
       {
         ClearPlayerHistoryLocked(rule.clearPlayerHistory == 255 ? matchedPlayer : rule.clearPlayerHistory);
       }
-      matched.push_back({rule.source, rule.id, rule.value, rule.line, matchedPlayer});
+      matched.push_back({rule.source, rule.id, rule.value, rule.line, matchedPlayer, m_currentBall});
     }
 
     CollectDueTriggers(nowMs, matched);
@@ -1218,8 +1218,8 @@ void PUPTriggerEngine::HandleBallChange(uint8_t currentBall)
   {
     if (debug)
     {
-      printf("PUP trigger matched (line=%zu player=%u): source=%c id=%u value=%u\n", match.line, match.player,
-             match.source, match.id, match.value);
+      printf("PUP trigger matched (line=%zu player=%u ball=%u): source=%c id=%u value=%u\n", match.line,
+             match.player, match.ball, match.source, match.id, match.value);
     }
 
     if (match.source != kSilentTriggerSource && triggerCallback)
@@ -1302,7 +1302,7 @@ void PUPTriggerEngine::HandlePlayerChange(uint8_t currentPlayer)
       {
         ClearPlayerHistoryLocked(rule.clearPlayerHistory == 255 ? matchedPlayer : rule.clearPlayerHistory);
       }
-      matched.push_back({rule.source, rule.id, rule.value, rule.line, matchedPlayer});
+      matched.push_back({rule.source, rule.id, rule.value, rule.line, matchedPlayer, m_currentBall});
     }
 
     CollectDueTriggers(nowMs, matched);
@@ -1316,8 +1316,8 @@ void PUPTriggerEngine::HandlePlayerChange(uint8_t currentPlayer)
   {
     if (debug)
     {
-      printf("PUP trigger matched (line=%zu player=%u): source=%c id=%u value=%u\n", match.line, match.player,
-             match.source, match.id, match.value);
+      printf("PUP trigger matched (line=%zu player=%u ball=%u): source=%c id=%u value=%u\n", match.line,
+             match.player, match.ball, match.source, match.id, match.value);
     }
 
     if (match.source != kSilentTriggerSource && triggerCallback)

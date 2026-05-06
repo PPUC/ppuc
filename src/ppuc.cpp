@@ -348,7 +348,27 @@ static PinmameGetRawMemoryRegionFn ResolvePinmameGetRawMemoryRegion()
              ? nullptr
              : reinterpret_cast<PinmameGetRawMemoryRegionFn>(GetProcAddress(pinmameModule, "PinmameGetRawMemoryRegion"));
 #else
-  return reinterpret_cast<PinmameGetRawMemoryRegionFn>(dlsym(RTLD_DEFAULT, "PinmameGetRawMemoryRegion"));
+  void* symbol = dlsym(RTLD_DEFAULT, "PinmameGetRawMemoryRegion");
+  if (symbol != nullptr)
+  {
+    return reinterpret_cast<PinmameGetRawMemoryRegionFn>(symbol);
+  }
+
+  Dl_info pinmameInfo;
+  if (dladdr(reinterpret_cast<const void*>(PinmameRun), &pinmameInfo) != 0 && pinmameInfo.dli_fname != nullptr)
+  {
+    void* pinmameHandle = dlopen(pinmameInfo.dli_fname, RTLD_LAZY | RTLD_NOLOAD);
+    if (pinmameHandle != nullptr)
+    {
+      symbol = dlsym(pinmameHandle, "PinmameGetRawMemoryRegion");
+      if (symbol != nullptr)
+      {
+        return reinterpret_cast<PinmameGetRawMemoryRegionFn>(symbol);
+      }
+    }
+  }
+
+  return nullptr;
 #endif
 }
 
@@ -369,7 +389,27 @@ static PinmameGetRawMemoryRegionLengthFn ResolvePinmameGetRawMemoryRegionLength(
                                   : reinterpret_cast<PinmameGetRawMemoryRegionLengthFn>(
                                         GetProcAddress(pinmameModule, "PinmameGetRawMemoryRegionLength"));
 #else
-  return reinterpret_cast<PinmameGetRawMemoryRegionLengthFn>(dlsym(RTLD_DEFAULT, "PinmameGetRawMemoryRegionLength"));
+  void* symbol = dlsym(RTLD_DEFAULT, "PinmameGetRawMemoryRegionLength");
+  if (symbol != nullptr)
+  {
+    return reinterpret_cast<PinmameGetRawMemoryRegionLengthFn>(symbol);
+  }
+
+  Dl_info pinmameInfo;
+  if (dladdr(reinterpret_cast<const void*>(PinmameRun), &pinmameInfo) != 0 && pinmameInfo.dli_fname != nullptr)
+  {
+    void* pinmameHandle = dlopen(pinmameInfo.dli_fname, RTLD_LAZY | RTLD_NOLOAD);
+    if (pinmameHandle != nullptr)
+    {
+      symbol = dlsym(pinmameHandle, "PinmameGetRawMemoryRegionLength");
+      if (symbol != nullptr)
+      {
+        return reinterpret_cast<PinmameGetRawMemoryRegionLengthFn>(symbol);
+      }
+    }
+  }
+
+  return nullptr;
 #endif
 }
 

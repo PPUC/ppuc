@@ -104,6 +104,7 @@ class PUPTriggerEngine
     uint8_t value = 1;
     size_t line = 0;
     uint8_t player = 0;
+    uint8_t ball = 0;
   };
 
   struct HistoryEntry
