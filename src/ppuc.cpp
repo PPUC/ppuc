@@ -22,6 +22,7 @@
 #include <fstream>
 #include <memory>
 #include <mutex>
+#include <sstream>
 #include <queue>
 #include <string>
 #include <thread>
@@ -305,6 +306,7 @@ static uint64_t CurrentUnixMs();
 static PinmameGetRawMemoryRegionFn ResolvePinmameGetRawMemoryRegion();
 static PinmameGetRawMemoryRegionLengthFn ResolvePinmameGetRawMemoryRegionLength();
 static PinmameReadMainCPUByteFn ResolvePinmameReadMainCPUByte();
+static std::string DescribeHardwareGen(PINMAME_HARDWARE_GEN hardwareGen);
 static bool SupportsCurrentBallMemoryProbe(PINMAME_HARDWARE_GEN hardwareGen);
 static bool SupportsCurrentPlayerMemoryProbe(PINMAME_HARDWARE_GEN hardwareGen);
 static uint8_t NormalizeSystem3To6CurrentPlayer(uint8_t rawPlayer);
@@ -457,10 +459,69 @@ static PinmameReadMainCPUByteFn ResolvePinmameReadMainCPUByte()
 #endif
 }
 
+static std::string DescribeHardwareGen(const PINMAME_HARDWARE_GEN hardwareGen)
+{
+  struct HardwareGenLabel
+  {
+    PINMAME_HARDWARE_GEN bit;
+    const char* name;
+  };
+
+  static constexpr HardwareGenLabel kLabels[] = {
+      {PINMAME_HARDWARE_GEN_WPCALPHA_1, "WPCALPHA_1"}, {PINMAME_HARDWARE_GEN_WPCALPHA_2, "WPCALPHA_2"},
+      {PINMAME_HARDWARE_GEN_WPCDMD, "WPCDMD"},         {PINMAME_HARDWARE_GEN_WPCFLIPTRON, "WPCFLIPTRON"},
+      {PINMAME_HARDWARE_GEN_WPCDCS, "WPCDCS"},         {PINMAME_HARDWARE_GEN_WPCSECURITY, "WPCSECURITY"},
+      {PINMAME_HARDWARE_GEN_WPC95DCS, "WPC95DCS"},     {PINMAME_HARDWARE_GEN_WPC95, "WPC95"},
+      {PINMAME_HARDWARE_GEN_S11, "S11"},               {PINMAME_HARDWARE_GEN_S11X, "S11X"},
+      {PINMAME_HARDWARE_GEN_S11B2, "S11B2"},           {PINMAME_HARDWARE_GEN_S11C, "S11C"},
+      {PINMAME_HARDWARE_GEN_S9, "S9"},                 {PINMAME_HARDWARE_GEN_DE, "DE"},
+      {PINMAME_HARDWARE_GEN_DEDMD16, "DEDMD16"},       {PINMAME_HARDWARE_GEN_DEDMD32, "DEDMD32"},
+      {PINMAME_HARDWARE_GEN_DEDMD64, "DEDMD64"},       {PINMAME_HARDWARE_GEN_S7, "S7"},
+      {PINMAME_HARDWARE_GEN_S6, "S6"},                 {PINMAME_HARDWARE_GEN_S4, "S4"},
+      {PINMAME_HARDWARE_GEN_S3C, "S3C"},               {PINMAME_HARDWARE_GEN_S3, "S3"},
+      {PINMAME_HARDWARE_GEN_BY17, "BY17"},             {PINMAME_HARDWARE_GEN_BY35, "BY35"},
+      {PINMAME_HARDWARE_GEN_STMPU100, "STMPU100"},     {PINMAME_HARDWARE_GEN_STMPU200, "STMPU200"},
+      {PINMAME_HARDWARE_GEN_ASTRO, "ASTRO"},           {PINMAME_HARDWARE_GEN_HNK, "HNK"},
+      {PINMAME_HARDWARE_GEN_BYPROTO, "BYPROTO"},       {PINMAME_HARDWARE_GEN_BY6803, "BY6803"},
+      {PINMAME_HARDWARE_GEN_BY6803A, "BY6803A"},       {PINMAME_HARDWARE_GEN_BOWLING, "BOWLING"},
+      {PINMAME_HARDWARE_GEN_GTS1, "GTS1"},             {PINMAME_HARDWARE_GEN_GTS80, "GTS80"},
+      {PINMAME_HARDWARE_GEN_GTS80B, "GTS80B"},         {PINMAME_HARDWARE_GEN_WS, "WS"},
+      {PINMAME_HARDWARE_GEN_WS_1, "WS_1"},             {PINMAME_HARDWARE_GEN_WS_2, "WS_2"},
+      {PINMAME_HARDWARE_GEN_GTS3, "GTS3"},             {PINMAME_HARDWARE_GEN_ZAC1, "ZAC1"},
+      {PINMAME_HARDWARE_GEN_ZAC2, "ZAC2"},             {PINMAME_HARDWARE_GEN_SAM, "SAM"},
+      {PINMAME_HARDWARE_GEN_ALVG, "ALVG"},             {PINMAME_HARDWARE_GEN_ALVG_DMD2, "ALVG_DMD2"},
+      {PINMAME_HARDWARE_GEN_MRGAME, "MRGAME"},         {PINMAME_HARDWARE_GEN_SLEIC, "SLEIC"},
+      {PINMAME_HARDWARE_GEN_WICO, "WICO"},             {PINMAME_HARDWARE_GEN_SPA, "SPA"},
+  };
+
+  std::ostringstream stream;
+  stream << "0x" << std::hex << static_cast<uint64_t>(hardwareGen) << std::dec;
+
+  bool first = true;
+  for (const auto& label : kLabels)
+  {
+    if ((hardwareGen & label.bit) == 0)
+    {
+      continue;
+    }
+
+    stream << (first ? " (" : ", ");
+    stream << label.name;
+    first = false;
+  }
+
+  if (!first)
+  {
+    stream << ")";
+  }
+
+  return stream.str();
+}
+
 static bool SupportsCurrentBallMemoryProbe(const PINMAME_HARDWARE_GEN hardwareGen)
 {
-  return hardwareGen == PINMAME_HARDWARE_GEN_S3 || hardwareGen == PINMAME_HARDWARE_GEN_S3C ||
-         hardwareGen == PINMAME_HARDWARE_GEN_S4 || hardwareGen == PINMAME_HARDWARE_GEN_S6;
+  return (hardwareGen & PINMAME_HARDWARE_GEN_S3) != 0 || (hardwareGen & PINMAME_HARDWARE_GEN_S3C) != 0 ||
+         (hardwareGen & PINMAME_HARDWARE_GEN_S4) != 0 || (hardwareGen & PINMAME_HARDWARE_GEN_S6) != 0;
 }
 
 static bool SupportsCurrentPlayerMemoryProbe(const PINMAME_HARDWARE_GEN hardwareGen)
@@ -3171,6 +3232,8 @@ int main(int argc, char** argv)
 
     int index_recv = 0;
     const PINMAME_HARDWARE_GEN hardwareGen = PinmameGetHardwareGen();
+    printf("PinMAME started: ROM=%s hardware=%s\n", opt_rom ? opt_rom : "(null)",
+           DescribeHardwareGen(hardwareGen).c_str());
     const bool trackCurrentBall = pPUPTriggerEngine != nullptr && SupportsCurrentBallMemoryProbe(hardwareGen);
     const bool trackCurrentPlayer = pPUPTriggerEngine != nullptr && SupportsCurrentPlayerMemoryProbe(hardwareGen);
     bool loggedMissingCurrentBallApi = false;
