@@ -1,8 +1,15 @@
 # Format:
-# <source> <id> [value] [cooldown=<milliseconds>] [delay=<milliseconds>] : <expression>
+# <source> <id> [value] [cooldown=<milliseconds>] [delay=<milliseconds>] [set_player=<number>]
+#              [clear_player_history=<number>] : <expression>
+# Special source:
+# - S                      silent rule: apply state/history side effects, but emit no external trigger
 #
 # Expression functions:
 # - ball(<number>)          true if the current ball-in-play number matches
+# - player(<number>)        true if the current player matches
+# - history(<id>)           true if this trigger id fired before for the current player
+# - history(<id>, <ms>)     same, limited to the last <ms> milliseconds
+# - sequence(<ms>, <id1>, <id2>, ...) true if those trigger ids fired in order within <ms>
 # - switch(<number>)        current switch state (true when closed)
 # - lamp(<number>)          current lamp state (true when lit)
 # - coil(<number>)          current coil state (true when active)
@@ -31,6 +38,19 @@ P 103 1 : coil_rising(20) && lamp(42)
 
 # Trigger when the game advances to ball 2.
 P 106 1 : ball(2)
+
+# Example: player selection from an external lamp-driven event without emitting anything.
+S 201 1 set_player=1 : lamp_rising(101)
+
+# Example: clear all stored history for player 1 without emitting anything.
+S 205 1 clear_player_history=1 : player(1) && ball(1)
+
+# Example: emit once per player, then emit a "ball save" style trigger if it repeats within 2 seconds.
+P 202 1 : player(1) && !history(202)
+P 203 1 : player(1) && history(202, 2000)
+
+# Example: detect "A then B then C" within 2 seconds for the current player.
+P 204 1 : sequence(2000, 301, 302, 303)
 
 # Trigger at most every 500ms while in attract mode.
 P 104 1 cooldown=500 : switch_rising(13) && attract

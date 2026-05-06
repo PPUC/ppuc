@@ -15,6 +15,9 @@
 
 namespace
 {
+constexpr uint32_t kHistoryRetentionMs = 60000;
+constexpr char kSilentTriggerSource = 'S';
+
 std::string Trim(const std::string& input)
 {
   size_t start = 0;
@@ -312,6 +315,18 @@ class TriggerExpressionParser
     {
       functionType = PUPTriggerEngine::ExprNodeType::BallState;
     }
+    else if (identifier == "player")
+    {
+      functionType = PUPTriggerEngine::ExprNodeType::PlayerState;
+    }
+    else if (identifier == "history")
+    {
+      return ParseHistoryFunction();
+    }
+    else if (identifier == "sequence")
+    {
+      return ParseSequenceFunction();
+    }
     else if (identifier == "switch")
     {
       functionType = PUPTriggerEngine::ExprNodeType::SwitchState;
@@ -381,6 +396,105 @@ class TriggerExpressionParser
     return node;
   }
 
+  std::unique_ptr<PUPTriggerEngine::ExprNode> ParseHistoryFunction()
+  {
+    SkipWhitespace();
+    if (!Match("("))
+    {
+      m_error = "missing ( after function 'history'";
+      return nullptr;
+    }
+
+    std::string triggerToken = ParseArgumentToken();
+    uint16_t triggerId = 0;
+    if (!ParseTriggerIdToken(triggerToken, triggerId))
+    {
+      m_error = "expected trigger id in function 'history'";
+      return nullptr;
+    }
+
+    uint32_t windowMs = 0;
+    SkipWhitespace();
+    if (Match(","))
+    {
+      int window = 0;
+      if (!ParseUnsignedNumber(window))
+      {
+        m_error = "expected numeric window in function 'history'";
+        return nullptr;
+      }
+      windowMs = static_cast<uint32_t>(window);
+      SkipWhitespace();
+    }
+
+    if (!Match(")"))
+    {
+      m_error = "missing ) in function 'history'";
+      return nullptr;
+    }
+
+    auto node = std::make_unique<PUPTriggerEngine::ExprNode>();
+    node->type = PUPTriggerEngine::ExprNodeType::HistoryState;
+    node->triggerIds.push_back(triggerId);
+    node->windowMs = windowMs;
+    return node;
+  }
+
+  std::unique_ptr<PUPTriggerEngine::ExprNode> ParseSequenceFunction()
+  {
+    SkipWhitespace();
+    if (!Match("("))
+    {
+      m_error = "missing ( after function 'sequence'";
+      return nullptr;
+    }
+
+    int window = 0;
+    if (!ParseUnsignedNumber(window))
+    {
+      m_error = "expected numeric window in function 'sequence'";
+      return nullptr;
+    }
+
+    std::vector<uint16_t> triggerIds;
+    while (true)
+    {
+      SkipWhitespace();
+      if (!Match(","))
+      {
+        break;
+      }
+
+      std::string triggerToken = ParseArgumentToken();
+      uint16_t triggerId = 0;
+      if (!ParseTriggerIdToken(triggerToken, triggerId))
+      {
+        m_error = "expected trigger id in function 'sequence'";
+        return nullptr;
+      }
+      triggerIds.push_back(triggerId);
+    }
+
+    if (triggerIds.size() < 2)
+    {
+      m_error = "function 'sequence' requires at least two trigger ids";
+      return nullptr;
+    }
+
+    SkipWhitespace();
+    if (!Match(")"))
+    {
+      m_error = "missing ) in function 'sequence'";
+      return nullptr;
+    }
+
+    auto node = std::make_unique<PUPTriggerEngine::ExprNode>();
+    node->type = PUPTriggerEngine::ExprNodeType::SequenceState;
+    node->windowMs = static_cast<uint32_t>(window);
+    node->triggerIds = std::move(triggerIds);
+    return node;
+  }
+
   std::string ParseIdentifier()
   {
     SkipWhitespace();
@@ -389,6 +503,32 @@ class TriggerExpressionParser
     {
       const char c = m_input[m_position];
       if (::isalnum(static_cast<unsigned char>(c)) || c == '_')
+      {
+        m_position++;
+      }
+      else
+      {
+        break;
+      }
+    }
+
+    if (m_position == start)
+    {
+      return "";
+    }
+
+    return m_input.substr(start, m_position - start);
+  }
+
+  std::string ParseArgumentToken()
+  {
+    SkipWhitespace();
+    const size_t start = m_position;
+    while (!IsEnd())
+    {
+      const char c = m_input[m_position];
+      const unsigned char uc = static_cast<unsigned char>(c);
+      if (::isalnum(uc) || c == '_' || c == '-' || c == '.')
       {
         m_position++;
       }
@@ -560,6 +700,31 @@ bool PUPTriggerEngine::LoadRules(const char* path, std::string& error)
         continue;
       }
 
+      if (option.rfind("set_player=", 0) == 0)
+      {
+        uint8_t player = 0;
+        if (!ParseUInt8Token(option.substr(11), player))
+        {
+          error = "Invalid PUP trigger line " + std::to_string(lineNo) + ": set_player must be uint8.";
+          return false;
+        }
+        rule.setPlayer = player;
+        continue;
+      }
+
+      if (option.rfind("clear_player_history=", 0) == 0)
+      {
+        uint8_t player = 0;
+        if (!ParseUInt8Token(option.substr(21), player))
+        {
+          error = "Invalid PUP trigger line " + std::to_string(lineNo) +
+                  ": clear_player_history must be uint8.";
+          return false;
+        }
+        rule.clearPlayerHistory = player;
+        continue;
+      }
+
       if (!hasValue)
       {
         if (!ParseUInt8Token(option, rule.value))
@@ -593,7 +758,9 @@ bool PUPTriggerEngine::LoadRules(const char* path, std::string& error)
   m_switchStates.clear();
   m_lampStates.clear();
   m_coilStates.clear();
+  m_history.clear();
   m_currentBall = 0;
+  m_currentPlayer = 0;
   return true;
 }
 
@@ -612,6 +779,12 @@ void PUPTriggerEngine::SetTriggerCallback(TriggerCallback callback)
 void PUPTriggerEngine::SetAttractMode(bool attractMode)
 {
   std::lock_guard<std::mutex> lock(m_mutex);
+  if (attractMode && !m_attractMode)
+  {
+    m_history.clear();
+    m_currentBall = 0;
+    m_currentPlayer = 0;
+  }
   m_attractMode = attractMode;
 }
 
@@ -624,12 +797,14 @@ size_t PUPTriggerEngine::GetRuleCount() const
 void PUPTriggerEngine::Update()
 {
   const uint64_t nowMs = GetNowMs();
-  std::vector<std::tuple<char, uint16_t, uint8_t, size_t>> matched;
+  std::vector<MatchedTrigger> matched;
   TriggerCallback triggerCallback;
   bool debug = false;
   {
     std::lock_guard<std::mutex> lock(m_mutex);
+    PruneHistoryLocked(nowMs);
     CollectDueTriggers(nowMs, matched);
+    RecordMatchedTriggers(matched, nowMs);
     triggerCallback = m_triggerCallback;
     debug = m_debug;
   }
@@ -638,13 +813,13 @@ void PUPTriggerEngine::Update()
   {
     if (debug)
     {
-      printf("PUP trigger matched (line=%zu): source=%c id=%u value=%u\n", std::get<3>(match), std::get<0>(match),
-             std::get<1>(match), std::get<2>(match));
+      printf("PUP trigger matched (line=%zu player=%u): source=%c id=%u value=%u\n", match.line, match.player,
+             match.source, match.id, match.value);
     }
 
-    if (triggerCallback)
+    if (match.source != kSilentTriggerSource && triggerCallback)
     {
-      triggerCallback(std::get<0>(match), std::get<1>(match), std::get<2>(match));
+      triggerCallback(match.source, match.id, match.value);
     }
   }
 }
@@ -676,6 +851,12 @@ bool PUPTriggerEngine::EvaluateExpression(const ExprNode* node, const TriggerEve
       return EvaluateExpression(node->left.get(), event) || EvaluateExpression(node->right.get(), event);
     case ExprNodeType::BallState:
       return m_currentBall == static_cast<uint8_t>(node->number);
+    case ExprNodeType::PlayerState:
+      return m_currentPlayer == static_cast<uint8_t>(node->number);
+    case ExprNodeType::HistoryState:
+      return !node->triggerIds.empty() && HistoryContains(node->triggerIds[0], node->windowMs, GetNowMs());
+    case ExprNodeType::SequenceState:
+      return SequenceOccurred(node->triggerIds, node->windowMs, GetNowMs());
     case ExprNodeType::SwitchState:
       return GetState(m_switchStates, node->number) != 0;
     case ExprNodeType::LampState:
@@ -700,6 +881,61 @@ bool PUPTriggerEngine::EvaluateExpression(const ExprNode* node, const TriggerEve
     case ExprNodeType::CoilFalling:
       return event.type == EventType::Coil && event.number == node->number && event.oldValue != 0 &&
              event.newValue == 0;
+  }
+
+  return false;
+}
+
+bool PUPTriggerEngine::HistoryContains(const uint16_t triggerId, const uint32_t windowMs, const uint64_t nowMs) const
+{
+  for (auto it = m_history.rbegin(); it != m_history.rend(); ++it)
+  {
+    if (windowMs > 0 && nowMs > it->timestampMs && nowMs - it->timestampMs > static_cast<uint64_t>(windowMs))
+    {
+      break;
+    }
+    if (m_currentPlayer != 0 && it->player != m_currentPlayer)
+    {
+      continue;
+    }
+    if (it->id == triggerId)
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool PUPTriggerEngine::SequenceOccurred(const std::vector<uint16_t>& triggerIds, const uint32_t windowMs,
+                                        const uint64_t nowMs) const
+{
+  if (triggerIds.empty())
+  {
+    return false;
+  }
+
+  size_t matchedCount = 0;
+  const uint64_t earliestAllowedMs =
+      windowMs == 0 || nowMs < static_cast<uint64_t>(windowMs) ? 0 : nowMs - static_cast<uint64_t>(windowMs);
+
+  for (const auto& entry : m_history)
+  {
+    if (entry.timestampMs < earliestAllowedMs)
+    {
+      continue;
+    }
+    if (m_currentPlayer != 0 && entry.player != m_currentPlayer)
+    {
+      continue;
+    }
+    if (entry.id == triggerIds[matchedCount])
+    {
+      matchedCount++;
+      if (matchedCount == triggerIds.size())
+      {
+        return true;
+      }
+    }
   }
 
   return false;
@@ -738,8 +974,7 @@ bool PUPTriggerEngine::CanTriggerNow(const Rule& rule, uint64_t nowMs) const
   return rule.cooldownMs == 0 || nowMs >= (rule.lastTriggeredMs + static_cast<uint64_t>(rule.cooldownMs));
 }
 
-void PUPTriggerEngine::CollectDueTriggers(uint64_t nowMs,
-                                          std::vector<std::tuple<char, uint16_t, uint8_t, size_t>>& matched)
+void PUPTriggerEngine::CollectDueTriggers(uint64_t nowMs, std::vector<MatchedTrigger>& matched)
 {
   for (auto& rule : m_rules)
   {
@@ -756,18 +991,62 @@ void PUPTriggerEngine::CollectDueTriggers(uint64_t nowMs,
     rule.lastTriggeredMs = nowMs;
     rule.pending = false;
     rule.pendingTriggerMs = 0;
-    matched.emplace_back(rule.source, rule.id, rule.value, rule.line);
+    matched.push_back(
+        {rule.source, rule.id, rule.value, rule.line, rule.setPlayer != 0 ? rule.setPlayer : m_currentPlayer});
+  }
+}
+
+void PUPTriggerEngine::RecordMatchedTriggers(const std::vector<MatchedTrigger>& matched, const uint64_t nowMs)
+{
+  for (const auto& match : matched)
+  {
+    m_history.push_back({match.source, match.id, match.value, match.player, nowMs});
+    if (match.player != 0)
+    {
+      m_currentPlayer = match.player;
+    }
+  }
+}
+
+void PUPTriggerEngine::PruneHistoryLocked(const uint64_t nowMs)
+{
+  while (!m_history.empty() && nowMs > m_history.front().timestampMs &&
+         nowMs - m_history.front().timestampMs > static_cast<uint64_t>(kHistoryRetentionMs))
+  {
+    m_history.pop_front();
+  }
+}
+
+void PUPTriggerEngine::ClearPlayerHistoryLocked(const uint8_t player)
+{
+  if (player == 0)
+  {
+    return;
+  }
+
+  auto it = m_history.begin();
+  while (it != m_history.end())
+  {
+    if (it->player == player)
+    {
+      it = m_history.erase(it);
+    }
+    else
+    {
+      ++it;
+    }
   }
 }
 
 void PUPTriggerEngine::HandleStateChange(EventType type, int number, uint8_t state, std::unordered_map<int, uint8_t>& states)
 {
   const uint64_t nowMs = GetNowMs();
-  std::vector<std::tuple<char, uint16_t, uint8_t, size_t>> matched;
+  std::vector<MatchedTrigger> matched;
   TriggerCallback triggerCallback;
   bool debug = false;
   {
     std::lock_guard<std::mutex> lock(m_mutex);
+    PruneHistoryLocked(nowMs);
 
     const uint8_t oldState = GetState(states, number);
     states[number] = state;
@@ -822,10 +1101,16 @@ void PUPTriggerEngine::HandleStateChange(EventType type, int number, uint8_t sta
       }
 
       rule.lastTriggeredMs = nowMs;
-      matched.emplace_back(rule.source, rule.id, rule.value, rule.line);
+      const uint8_t matchedPlayer = rule.setPlayer != 0 ? rule.setPlayer : m_currentPlayer;
+      if (rule.clearPlayerHistory != 0)
+      {
+        ClearPlayerHistoryLocked(rule.clearPlayerHistory == 255 ? matchedPlayer : rule.clearPlayerHistory);
+      }
+      matched.push_back({rule.source, rule.id, rule.value, rule.line, matchedPlayer});
     }
 
     CollectDueTriggers(nowMs, matched);
+    RecordMatchedTriggers(matched, nowMs);
 
     triggerCallback = m_triggerCallback;
     debug = m_debug;
@@ -835,13 +1120,13 @@ void PUPTriggerEngine::HandleStateChange(EventType type, int number, uint8_t sta
   {
     if (debug)
     {
-      printf("PUP trigger matched (line=%zu): source=%c id=%u value=%u\n", std::get<3>(match), std::get<0>(match),
-             std::get<1>(match), std::get<2>(match));
+      printf("PUP trigger matched (line=%zu player=%u): source=%c id=%u value=%u\n", match.line, match.player,
+             match.source, match.id, match.value);
     }
 
-    if (triggerCallback)
+    if (match.source != kSilentTriggerSource && triggerCallback)
     {
-      triggerCallback(std::get<0>(match), std::get<1>(match), std::get<2>(match));
+      triggerCallback(match.source, match.id, match.value);
     }
   }
 }
@@ -849,11 +1134,12 @@ void PUPTriggerEngine::HandleStateChange(EventType type, int number, uint8_t sta
 void PUPTriggerEngine::HandleBallChange(uint8_t currentBall)
 {
   const uint64_t nowMs = GetNowMs();
-  std::vector<std::tuple<char, uint16_t, uint8_t, size_t>> matched;
+  std::vector<MatchedTrigger> matched;
   TriggerCallback triggerCallback;
   bool debug = false;
   {
     std::lock_guard<std::mutex> lock(m_mutex);
+    PruneHistoryLocked(nowMs);
 
     const uint8_t oldBall = m_currentBall;
     if (oldBall == currentBall)
@@ -913,10 +1199,16 @@ void PUPTriggerEngine::HandleBallChange(uint8_t currentBall)
       }
 
       rule.lastTriggeredMs = nowMs;
-      matched.emplace_back(rule.source, rule.id, rule.value, rule.line);
+      const uint8_t matchedPlayer = rule.setPlayer != 0 ? rule.setPlayer : m_currentPlayer;
+      if (rule.clearPlayerHistory != 0)
+      {
+        ClearPlayerHistoryLocked(rule.clearPlayerHistory == 255 ? matchedPlayer : rule.clearPlayerHistory);
+      }
+      matched.push_back({rule.source, rule.id, rule.value, rule.line, matchedPlayer});
     }
 
     CollectDueTriggers(nowMs, matched);
+    RecordMatchedTriggers(matched, nowMs);
 
     triggerCallback = m_triggerCallback;
     debug = m_debug;
@@ -926,13 +1218,111 @@ void PUPTriggerEngine::HandleBallChange(uint8_t currentBall)
   {
     if (debug)
     {
-      printf("PUP trigger matched (line=%zu): source=%c id=%u value=%u\n", std::get<3>(match), std::get<0>(match),
-             std::get<1>(match), std::get<2>(match));
+      printf("PUP trigger matched (line=%zu player=%u): source=%c id=%u value=%u\n", match.line, match.player,
+             match.source, match.id, match.value);
     }
 
-    if (triggerCallback)
+    if (match.source != kSilentTriggerSource && triggerCallback)
     {
-      triggerCallback(std::get<0>(match), std::get<1>(match), std::get<2>(match));
+      triggerCallback(match.source, match.id, match.value);
+    }
+  }
+}
+
+void PUPTriggerEngine::HandlePlayerChange(uint8_t currentPlayer)
+{
+  const uint64_t nowMs = GetNowMs();
+  std::vector<MatchedTrigger> matched;
+  TriggerCallback triggerCallback;
+  bool debug = false;
+  {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    PruneHistoryLocked(nowMs);
+
+    const uint8_t oldPlayer = m_currentPlayer;
+    if (oldPlayer == currentPlayer)
+    {
+      return;
+    }
+
+    m_currentPlayer = currentPlayer;
+
+    const TriggerEvent event = {EventType::Player, static_cast<int>(currentPlayer), oldPlayer, currentPlayer};
+    for (auto& rule : m_rules)
+    {
+      const bool expressionMatched = EvaluateExpression(rule.expression.get(), event);
+
+      if (rule.delayMs > 0)
+      {
+        if (rule.eventTriggered)
+        {
+          if (expressionMatched && !rule.pending)
+          {
+            rule.pending = true;
+            rule.pendingTriggerMs = nowMs + static_cast<uint64_t>(rule.delayMs);
+          }
+        }
+        else
+        {
+          if (expressionMatched)
+          {
+            if (!rule.conditionActive)
+            {
+              rule.conditionActive = true;
+              if (!rule.pending)
+              {
+                rule.pending = true;
+                rule.pendingTriggerMs = nowMs + static_cast<uint64_t>(rule.delayMs);
+              }
+            }
+          }
+          else
+          {
+            rule.conditionActive = false;
+            rule.pending = false;
+            rule.pendingTriggerMs = 0;
+          }
+        }
+        continue;
+      }
+
+      if (!expressionMatched)
+      {
+        continue;
+      }
+
+      if (!CanTriggerNow(rule, nowMs))
+      {
+        continue;
+      }
+
+      rule.lastTriggeredMs = nowMs;
+      const uint8_t matchedPlayer = rule.setPlayer != 0 ? rule.setPlayer : m_currentPlayer;
+      if (rule.clearPlayerHistory != 0)
+      {
+        ClearPlayerHistoryLocked(rule.clearPlayerHistory == 255 ? matchedPlayer : rule.clearPlayerHistory);
+      }
+      matched.push_back({rule.source, rule.id, rule.value, rule.line, matchedPlayer});
+    }
+
+    CollectDueTriggers(nowMs, matched);
+    RecordMatchedTriggers(matched, nowMs);
+
+    triggerCallback = m_triggerCallback;
+    debug = m_debug;
+  }
+
+  for (const auto& match : matched)
+  {
+    if (debug)
+    {
+      printf("PUP trigger matched (line=%zu player=%u): source=%c id=%u value=%u\n", match.line, match.player,
+             match.source, match.id, match.value);
+    }
+
+    if (match.source != kSilentTriggerSource && triggerCallback)
+    {
+      triggerCallback(match.source, match.id, match.value);
     }
   }
 }
@@ -955,4 +1345,9 @@ void PUPTriggerEngine::OnCoilState(int number, uint8_t state)
 void PUPTriggerEngine::SetCurrentBall(uint8_t currentBall)
 {
   HandleBallChange(currentBall);
+}
+
+void PUPTriggerEngine::SetCurrentPlayer(uint8_t currentPlayer)
+{
+  HandlePlayerChange(currentPlayer);
 }

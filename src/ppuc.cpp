@@ -69,6 +69,7 @@ std::unique_ptr<SpeechService> pSpeechService;
 
 constexpr char kSpeechTriggerSource = 'O';
 constexpr char kBoardEffectTriggerSource = 'F';
+constexpr size_t kSystem3To6CurrentPlayerOffset = 0x29;
 constexpr size_t kSystem3To6CurrentBallOffset = 0x2A;
 
 using PinmameGetRawMemoryRegionFn = const uint8_t* (*)(int region);
@@ -303,6 +304,9 @@ static uint64_t CurrentUnixMs();
 static PinmameGetRawMemoryRegionFn ResolvePinmameGetRawMemoryRegion();
 static PinmameGetRawMemoryRegionLengthFn ResolvePinmameGetRawMemoryRegionLength();
 static bool SupportsCurrentBallMemoryProbe(PINMAME_HARDWARE_GEN hardwareGen);
+static bool SupportsCurrentPlayerMemoryProbe(PINMAME_HARDWARE_GEN hardwareGen);
+static uint8_t NormalizeSystem3To6CurrentPlayer(uint8_t rawPlayer);
+static bool TryReadCurrentPlayerFromPinmame(uint8_t* pCurrentPlayer);
 static bool TryReadCurrentBallFromPinmame(uint8_t* pCurrentBall);
 
 static void PrintFlushedLogLine(const char* prefix, const char* message)
@@ -373,6 +377,57 @@ static bool SupportsCurrentBallMemoryProbe(const PINMAME_HARDWARE_GEN hardwareGe
 {
   return hardwareGen == PINMAME_HARDWARE_GEN_S3 || hardwareGen == PINMAME_HARDWARE_GEN_S3C ||
          hardwareGen == PINMAME_HARDWARE_GEN_S4 || hardwareGen == PINMAME_HARDWARE_GEN_S6;
+}
+
+static bool SupportsCurrentPlayerMemoryProbe(const PINMAME_HARDWARE_GEN hardwareGen)
+{
+  return SupportsCurrentBallMemoryProbe(hardwareGen);
+}
+
+static uint8_t NormalizeSystem3To6CurrentPlayer(const uint8_t rawPlayer)
+{
+  if (rawPlayer <= 3)
+  {
+    return static_cast<uint8_t>(rawPlayer + 1);
+  }
+
+  if (rawPlayer >= 1 && rawPlayer <= 4)
+  {
+    return rawPlayer;
+  }
+
+  return 0;
+}
+
+static bool TryReadCurrentPlayerFromPinmame(uint8_t* pCurrentPlayer)
+{
+  if (pCurrentPlayer == nullptr)
+  {
+    return false;
+  }
+
+  static PinmameGetRawMemoryRegionFn getRawMemoryRegion = ResolvePinmameGetRawMemoryRegion();
+  static PinmameGetRawMemoryRegionLengthFn getRawMemoryRegionLength = ResolvePinmameGetRawMemoryRegionLength();
+
+  if (getRawMemoryRegion == nullptr || getRawMemoryRegionLength == nullptr)
+  {
+    return false;
+  }
+
+  const size_t regionLength = getRawMemoryRegionLength(0);
+  if (regionLength <= kSystem3To6CurrentPlayerOffset)
+  {
+    return false;
+  }
+
+  const uint8_t* pRegion = getRawMemoryRegion(0);
+  if (pRegion == nullptr)
+  {
+    return false;
+  }
+
+  *pCurrentPlayer = NormalizeSystem3To6CurrentPlayer(pRegion[kSystem3To6CurrentPlayerOffset]);
+  return true;
 }
 
 static bool TryReadCurrentBallFromPinmame(uint8_t* pCurrentBall)
@@ -1875,6 +1930,7 @@ void PINMAMECALLBACK OnSolenoidUpdated(PinmameSolenoidState* p_solenoidState, co
       if (coilState == 0)
       {
         pPUPTriggerEngine->SetCurrentBall(0);
+        pPUPTriggerEngine->SetCurrentPlayer(0);
       }
     }
     pPUPTriggerEngine->OnCoilState(p_solenoidState->solNo, coilState);
@@ -3030,7 +3086,9 @@ int main(int argc, char** argv)
     int index_recv = 0;
     const PINMAME_HARDWARE_GEN hardwareGen = PinmameGetHardwareGen();
     const bool trackCurrentBall = pPUPTriggerEngine != nullptr && SupportsCurrentBallMemoryProbe(hardwareGen);
+    const bool trackCurrentPlayer = pPUPTriggerEngine != nullptr && SupportsCurrentPlayerMemoryProbe(hardwareGen);
     bool loggedMissingCurrentBallApi = false;
+    bool loggedMissingCurrentPlayerApi = false;
 
     ppuc->StartUpdates();
     if (opt_close_coin_door)
@@ -3062,6 +3120,20 @@ int main(int argc, char** argv)
         {
           printf("Current-ball tracking unavailable: libpinmame does not expose raw memory access.\n");
           loggedMissingCurrentBallApi = true;
+        }
+      }
+
+      if (trackCurrentPlayer)
+      {
+        uint8_t currentPlayer = 0;
+        if (TryReadCurrentPlayerFromPinmame(&currentPlayer))
+        {
+          pPUPTriggerEngine->SetCurrentPlayer(currentPlayer);
+        }
+        else if (!loggedMissingCurrentPlayerApi && (opt_debug || opt_debug_errors))
+        {
+          printf("Current-player tracking unavailable: libpinmame does not expose raw memory access.\n");
+          loggedMissingCurrentPlayerApi = true;
         }
       }
 

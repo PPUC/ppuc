@@ -132,10 +132,17 @@ Here:
 - `cabinet-flash-attract` is the effect trigger ID or name
 - `lamp_rising(5) && attract` is the condition
 
+There is also a silent channel:
+
+- `S` means evaluate the rule and apply state/history side effects, but emit no external trigger.
+
 Inside the rule expression itself we no longer use those old single-character codes.
 The conditions are written with readable words:
 
 - `ball(...)`
+- `player(...)`
+- `history(...)`
+- `sequence(...)`
 - `switch(...)`
 - `lamp(...)`
 - `coil(...)`
@@ -146,6 +153,9 @@ The conditions are written with readable words:
 
 Current limitation:
 `ball(...)` is currently populated from PinMAME CPU RAM only for Williams System 3, System 4, and System 6 style games.
+`player(...)` can now be supplied either by runtime state updates or by rules that use `set_player=<n>`.
+Trigger history is retained per player for a rolling time window and is cleared when the table returns to attract mode.
+Rules can also use `clear_player_history=<n>` to drop stored history for a specific player before the new trigger is recorded.
 
 So the intended reading is:
 
