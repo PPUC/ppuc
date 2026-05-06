@@ -11,8 +11,8 @@
 #include <inttypes.h>
 #include <stdlib.h>
 
-#include <atomic>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <climits>
 #include <csignal>
@@ -23,8 +23,8 @@
 #include <fstream>
 #include <memory>
 #include <mutex>
-#include <sstream>
 #include <queue>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <type_traits>
@@ -343,30 +343,54 @@ static std::string DescribeHardwareGen(const PINMAME_HARDWARE_GEN hardwareGen)
   };
 
   static constexpr HardwareGenLabel kLabels[] = {
-      {PINMAME_HARDWARE_GEN_WPCALPHA_1, "WPCALPHA_1"}, {PINMAME_HARDWARE_GEN_WPCALPHA_2, "WPCALPHA_2"},
-      {PINMAME_HARDWARE_GEN_WPCDMD, "WPCDMD"},         {PINMAME_HARDWARE_GEN_WPCFLIPTRON, "WPCFLIPTRON"},
-      {PINMAME_HARDWARE_GEN_WPCDCS, "WPCDCS"},         {PINMAME_HARDWARE_GEN_WPCSECURITY, "WPCSECURITY"},
-      {PINMAME_HARDWARE_GEN_WPC95DCS, "WPC95DCS"},     {PINMAME_HARDWARE_GEN_WPC95, "WPC95"},
-      {PINMAME_HARDWARE_GEN_S11, "S11"},               {PINMAME_HARDWARE_GEN_S11X, "S11X"},
-      {PINMAME_HARDWARE_GEN_S11B2, "S11B2"},           {PINMAME_HARDWARE_GEN_S11C, "S11C"},
-      {PINMAME_HARDWARE_GEN_S9, "S9"},                 {PINMAME_HARDWARE_GEN_DE, "DE"},
-      {PINMAME_HARDWARE_GEN_DEDMD16, "DEDMD16"},       {PINMAME_HARDWARE_GEN_DEDMD32, "DEDMD32"},
-      {PINMAME_HARDWARE_GEN_DEDMD64, "DEDMD64"},       {PINMAME_HARDWARE_GEN_S7, "S7"},
-      {PINMAME_HARDWARE_GEN_S6, "S6"},                 {PINMAME_HARDWARE_GEN_S4, "S4"},
-      {PINMAME_HARDWARE_GEN_S3C, "S3C"},               {PINMAME_HARDWARE_GEN_S3, "S3"},
-      {PINMAME_HARDWARE_GEN_BY17, "BY17"},             {PINMAME_HARDWARE_GEN_BY35, "BY35"},
-      {PINMAME_HARDWARE_GEN_STMPU100, "STMPU100"},     {PINMAME_HARDWARE_GEN_STMPU200, "STMPU200"},
-      {PINMAME_HARDWARE_GEN_ASTRO, "ASTRO"},           {PINMAME_HARDWARE_GEN_HNK, "HNK"},
-      {PINMAME_HARDWARE_GEN_BYPROTO, "BYPROTO"},       {PINMAME_HARDWARE_GEN_BY6803, "BY6803"},
-      {PINMAME_HARDWARE_GEN_BY6803A, "BY6803A"},       {PINMAME_HARDWARE_GEN_BOWLING, "BOWLING"},
-      {PINMAME_HARDWARE_GEN_GTS1, "GTS1"},             {PINMAME_HARDWARE_GEN_GTS80, "GTS80"},
-      {PINMAME_HARDWARE_GEN_GTS80B, "GTS80B"},         {PINMAME_HARDWARE_GEN_WS, "WS"},
-      {PINMAME_HARDWARE_GEN_WS_1, "WS_1"},             {PINMAME_HARDWARE_GEN_WS_2, "WS_2"},
-      {PINMAME_HARDWARE_GEN_GTS3, "GTS3"},             {PINMAME_HARDWARE_GEN_ZAC1, "ZAC1"},
-      {PINMAME_HARDWARE_GEN_ZAC2, "ZAC2"},             {PINMAME_HARDWARE_GEN_SAM, "SAM"},
-      {PINMAME_HARDWARE_GEN_ALVG, "ALVG"},             {PINMAME_HARDWARE_GEN_ALVG_DMD2, "ALVG_DMD2"},
-      {PINMAME_HARDWARE_GEN_MRGAME, "MRGAME"},         {PINMAME_HARDWARE_GEN_SLEIC, "SLEIC"},
-      {PINMAME_HARDWARE_GEN_WICO, "WICO"},             {PINMAME_HARDWARE_GEN_SPA, "SPA"},
+      {PINMAME_HARDWARE_GEN_WPCALPHA_1, "WPCALPHA_1"},
+      {PINMAME_HARDWARE_GEN_WPCALPHA_2, "WPCALPHA_2"},
+      {PINMAME_HARDWARE_GEN_WPCDMD, "WPCDMD"},
+      {PINMAME_HARDWARE_GEN_WPCFLIPTRON, "WPCFLIPTRON"},
+      {PINMAME_HARDWARE_GEN_WPCDCS, "WPCDCS"},
+      {PINMAME_HARDWARE_GEN_WPCSECURITY, "WPCSECURITY"},
+      {PINMAME_HARDWARE_GEN_WPC95DCS, "WPC95DCS"},
+      {PINMAME_HARDWARE_GEN_WPC95, "WPC95"},
+      {PINMAME_HARDWARE_GEN_S11, "S11"},
+      {PINMAME_HARDWARE_GEN_S11X, "S11X"},
+      {PINMAME_HARDWARE_GEN_S11B2, "S11B2"},
+      {PINMAME_HARDWARE_GEN_S11C, "S11C"},
+      {PINMAME_HARDWARE_GEN_S9, "S9"},
+      {PINMAME_HARDWARE_GEN_DE, "DE"},
+      {PINMAME_HARDWARE_GEN_DEDMD16, "DEDMD16"},
+      {PINMAME_HARDWARE_GEN_DEDMD32, "DEDMD32"},
+      {PINMAME_HARDWARE_GEN_DEDMD64, "DEDMD64"},
+      {PINMAME_HARDWARE_GEN_S7, "S7"},
+      {PINMAME_HARDWARE_GEN_S6, "S6"},
+      {PINMAME_HARDWARE_GEN_S4, "S4"},
+      {PINMAME_HARDWARE_GEN_S3C, "S3C"},
+      {PINMAME_HARDWARE_GEN_S3, "S3"},
+      {PINMAME_HARDWARE_GEN_BY17, "BY17"},
+      {PINMAME_HARDWARE_GEN_BY35, "BY35"},
+      {PINMAME_HARDWARE_GEN_STMPU100, "STMPU100"},
+      {PINMAME_HARDWARE_GEN_STMPU200, "STMPU200"},
+      {PINMAME_HARDWARE_GEN_ASTRO, "ASTRO"},
+      {PINMAME_HARDWARE_GEN_HNK, "HNK"},
+      {PINMAME_HARDWARE_GEN_BYPROTO, "BYPROTO"},
+      {PINMAME_HARDWARE_GEN_BY6803, "BY6803"},
+      {PINMAME_HARDWARE_GEN_BY6803A, "BY6803A"},
+      {PINMAME_HARDWARE_GEN_BOWLING, "BOWLING"},
+      {PINMAME_HARDWARE_GEN_GTS1, "GTS1"},
+      {PINMAME_HARDWARE_GEN_GTS80, "GTS80"},
+      {PINMAME_HARDWARE_GEN_GTS80B, "GTS80B"},
+      {PINMAME_HARDWARE_GEN_WS, "WS"},
+      {PINMAME_HARDWARE_GEN_WS_1, "WS_1"},
+      {PINMAME_HARDWARE_GEN_WS_2, "WS_2"},
+      {PINMAME_HARDWARE_GEN_GTS3, "GTS3"},
+      {PINMAME_HARDWARE_GEN_ZAC1, "ZAC1"},
+      {PINMAME_HARDWARE_GEN_ZAC2, "ZAC2"},
+      {PINMAME_HARDWARE_GEN_SAM, "SAM"},
+      {PINMAME_HARDWARE_GEN_ALVG, "ALVG"},
+      {PINMAME_HARDWARE_GEN_ALVG_DMD2, "ALVG_DMD2"},
+      {PINMAME_HARDWARE_GEN_MRGAME, "MRGAME"},
+      {PINMAME_HARDWARE_GEN_SLEIC, "SLEIC"},
+      {PINMAME_HARDWARE_GEN_WICO, "WICO"},
+      {PINMAME_HARDWARE_GEN_SPA, "SPA"},
   };
 
   std::ostringstream stream;
@@ -459,8 +483,8 @@ static void LogSystem3To6CpuWindowIfChanged(const PINMAME_HARDWARE_GEN hardwareG
   {
     if (!loggedReadFailure)
     {
-      printf("PinMAME CPU RAM window read failed for %s at 0x%02zx..0x%02zx\n", DescribeHardwareGen(hardwareGen).c_str(),
-             kWindowStart, kWindowStart + kWindowLength - 1);
+      printf("PinMAME CPU RAM window read failed for %s at 0x%02zx..0x%02zx\n",
+             DescribeHardwareGen(hardwareGen).c_str(), kWindowStart, kWindowStart + kWindowLength - 1);
       loggedReadFailure = true;
     }
     return;
@@ -2722,9 +2746,8 @@ int main(int argc, char** argv)
   }
 
   const bool bench_test_mode = opt_switch_test || opt_coil_test || opt_lamp_test || opt_gi_test || opt_flasher_test;
-  const bool diagnostic_mode =
-      bench_test_mode || opt_debug || opt_debug_errors || opt_debug_switches || opt_debug_coils || opt_debug_lamps ||
-      opt_debug_effects;
+  const bool diagnostic_mode = bench_test_mode || opt_debug || opt_debug_errors || opt_debug_switches ||
+                               opt_debug_coils || opt_debug_lamps || opt_debug_effects;
   if (diagnostic_mode)
   {
     opt_translite = NULL;
@@ -3227,11 +3250,14 @@ int main(int argc, char** argv)
     signal(SIGABRT, signal_handler_graceful);
 
     int index_recv = 0;
-    PINMAME_HARDWARE_GEN hardwareGen;
+    PINMAME_HARDWARE_GEN hardwareGen = PinmameGetHardwareGen();
     bool loggedPinmameIdentity = false;
     bool loggedSystem3To6ProbeEnabled = false;
     bool loggedMissingCurrentBallApi = false;
     bool loggedMissingCurrentPlayerApi = false;
+    bool trackCurrentBall = false;
+    bool trackCurrentPlayer = false;
+    bool debugSystem3To6CpuWindow = false;
 
     ppuc->StartUpdates();
     if (opt_close_coin_door)
@@ -3250,25 +3276,17 @@ int main(int argc, char** argv)
         {
           printf("PinMAME started: ROM=%s hardware=%s\n", opt_rom ? opt_rom : "(null)",
                  DescribeHardwareGen(hardwareGen).c_str());
+          printf(
+              "PinMAME probe decision: SupportsCurrentBallMemoryProbe=%s "
+              "SupportsCurrentPlayerMemoryProbe=%s pPUPTriggerEngine=%s\n",
+              SupportsCurrentBallMemoryProbe(hardwareGen) ? "true" : "false",
+              SupportsCurrentPlayerMemoryProbe(hardwareGen) ? "true" : "false",
+              pPUPTriggerEngine != nullptr ? "true" : "false");
           loggedPinmameIdentity = true;
-        }
-      }
-
-      const bool trackCurrentBall = pPUPTriggerEngine != nullptr && SupportsCurrentBallMemoryProbe(hardwareGen);
-      const bool trackCurrentPlayer = pPUPTriggerEngine != nullptr && SupportsCurrentPlayerMemoryProbe(hardwareGen);
-      const bool debugSystem3To6CpuWindow =
-          (opt_debug || opt_debug_effects || opt_debug_errors) && SupportsCurrentBallMemoryProbe(hardwareGen);
-
-      if ((opt_debug || opt_debug_effects || opt_debug_errors) && hardwareGen != 0)
-      {
-        static bool loggedProbeDecision = false;
-        if (!loggedProbeDecision)
-        {
-          printf("PinMAME probe decision: hardware=%s SupportsCurrentBallMemoryProbe=%s SupportsCurrentPlayerMemoryProbe=%s pPUPTriggerEngine=%s\n",
-                 DescribeHardwareGen(hardwareGen).c_str(), SupportsCurrentBallMemoryProbe(hardwareGen) ? "true" : "false",
-                 SupportsCurrentPlayerMemoryProbe(hardwareGen) ? "true" : "false",
-                 pPUPTriggerEngine != nullptr ? "true" : "false");
-          loggedProbeDecision = true;
+          trackCurrentBall = pPUPTriggerEngine != nullptr && SupportsCurrentBallMemoryProbe(hardwareGen);
+          trackCurrentPlayer = pPUPTriggerEngine != nullptr && SupportsCurrentPlayerMemoryProbe(hardwareGen);
+          debugSystem3To6CpuWindow =
+              (opt_debug || opt_debug_effects || opt_debug_errors) && SupportsCurrentBallMemoryProbe(hardwareGen);
         }
       }
 
