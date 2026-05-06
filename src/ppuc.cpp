@@ -51,7 +51,6 @@
 #include "libpinmame.h"
 
 #if !defined(_WIN32) && !defined(_WIN64)
-#include <dlfcn.h>
 #include <sys/select.h>
 #include <termios.h>
 #include <unistd.h>
@@ -72,10 +71,6 @@ constexpr char kSpeechTriggerSource = 'O';
 constexpr char kBoardEffectTriggerSource = 'F';
 constexpr size_t kSystem3To6CurrentPlayerOffset = 0x29;
 constexpr size_t kSystem3To6CurrentBallOffset = 0x2A;
-
-using PinmameGetRawMemoryRegionFn = const uint8_t* (*)(int region);
-using PinmameGetRawMemoryRegionLengthFn = size_t (*)(int region);
-using PinmameReadMainCPUByteFn = int (*)(uint32_t address, uint8_t* pValue);
 
 void ConfigureSDLVideoDriverForHeadlessLinux()
 {
@@ -303,9 +298,6 @@ using PinmameLogMessageArg = LogCallbackTraits<PinmameOnLogMessageCallback>::Arg
 #define PINMAME_CALLBACK_CAST(type, fn) reinterpret_cast<type>(fn)
 
 static uint64_t CurrentUnixMs();
-static PinmameGetRawMemoryRegionFn ResolvePinmameGetRawMemoryRegion();
-static PinmameGetRawMemoryRegionLengthFn ResolvePinmameGetRawMemoryRegionLength();
-static PinmameReadMainCPUByteFn ResolvePinmameReadMainCPUByte();
 static std::string DescribeHardwareGen(PINMAME_HARDWARE_GEN hardwareGen);
 static bool SupportsCurrentBallMemoryProbe(PINMAME_HARDWARE_GEN hardwareGen);
 static bool SupportsCurrentPlayerMemoryProbe(PINMAME_HARDWARE_GEN hardwareGen);
@@ -334,129 +326,6 @@ static uint64_t CurrentUnixMs()
   return static_cast<uint64_t>(
       std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
           .count());
-}
-
-static PinmameGetRawMemoryRegionFn ResolvePinmameGetRawMemoryRegion()
-{
-#if defined(_WIN32) || defined(_WIN64)
-  static HMODULE pinmameModule = nullptr;
-  if (pinmameModule == nullptr)
-  {
-#if defined(_WIN64)
-    pinmameModule = GetModuleHandleA("pinmame64.dll");
-#else
-    pinmameModule = GetModuleHandleA("pinmame.dll");
-#endif
-  }
-
-  return pinmameModule == nullptr
-             ? nullptr
-             : reinterpret_cast<PinmameGetRawMemoryRegionFn>(GetProcAddress(pinmameModule, "PinmameGetRawMemoryRegion"));
-#else
-  void* symbol = dlsym(RTLD_DEFAULT, "PinmameGetRawMemoryRegion");
-  if (symbol != nullptr)
-  {
-    return reinterpret_cast<PinmameGetRawMemoryRegionFn>(symbol);
-  }
-
-  Dl_info pinmameInfo;
-  if (dladdr(reinterpret_cast<const void*>(PinmameRun), &pinmameInfo) != 0 && pinmameInfo.dli_fname != nullptr)
-  {
-    void* pinmameHandle = dlopen(pinmameInfo.dli_fname, RTLD_LAZY | RTLD_NOLOAD);
-    if (pinmameHandle != nullptr)
-    {
-      symbol = dlsym(pinmameHandle, "PinmameGetRawMemoryRegion");
-      if (symbol != nullptr)
-      {
-        return reinterpret_cast<PinmameGetRawMemoryRegionFn>(symbol);
-      }
-    }
-  }
-
-  return nullptr;
-#endif
-}
-
-static PinmameGetRawMemoryRegionLengthFn ResolvePinmameGetRawMemoryRegionLength()
-{
-#if defined(_WIN32) || defined(_WIN64)
-  static HMODULE pinmameModule = nullptr;
-  if (pinmameModule == nullptr)
-  {
-#if defined(_WIN64)
-    pinmameModule = GetModuleHandleA("pinmame64.dll");
-#else
-    pinmameModule = GetModuleHandleA("pinmame.dll");
-#endif
-  }
-
-  return pinmameModule == nullptr ? nullptr
-                                  : reinterpret_cast<PinmameGetRawMemoryRegionLengthFn>(
-                                        GetProcAddress(pinmameModule, "PinmameGetRawMemoryRegionLength"));
-#else
-  void* symbol = dlsym(RTLD_DEFAULT, "PinmameGetRawMemoryRegionLength");
-  if (symbol != nullptr)
-  {
-    return reinterpret_cast<PinmameGetRawMemoryRegionLengthFn>(symbol);
-  }
-
-  Dl_info pinmameInfo;
-  if (dladdr(reinterpret_cast<const void*>(PinmameRun), &pinmameInfo) != 0 && pinmameInfo.dli_fname != nullptr)
-  {
-    void* pinmameHandle = dlopen(pinmameInfo.dli_fname, RTLD_LAZY | RTLD_NOLOAD);
-    if (pinmameHandle != nullptr)
-    {
-      symbol = dlsym(pinmameHandle, "PinmameGetRawMemoryRegionLength");
-      if (symbol != nullptr)
-      {
-        return reinterpret_cast<PinmameGetRawMemoryRegionLengthFn>(symbol);
-      }
-    }
-  }
-
-  return nullptr;
-#endif
-}
-
-static PinmameReadMainCPUByteFn ResolvePinmameReadMainCPUByte()
-{
-#if defined(_WIN32) || defined(_WIN64)
-  static HMODULE pinmameModule = nullptr;
-  if (pinmameModule == nullptr)
-  {
-#if defined(_WIN64)
-    pinmameModule = GetModuleHandleA("pinmame64.dll");
-#else
-    pinmameModule = GetModuleHandleA("pinmame.dll");
-#endif
-  }
-
-  return pinmameModule == nullptr
-             ? nullptr
-             : reinterpret_cast<PinmameReadMainCPUByteFn>(GetProcAddress(pinmameModule, "PinmameReadMainCPUByte"));
-#else
-  void* symbol = dlsym(RTLD_DEFAULT, "PinmameReadMainCPUByte");
-  if (symbol != nullptr)
-  {
-    return reinterpret_cast<PinmameReadMainCPUByteFn>(symbol);
-  }
-
-  Dl_info pinmameInfo;
-  if (dladdr(reinterpret_cast<const void*>(PinmameRun), &pinmameInfo) != 0 && pinmameInfo.dli_fname != nullptr)
-  {
-    void* pinmameHandle = dlopen(pinmameInfo.dli_fname, RTLD_LAZY | RTLD_NOLOAD);
-    if (pinmameHandle != nullptr)
-    {
-      symbol = dlsym(pinmameHandle, "PinmameReadMainCPUByte");
-      if (symbol != nullptr)
-      {
-        return reinterpret_cast<PinmameReadMainCPUByteFn>(symbol);
-      }
-    }
-  }
-
-  return nullptr;
-#endif
 }
 
 static std::string DescribeHardwareGen(const PINMAME_HARDWARE_GEN hardwareGen)
@@ -550,35 +419,7 @@ static bool TryReadSystem3To6CpuByte(const size_t offset, uint8_t* pValue)
   {
     return false;
   }
-
-  static PinmameReadMainCPUByteFn readMainCPUByte = ResolvePinmameReadMainCPUByte();
-  if (readMainCPUByte != nullptr && readMainCPUByte(static_cast<uint32_t>(offset), pValue) != 0)
-  {
-    return true;
-  }
-
-  static PinmameGetRawMemoryRegionFn getRawMemoryRegion = ResolvePinmameGetRawMemoryRegion();
-  static PinmameGetRawMemoryRegionLengthFn getRawMemoryRegionLength = ResolvePinmameGetRawMemoryRegionLength();
-
-  if (getRawMemoryRegion == nullptr || getRawMemoryRegionLength == nullptr)
-  {
-    return false;
-  }
-
-  const size_t regionLength = getRawMemoryRegionLength(0);
-  if (regionLength <= offset)
-  {
-    return false;
-  }
-
-  const uint8_t* pRegion = getRawMemoryRegion(0);
-  if (pRegion == nullptr)
-  {
-    return false;
-  }
-
-  *pValue = pRegion[offset];
-  return true;
+  return PinmameReadMainCPUByte(static_cast<uint32_t>(offset), pValue) != 0;
 }
 
 static bool TryReadCurrentPlayerFromPinmame(uint8_t* pCurrentPlayer)
@@ -3231,11 +3072,8 @@ int main(int argc, char** argv)
     signal(SIGABRT, signal_handler_graceful);
 
     int index_recv = 0;
-    const PINMAME_HARDWARE_GEN hardwareGen = PinmameGetHardwareGen();
-    printf("PinMAME started: ROM=%s hardware=%s\n", opt_rom ? opt_rom : "(null)",
-           DescribeHardwareGen(hardwareGen).c_str());
-    const bool trackCurrentBall = pPUPTriggerEngine != nullptr && SupportsCurrentBallMemoryProbe(hardwareGen);
-    const bool trackCurrentPlayer = pPUPTriggerEngine != nullptr && SupportsCurrentPlayerMemoryProbe(hardwareGen);
+    PINMAME_HARDWARE_GEN hardwareGen;
+    bool loggedPinmameIdentity = false;
     bool loggedMissingCurrentBallApi = false;
     bool loggedMissingCurrentPlayerApi = false;
 
@@ -3248,6 +3086,20 @@ int main(int argc, char** argv)
     while (running)
     {
       std::this_thread::sleep_for(std::chrono::microseconds(MAIN_LOOP_SLEEP_US));
+
+      if (!loggedPinmameIdentity)
+      {
+        hardwareGen = PinmameGetHardwareGen();
+        if (hardwareGen != 0)
+        {
+          printf("PinMAME started: ROM=%s hardware=%s\n", opt_rom ? opt_rom : "(null)",
+                 DescribeHardwareGen(hardwareGen).c_str());
+          loggedPinmameIdentity = true;
+        }
+      }
+
+      const bool trackCurrentBall = pPUPTriggerEngine != nullptr && SupportsCurrentBallMemoryProbe(hardwareGen);
+      const bool trackCurrentPlayer = pPUPTriggerEngine != nullptr && SupportsCurrentPlayerMemoryProbe(hardwareGen);
 
       if (game_state.load(std::memory_order_acquire) == 0)
       {
