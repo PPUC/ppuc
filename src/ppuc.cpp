@@ -2645,7 +2645,10 @@ int main(int argc, char** argv)
   // initialized.
   DMDUtil::Config* dmdConfig = DMDUtil::Config::GetInstance();
   dmdConfig->SetLogCallback(DMDUtilLogCallback);
-  dmdConfig->parseConfigFile(opt_ini_file);
+  if (HasOptionValue(opt_ini_file))
+  {
+    dmdConfig->parseConfigFile(opt_ini_file);
+  }
   dmdConfig->SetRoundedCorners(opt_rounded_corners);
 
   if (opt_pup_triggers)
