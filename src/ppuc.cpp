@@ -2815,7 +2815,7 @@ int main(int argc, char** argv)
   if (opt_pup_triggers)
   {
     pPUPTriggerEngine = std::make_unique<PUPTriggerEngine>();
-    pPUPTriggerEngine->SetDebug(opt_debug);
+    pPUPTriggerEngine->SetDebug(opt_debug || opt_debug_effects);
     pPUPTriggerEngine->SetTriggerCallback(
         [](const char source, const uint16_t id, const uint8_t value)
         {
