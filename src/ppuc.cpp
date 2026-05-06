@@ -12,6 +12,7 @@
 #include <stdlib.h>
 
 #include <atomic>
+#include <array>
 #include <chrono>
 #include <climits>
 #include <csignal>
@@ -303,6 +304,8 @@ static bool SupportsCurrentBallMemoryProbe(PINMAME_HARDWARE_GEN hardwareGen);
 static bool SupportsCurrentPlayerMemoryProbe(PINMAME_HARDWARE_GEN hardwareGen);
 static uint8_t NormalizeSystem3To6CurrentPlayer(uint8_t rawPlayer);
 static bool TryReadSystem3To6CpuByte(size_t offset, uint8_t* pValue);
+static bool TryReadSystem3To6CpuWindow(size_t startOffset, uint8_t* pValues, size_t count);
+static void LogSystem3To6CpuWindowIfChanged(PINMAME_HARDWARE_GEN hardwareGen);
 static bool TryReadCurrentPlayerFromPinmame(uint8_t* pCurrentPlayer);
 static bool TryReadCurrentBallFromPinmame(uint8_t* pCurrentBall);
 
@@ -420,6 +423,60 @@ static bool TryReadSystem3To6CpuByte(const size_t offset, uint8_t* pValue)
     return false;
   }
   return PinmameReadMainCPUByte(static_cast<uint32_t>(offset), pValue) != 0;
+}
+
+static bool TryReadSystem3To6CpuWindow(const size_t startOffset, uint8_t* pValues, const size_t count)
+{
+  if (pValues == nullptr)
+  {
+    return false;
+  }
+
+  for (size_t index = 0; index < count; ++index)
+  {
+    if (!TryReadSystem3To6CpuByte(startOffset + index, &pValues[index]))
+    {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+static void LogSystem3To6CpuWindowIfChanged(const PINMAME_HARDWARE_GEN hardwareGen)
+{
+  constexpr size_t kWindowStart = 0x20;
+  constexpr size_t kWindowLength = 0x21;
+  static std::array<uint8_t, kWindowLength> lastWindow = {};
+  static bool hasLastWindow = false;
+
+  std::array<uint8_t, kWindowLength> window = {};
+  if (!TryReadSystem3To6CpuWindow(kWindowStart, window.data(), window.size()))
+  {
+    return;
+  }
+
+  if (hasLastWindow && window == lastWindow)
+  {
+    return;
+  }
+
+  lastWindow = window;
+  hasLastWindow = true;
+
+  printf("PinMAME CPU RAM window %s @0x%02zx..0x%02zx:", DescribeHardwareGen(hardwareGen).c_str(), kWindowStart,
+         kWindowStart + kWindowLength - 1);
+  for (size_t index = 0; index < window.size(); ++index)
+  {
+    if ((index % 8) == 0)
+    {
+      printf("\n  %02zx:", kWindowStart + index);
+    }
+    printf(" %02x", window[index]);
+  }
+  printf("\n  raw_player[%02zx]=%02x raw_ball[%02zx]=%02x\n", kSystem3To6CurrentPlayerOffset,
+         window[kSystem3To6CurrentPlayerOffset - kWindowStart], kSystem3To6CurrentBallOffset,
+         window[kSystem3To6CurrentBallOffset - kWindowStart]);
 }
 
 static bool TryReadCurrentPlayerFromPinmame(uint8_t* pCurrentPlayer)
@@ -3100,6 +3157,8 @@ int main(int argc, char** argv)
 
       const bool trackCurrentBall = pPUPTriggerEngine != nullptr && SupportsCurrentBallMemoryProbe(hardwareGen);
       const bool trackCurrentPlayer = pPUPTriggerEngine != nullptr && SupportsCurrentPlayerMemoryProbe(hardwareGen);
+      const bool debugSystem3To6CpuWindow =
+          (opt_debug || opt_debug_effects || opt_debug_errors) && SupportsCurrentBallMemoryProbe(hardwareGen);
 
       if (game_state.load(std::memory_order_acquire) == 0)
       {
@@ -3108,6 +3167,11 @@ int main(int argc, char** argv)
           pPUPTriggerEngine->Update();
         }
         continue;
+      }
+
+      if (debugSystem3To6CpuWindow)
+      {
+        LogSystem3To6CpuWindowIfChanged(hardwareGen);
       }
 
       if (trackCurrentBall)
