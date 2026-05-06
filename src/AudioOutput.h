@@ -26,6 +26,7 @@ public:
 
   void ConfigureGameFormat(int frequency, int channels);
   bool LoadMusicFilesCsv(const char* csv, std::string* errorMessage);
+  void SetMusicTrackGapMs(Uint64 gapMs);
   void SetMusicEnabled(bool enabled);
   void QueueGameFrames(const int16_t* samples, size_t frameCount);
   void QueueSpeechSamples(const int16_t* samples, size_t sampleCount,
@@ -70,6 +71,7 @@ private:
   void DestroyMusicTracksLocked();
   bool ReloadMusicTracksLocked(std::string* errorMessage);
   bool StartCurrentMusicTrackLocked();
+  void ScheduleNextMusicTrackLocked();
   void AdvanceMusicTrackLocked();
   void HandleMusicTrackStoppedLocked(MIX_Track* track);
 #endif
@@ -89,6 +91,9 @@ private:
 #if defined(PPUC_HAS_SDL3_MIXER)
   MIX_Mixer* musicMixer_ = nullptr;
   MIX_Track* musicTrack_ = nullptr;
+  bool musicTrackStartPending_ = false;
+  Uint64 musicTrackStartTickMs_ = 0;
+  Uint64 musicTrackGapMs_ = 2000;
 #endif
   size_t musicTrackIndex_ = 0;
   bool musicEnabled_ = false;

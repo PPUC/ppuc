@@ -254,6 +254,7 @@ bool opt_speech = false;
 bool opt_greeting = false;
 const char* opt_speech_file = NULL;
 const char* opt_music_files = NULL;
+uint32_t opt_music_gap_ms = 2000;
 const char* opt_speech_backend = "auto";
 const char* opt_speech_voice = NULL;
 const char* opt_speech_rate_arg = NULL;
@@ -1332,6 +1333,10 @@ static struct cag_option options[] = {
      .access_name = "music-files",
      .value_name = "VALUE",
      .description = "Comma-separated MP3 playlist for in-game background music (optional)"},
+    {.identifier = 'q',
+     .access_name = "music-gap-ms",
+     .value_name = "VALUE",
+     .description = "Gap between background music tracks in milliseconds (optional, default 2000)"},
     {.identifier = 'U',
      .access_name = "speech-backend",
      .value_name = "VALUE",
@@ -1951,6 +1956,8 @@ int main(int argc, char** argv)
           opt_speech_file = DuplicateOptionalIniString(value);
         else if (key == "MusicFiles")
           opt_music_files = DuplicateOptionalIniString(value);
+        else if (key == "MusicGapMs")
+          opt_music_gap_ms = static_cast<uint32_t>(atoi(value.c_str()));
         else if (key == "Translite")
           opt_translite = DuplicateOptionalIniString(value);
         else if (key == "TransliteAttract")
@@ -2123,6 +2130,9 @@ int main(int argc, char** argv)
         break;
       case 'o':
         opt_music_files = cag_option_get_value(&cag_context);
+        break;
+      case 'q':
+        opt_music_gap_ms = static_cast<uint32_t>(atoi(cag_option_get_value(&cag_context)));
         break;
       case 'U':
         opt_speech_backend = cag_option_get_value(&cag_context);
@@ -2370,6 +2380,7 @@ int main(int argc, char** argv)
       printf("Audio output init failed: %s\n", SDL_GetError());
       return 1;
     }
+    pAudioOutput->SetMusicTrackGapMs(opt_music_gap_ms);
 
     if (HasOptionValue(opt_music_files))
     {

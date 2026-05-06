@@ -16,7 +16,6 @@ constexpr float kMusicBaseGain = 0.28f;
 constexpr float kMusicDuckGain = 0.08f;
 constexpr float kMusicAttackPerSample = 0.00012f;
 constexpr float kMusicReleasePerSample = 0.00003f;
-
 static int16_t ClampMixedSample(int value)
 {
   if (value > std::numeric_limits<int16_t>::max())
@@ -147,6 +146,10 @@ bool AudioOutput::LoadMusicFilesCsv(const char* csv, std::string* errorMessage)
   musicTrackIndex_ = 0;
   musicGain_ = 0.0f;
   musicEnabled_ = false;
+#if defined(PPUC_HAS_SDL3_MIXER)
+  musicTrackStartPending_ = false;
+  musicTrackStartTickMs_ = 0;
+#endif
 
 #if defined(PPUC_HAS_SDL3_MIXER)
   return ReloadMusicTracksLocked(errorMessage);
@@ -162,6 +165,7 @@ bool AudioOutput::LoadMusicFilesCsv(const char* csv, std::string* errorMessage)
 void AudioOutput::SetMusicEnabled(bool enabled)
 {
   std::lock_guard<std::mutex> lock(mutex_);
+  const bool wasEnabled = musicEnabled_;
   musicEnabled_ = enabled;
 
 #if defined(PPUC_HAS_SDL3_MIXER)
@@ -176,7 +180,13 @@ void AudioOutput::SetMusicEnabled(bool enabled)
     return;
   }
 
-  if (MIX_TrackPaused(musicTrack_))
+  if (!wasEnabled)
+  {
+    musicTrackStartPending_ = false;
+    musicTrackStartTickMs_ = 0;
+    StartCurrentMusicTrackLocked();
+  }
+  else if (MIX_TrackPaused(musicTrack_))
   {
     MIX_ResumeTrack(musicTrack_);
   }
@@ -184,6 +194,16 @@ void AudioOutput::SetMusicEnabled(bool enabled)
   {
     StartCurrentMusicTrackLocked();
   }
+#endif
+}
+
+void AudioOutput::SetMusicTrackGapMs(Uint64 gapMs)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+#if defined(PPUC_HAS_SDL3_MIXER)
+  musicTrackGapMs_ = gapMs;
+#else
+  (void)gapMs;
 #endif
 }
 
@@ -379,6 +399,22 @@ void AudioOutput::MixMusicLocked(int16_t* mixBuffer, size_t sampleCount,
     return;
   }
 
+  if (musicTrackStartPending_)
+  {
+    if (SDL_GetTicks() < musicTrackStartTickMs_)
+    {
+      return;
+    }
+
+    musicTrackStartPending_ = false;
+    musicTrackStartTickMs_ = 0;
+    if (!StartCurrentMusicTrackLocked())
+    {
+      musicGain_ = 0.0f;
+      return;
+    }
+  }
+
   std::vector<int16_t> musicBuffer(sampleCount, 0);
   const int generatedBytes =
       MIX_Generate(musicMixer_, musicBuffer.data(),
@@ -542,6 +578,9 @@ bool AudioOutput::StartCurrentMusicTrackLocked()
     return true;
   }
 
+  musicTrackStartPending_ = false;
+  musicTrackStartTickMs_ = 0;
+
   for (size_t attempts = 0; attempts < musicTracks_.size(); ++attempts)
   {
     MusicTrack& currentTrack = musicTracks_[musicTrackIndex_];
@@ -563,6 +602,12 @@ bool AudioOutput::StartCurrentMusicTrackLocked()
   return true;
 }
 
+void AudioOutput::ScheduleNextMusicTrackLocked()
+{
+  musicTrackStartPending_ = true;
+  musicTrackStartTickMs_ = SDL_GetTicks() + musicTrackGapMs_;
+}
+
 void AudioOutput::AdvanceMusicTrackLocked()
 {
   if (!musicTracks_.empty())
@@ -581,7 +626,7 @@ void AudioOutput::HandleMusicTrackStoppedLocked(MIX_Track* track)
   AdvanceMusicTrackLocked();
   if (musicEnabled_)
   {
-    StartCurrentMusicTrackLocked();
+    ScheduleNextMusicTrackLocked();
   }
 }
 #endif
