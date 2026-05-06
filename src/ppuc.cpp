@@ -306,6 +306,9 @@ static uint8_t NormalizeSystem3To6CurrentPlayer(uint8_t rawPlayer);
 static bool TryReadSystem3To6CpuByte(size_t offset, uint8_t* pValue);
 static bool TryReadSystem3To6CpuWindow(size_t startOffset, uint8_t* pValues, size_t count);
 static void LogSystem3To6CpuWindowIfChanged(PINMAME_HARDWARE_GEN hardwareGen);
+static bool TryReadSystem3To6RawRegionByte(size_t offset, uint8_t* pValue);
+static bool TryReadSystem3To6RawRegionWindow(size_t startOffset, uint8_t* pValues, size_t count);
+static void LogSystem3To6RawRegionWindowIfChanged(PINMAME_HARDWARE_GEN hardwareGen);
 static bool TryReadCurrentPlayerFromPinmame(uint8_t* pCurrentPlayer);
 static bool TryReadCurrentBallFromPinmame(uint8_t* pCurrentBall);
 
@@ -449,12 +452,21 @@ static void LogSystem3To6CpuWindowIfChanged(const PINMAME_HARDWARE_GEN hardwareG
   constexpr size_t kWindowLength = 0x21;
   static std::array<uint8_t, kWindowLength> lastWindow = {};
   static bool hasLastWindow = false;
+  static bool loggedReadFailure = false;
 
   std::array<uint8_t, kWindowLength> window = {};
   if (!TryReadSystem3To6CpuWindow(kWindowStart, window.data(), window.size()))
   {
+    if (!loggedReadFailure)
+    {
+      printf("PinMAME CPU RAM window read failed for %s at 0x%02zx..0x%02zx\n", DescribeHardwareGen(hardwareGen).c_str(),
+             kWindowStart, kWindowStart + kWindowLength - 1);
+      loggedReadFailure = true;
+    }
     return;
   }
+
+  loggedReadFailure = false;
 
   if (hasLastWindow && window == lastWindow)
   {
@@ -465,6 +477,92 @@ static void LogSystem3To6CpuWindowIfChanged(const PINMAME_HARDWARE_GEN hardwareG
   hasLastWindow = true;
 
   printf("PinMAME CPU RAM window %s @0x%02zx..0x%02zx:", DescribeHardwareGen(hardwareGen).c_str(), kWindowStart,
+         kWindowStart + kWindowLength - 1);
+  for (size_t index = 0; index < window.size(); ++index)
+  {
+    if ((index % 8) == 0)
+    {
+      printf("\n  %02zx:", kWindowStart + index);
+    }
+    printf(" %02x", window[index]);
+  }
+  printf("\n  raw_player[%02zx]=%02x raw_ball[%02zx]=%02x\n", kSystem3To6CurrentPlayerOffset,
+         window[kSystem3To6CurrentPlayerOffset - kWindowStart], kSystem3To6CurrentBallOffset,
+         window[kSystem3To6CurrentBallOffset - kWindowStart]);
+}
+
+static bool TryReadSystem3To6RawRegionByte(const size_t offset, uint8_t* pValue)
+{
+  if (pValue == nullptr)
+  {
+    return false;
+  }
+
+  const size_t regionLength = PinmameGetRawMemoryRegionLength(0);
+  if (regionLength <= offset)
+  {
+    return false;
+  }
+
+  const uint8_t* pRegion = PinmameGetRawMemoryRegion(0);
+  if (pRegion == nullptr)
+  {
+    return false;
+  }
+
+  *pValue = pRegion[offset];
+  return true;
+}
+
+static bool TryReadSystem3To6RawRegionWindow(const size_t startOffset, uint8_t* pValues, const size_t count)
+{
+  if (pValues == nullptr)
+  {
+    return false;
+  }
+
+  for (size_t index = 0; index < count; ++index)
+  {
+    if (!TryReadSystem3To6RawRegionByte(startOffset + index, &pValues[index]))
+    {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+static void LogSystem3To6RawRegionWindowIfChanged(const PINMAME_HARDWARE_GEN hardwareGen)
+{
+  constexpr size_t kWindowStart = 0x20;
+  constexpr size_t kWindowLength = 0x21;
+  static std::array<uint8_t, kWindowLength> lastWindow = {};
+  static bool hasLastWindow = false;
+  static bool loggedReadFailure = false;
+
+  std::array<uint8_t, kWindowLength> window = {};
+  if (!TryReadSystem3To6RawRegionWindow(kWindowStart, window.data(), window.size()))
+  {
+    if (!loggedReadFailure)
+    {
+      printf("PinMAME raw region window read failed for %s at 0x%02zx..0x%02zx\n",
+             DescribeHardwareGen(hardwareGen).c_str(), kWindowStart, kWindowStart + kWindowLength - 1);
+      loggedReadFailure = true;
+    }
+    return;
+  }
+
+  loggedReadFailure = false;
+
+  if (hasLastWindow && window == lastWindow)
+  {
+    return;
+  }
+
+  lastWindow = window;
+  hasLastWindow = true;
+
+  printf("PinMAME raw region window %s @0x%02zx..0x%02zx:", DescribeHardwareGen(hardwareGen).c_str(), kWindowStart,
          kWindowStart + kWindowLength - 1);
   for (size_t index = 0; index < window.size(); ++index)
   {
@@ -3172,6 +3270,7 @@ int main(int argc, char** argv)
       if (debugSystem3To6CpuWindow)
       {
         LogSystem3To6CpuWindowIfChanged(hardwareGen);
+        LogSystem3To6RawRegionWindowIfChanged(hardwareGen);
       }
 
       if (trackCurrentBall)
@@ -3183,7 +3282,8 @@ int main(int argc, char** argv)
         }
         else if (!loggedMissingCurrentBallApi && (opt_debug || opt_debug_errors))
         {
-          printf("Current-ball tracking unavailable: libpinmame does not expose raw memory access.\n");
+          printf("Current-ball tracking unavailable: PinmameReadMainCPUByte(0x%02zx) failed.\n",
+                 kSystem3To6CurrentBallOffset);
           loggedMissingCurrentBallApi = true;
         }
       }
@@ -3197,7 +3297,8 @@ int main(int argc, char** argv)
         }
         else if (!loggedMissingCurrentPlayerApi && (opt_debug || opt_debug_errors))
         {
-          printf("Current-player tracking unavailable: libpinmame does not expose raw memory access.\n");
+          printf("Current-player tracking unavailable: PinmameReadMainCPUByte(0x%02zx) failed.\n",
+                 kSystem3To6CurrentPlayerOffset);
           loggedMissingCurrentPlayerApi = true;
         }
       }
