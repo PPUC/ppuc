@@ -3229,6 +3229,7 @@ int main(int argc, char** argv)
     int index_recv = 0;
     PINMAME_HARDWARE_GEN hardwareGen;
     bool loggedPinmameIdentity = false;
+    bool loggedSystem3To6ProbeEnabled = false;
     bool loggedMissingCurrentBallApi = false;
     bool loggedMissingCurrentPlayerApi = false;
 
@@ -3258,6 +3259,31 @@ int main(int argc, char** argv)
       const bool debugSystem3To6CpuWindow =
           (opt_debug || opt_debug_effects || opt_debug_errors) && SupportsCurrentBallMemoryProbe(hardwareGen);
 
+      if ((opt_debug || opt_debug_effects || opt_debug_errors) && hardwareGen != 0)
+      {
+        static bool loggedProbeDecision = false;
+        if (!loggedProbeDecision)
+        {
+          printf("PinMAME probe decision: hardware=%s SupportsCurrentBallMemoryProbe=%s SupportsCurrentPlayerMemoryProbe=%s pPUPTriggerEngine=%s\n",
+                 DescribeHardwareGen(hardwareGen).c_str(), SupportsCurrentBallMemoryProbe(hardwareGen) ? "true" : "false",
+                 SupportsCurrentPlayerMemoryProbe(hardwareGen) ? "true" : "false",
+                 pPUPTriggerEngine != nullptr ? "true" : "false");
+          loggedProbeDecision = true;
+        }
+      }
+
+      if (debugSystem3To6CpuWindow && !loggedSystem3To6ProbeEnabled)
+      {
+        printf("PinMAME Sys3/S4/S6 RAM probe logging enabled for %s\n", DescribeHardwareGen(hardwareGen).c_str());
+        loggedSystem3To6ProbeEnabled = true;
+      }
+
+      if (debugSystem3To6CpuWindow)
+      {
+        LogSystem3To6CpuWindowIfChanged(hardwareGen);
+        LogSystem3To6RawRegionWindowIfChanged(hardwareGen);
+      }
+
       if (game_state.load(std::memory_order_acquire) == 0)
       {
         if (pPUPTriggerEngine)
@@ -3265,12 +3291,6 @@ int main(int argc, char** argv)
           pPUPTriggerEngine->Update();
         }
         continue;
-      }
-
-      if (debugSystem3To6CpuWindow)
-      {
-        LogSystem3To6CpuWindowIfChanged(hardwareGen);
-        LogSystem3To6RawRegionWindowIfChanged(hardwareGen);
       }
 
       if (trackCurrentBall)
