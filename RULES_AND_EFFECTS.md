@@ -135,6 +135,7 @@ Here:
 Inside the rule expression itself we no longer use those old single-character codes.
 The conditions are written with readable words:
 
+- `ball(...)`
 - `switch(...)`
 - `lamp(...)`
 - `coil(...)`
@@ -143,10 +144,13 @@ The conditions are written with readable words:
 - `coil_rising(...)`
 - `attract`
 
+Current limitation:
+`ball(...)` is currently populated from PinMAME CPU RAM only for Williams System 3, System 4, and System 6 style games.
+
 So the intended reading is:
 
 - rule header: target/output channel plus trigger ID
-- rule body: readable boolean logic over switch, lamp, coil, and attract state
+- rule body: readable boolean logic over ball, switch, lamp, coil, and attract state
 
 ### DMD / PUP Trigger Rules
 

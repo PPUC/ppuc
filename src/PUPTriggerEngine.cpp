@@ -308,7 +308,11 @@ class TriggerExpressionParser
     }
 
     PUPTriggerEngine::ExprNodeType functionType;
-    if (identifier == "switch")
+    if (identifier == "ball")
+    {
+      functionType = PUPTriggerEngine::ExprNodeType::BallState;
+    }
+    else if (identifier == "switch")
     {
       functionType = PUPTriggerEngine::ExprNodeType::SwitchState;
     }
@@ -589,6 +593,7 @@ bool PUPTriggerEngine::LoadRules(const char* path, std::string& error)
   m_switchStates.clear();
   m_lampStates.clear();
   m_coilStates.clear();
+  m_currentBall = 0;
   return true;
 }
 
@@ -669,6 +674,8 @@ bool PUPTriggerEngine::EvaluateExpression(const ExprNode* node, const TriggerEve
       return EvaluateExpression(node->left.get(), event) && EvaluateExpression(node->right.get(), event);
     case ExprNodeType::Or:
       return EvaluateExpression(node->left.get(), event) || EvaluateExpression(node->right.get(), event);
+    case ExprNodeType::BallState:
+      return m_currentBall == static_cast<uint8_t>(node->number);
     case ExprNodeType::SwitchState:
       return GetState(m_switchStates, node->number) != 0;
     case ExprNodeType::LampState:
@@ -839,6 +846,97 @@ void PUPTriggerEngine::HandleStateChange(EventType type, int number, uint8_t sta
   }
 }
 
+void PUPTriggerEngine::HandleBallChange(uint8_t currentBall)
+{
+  const uint64_t nowMs = GetNowMs();
+  std::vector<std::tuple<char, uint16_t, uint8_t, size_t>> matched;
+  TriggerCallback triggerCallback;
+  bool debug = false;
+  {
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    const uint8_t oldBall = m_currentBall;
+    if (oldBall == currentBall)
+    {
+      return;
+    }
+
+    m_currentBall = currentBall;
+
+    const TriggerEvent event = {EventType::Ball, static_cast<int>(currentBall), oldBall, currentBall};
+    for (auto& rule : m_rules)
+    {
+      const bool expressionMatched = EvaluateExpression(rule.expression.get(), event);
+
+      if (rule.delayMs > 0)
+      {
+        if (rule.eventTriggered)
+        {
+          if (expressionMatched && !rule.pending)
+          {
+            rule.pending = true;
+            rule.pendingTriggerMs = nowMs + static_cast<uint64_t>(rule.delayMs);
+          }
+        }
+        else
+        {
+          if (expressionMatched)
+          {
+            if (!rule.conditionActive)
+            {
+              rule.conditionActive = true;
+              if (!rule.pending)
+              {
+                rule.pending = true;
+                rule.pendingTriggerMs = nowMs + static_cast<uint64_t>(rule.delayMs);
+              }
+            }
+          }
+          else
+          {
+            rule.conditionActive = false;
+            rule.pending = false;
+            rule.pendingTriggerMs = 0;
+          }
+        }
+        continue;
+      }
+
+      if (!expressionMatched)
+      {
+        continue;
+      }
+
+      if (!CanTriggerNow(rule, nowMs))
+      {
+        continue;
+      }
+
+      rule.lastTriggeredMs = nowMs;
+      matched.emplace_back(rule.source, rule.id, rule.value, rule.line);
+    }
+
+    CollectDueTriggers(nowMs, matched);
+
+    triggerCallback = m_triggerCallback;
+    debug = m_debug;
+  }
+
+  for (const auto& match : matched)
+  {
+    if (debug)
+    {
+      printf("PUP trigger matched (line=%zu): source=%c id=%u value=%u\n", std::get<3>(match), std::get<0>(match),
+             std::get<1>(match), std::get<2>(match));
+    }
+
+    if (triggerCallback)
+    {
+      triggerCallback(std::get<0>(match), std::get<1>(match), std::get<2>(match));
+    }
+  }
+}
+
 void PUPTriggerEngine::OnSwitchState(int number, uint8_t state)
 {
   HandleStateChange(EventType::Switch, number, state == 0 ? 0 : 1, m_switchStates);
@@ -852,4 +950,9 @@ void PUPTriggerEngine::OnLampState(int number, uint8_t state)
 void PUPTriggerEngine::OnCoilState(int number, uint8_t state)
 {
   HandleStateChange(EventType::Coil, number, state == 0 ? 0 : 1, m_coilStates);
+}
+
+void PUPTriggerEngine::SetCurrentBall(uint8_t currentBall)
+{
+  HandleBallChange(currentBall);
 }

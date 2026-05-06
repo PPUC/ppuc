@@ -50,9 +50,12 @@
 #include "libpinmame.h"
 
 #if !defined(_WIN32) && !defined(_WIN64)
+#include <dlfcn.h>
 #include <sys/select.h>
 #include <termios.h>
 #include <unistd.h>
+#else
+#include <windows.h>
 #endif
 
 #define MAIN_LOOP_SLEEP_US 20  // Main loop sleep time in microseconds
@@ -66,6 +69,10 @@ std::unique_ptr<SpeechService> pSpeechService;
 
 constexpr char kSpeechTriggerSource = 'O';
 constexpr char kBoardEffectTriggerSource = 'F';
+constexpr size_t kSystem3To6CurrentBallOffset = 0x2A;
+
+using PinmameGetRawMemoryRegionFn = const uint8_t* (*)(int region);
+using PinmameGetRawMemoryRegionLengthFn = size_t (*)(int region);
 
 void ConfigureSDLVideoDriverForHeadlessLinux()
 {
@@ -293,6 +300,10 @@ using PinmameLogMessageArg = LogCallbackTraits<PinmameOnLogMessageCallback>::Arg
 #define PINMAME_CALLBACK_CAST(type, fn) reinterpret_cast<type>(fn)
 
 static uint64_t CurrentUnixMs();
+static PinmameGetRawMemoryRegionFn ResolvePinmameGetRawMemoryRegion();
+static PinmameGetRawMemoryRegionLengthFn ResolvePinmameGetRawMemoryRegionLength();
+static bool SupportsCurrentBallMemoryProbe(PINMAME_HARDWARE_GEN hardwareGen);
+static bool TryReadCurrentBallFromPinmame(uint8_t* pCurrentBall);
 
 static void PrintFlushedLogLine(const char* prefix, const char* message)
 {
@@ -314,6 +325,85 @@ static uint64_t CurrentUnixMs()
   return static_cast<uint64_t>(
       std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
           .count());
+}
+
+static PinmameGetRawMemoryRegionFn ResolvePinmameGetRawMemoryRegion()
+{
+#if defined(_WIN32) || defined(_WIN64)
+  static HMODULE pinmameModule = nullptr;
+  if (pinmameModule == nullptr)
+  {
+#if defined(_WIN64)
+    pinmameModule = GetModuleHandleA("pinmame64.dll");
+#else
+    pinmameModule = GetModuleHandleA("pinmame.dll");
+#endif
+  }
+
+  return pinmameModule == nullptr
+             ? nullptr
+             : reinterpret_cast<PinmameGetRawMemoryRegionFn>(GetProcAddress(pinmameModule, "PinmameGetRawMemoryRegion"));
+#else
+  return reinterpret_cast<PinmameGetRawMemoryRegionFn>(dlsym(RTLD_DEFAULT, "PinmameGetRawMemoryRegion"));
+#endif
+}
+
+static PinmameGetRawMemoryRegionLengthFn ResolvePinmameGetRawMemoryRegionLength()
+{
+#if defined(_WIN32) || defined(_WIN64)
+  static HMODULE pinmameModule = nullptr;
+  if (pinmameModule == nullptr)
+  {
+#if defined(_WIN64)
+    pinmameModule = GetModuleHandleA("pinmame64.dll");
+#else
+    pinmameModule = GetModuleHandleA("pinmame.dll");
+#endif
+  }
+
+  return pinmameModule == nullptr ? nullptr
+                                  : reinterpret_cast<PinmameGetRawMemoryRegionLengthFn>(
+                                        GetProcAddress(pinmameModule, "PinmameGetRawMemoryRegionLength"));
+#else
+  return reinterpret_cast<PinmameGetRawMemoryRegionLengthFn>(dlsym(RTLD_DEFAULT, "PinmameGetRawMemoryRegionLength"));
+#endif
+}
+
+static bool SupportsCurrentBallMemoryProbe(const PINMAME_HARDWARE_GEN hardwareGen)
+{
+  return hardwareGen == PINMAME_HARDWARE_GEN_S3 || hardwareGen == PINMAME_HARDWARE_GEN_S3C ||
+         hardwareGen == PINMAME_HARDWARE_GEN_S4 || hardwareGen == PINMAME_HARDWARE_GEN_S6;
+}
+
+static bool TryReadCurrentBallFromPinmame(uint8_t* pCurrentBall)
+{
+  if (pCurrentBall == nullptr)
+  {
+    return false;
+  }
+
+  static PinmameGetRawMemoryRegionFn getRawMemoryRegion = ResolvePinmameGetRawMemoryRegion();
+  static PinmameGetRawMemoryRegionLengthFn getRawMemoryRegionLength = ResolvePinmameGetRawMemoryRegionLength();
+
+  if (getRawMemoryRegion == nullptr || getRawMemoryRegionLength == nullptr)
+  {
+    return false;
+  }
+
+  const size_t regionLength = getRawMemoryRegionLength(0);
+  if (regionLength <= kSystem3To6CurrentBallOffset)
+  {
+    return false;
+  }
+
+  const uint8_t* pRegion = getRawMemoryRegion(0);
+  if (pRegion == nullptr)
+  {
+    return false;
+  }
+
+  *pCurrentBall = pRegion[kSystem3To6CurrentBallOffset];
+  return true;
 }
 
 static bool ParseUint32Strict(const char* text, uint32_t* outValue)
@@ -1782,6 +1872,10 @@ void PINMAMECALLBACK OnSolenoidUpdated(PinmameSolenoidState* p_solenoidState, co
     if (isGameOnCoil)
     {
       pPUPTriggerEngine->SetAttractMode(coilState == 0);
+      if (coilState == 0)
+      {
+        pPUPTriggerEngine->SetCurrentBall(0);
+      }
     }
     pPUPTriggerEngine->OnCoilState(p_solenoidState->solNo, coilState);
   }
@@ -2934,6 +3028,9 @@ int main(int argc, char** argv)
     signal(SIGABRT, signal_handler_graceful);
 
     int index_recv = 0;
+    const PINMAME_HARDWARE_GEN hardwareGen = PinmameGetHardwareGen();
+    const bool trackCurrentBall = pPUPTriggerEngine != nullptr && SupportsCurrentBallMemoryProbe(hardwareGen);
+    bool loggedMissingCurrentBallApi = false;
 
     ppuc->StartUpdates();
     if (opt_close_coin_door)
@@ -2952,6 +3049,20 @@ int main(int argc, char** argv)
           pPUPTriggerEngine->Update();
         }
         continue;
+      }
+
+      if (trackCurrentBall)
+      {
+        uint8_t currentBall = 0;
+        if (TryReadCurrentBallFromPinmame(&currentBall))
+        {
+          pPUPTriggerEngine->SetCurrentBall(currentBall);
+        }
+        else if (!loggedMissingCurrentBallApi && (opt_debug || opt_debug_errors))
+        {
+          printf("Current-ball tracking unavailable: libpinmame does not expose raw memory access.\n");
+          loggedMissingCurrentBallApi = true;
+        }
       }
 
       PPUCSwitchState* switchState;

@@ -2,6 +2,7 @@
 # <source> <id> [value] [cooldown=<milliseconds>] [delay=<milliseconds>] : <expression>
 #
 # Expression functions:
+# - ball(<number>)          true if the current ball-in-play number matches
 # - switch(<number>)        current switch state (true when closed)
 # - lamp(<number>)          current lamp state (true when lit)
 # - coil(<number>)          current coil state (true when active)
@@ -27,6 +28,9 @@ P 102 0 : switch_falling(54) && !lamp(77)
 
 # Trigger when coil 20 becomes active while lamp 42 is lit.
 P 103 1 : coil_rising(20) && lamp(42)
+
+# Trigger when the game advances to ball 2.
+P 106 1 : ball(2)
 
 # Trigger at most every 500ms while in attract mode.
 P 104 1 cooldown=500 : switch_rising(13) && attract

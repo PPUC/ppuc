@@ -23,6 +23,7 @@ class PUPTriggerEngine
   void OnSwitchState(int number, uint8_t state);
   void OnLampState(int number, uint8_t state);
   void OnCoilState(int number, uint8_t state);
+  void SetCurrentBall(uint8_t currentBall);
   void SetAttractMode(bool attractMode);
 
   // Internal types are public to keep parser implementation simple in .cpp.
@@ -30,7 +31,8 @@ class PUPTriggerEngine
   {
     Switch,
     Lamp,
-    Coil
+    Coil,
+    Ball
   };
 
   struct TriggerEvent
@@ -48,6 +50,7 @@ class PUPTriggerEngine
     Not,
     And,
     Or,
+    BallState,
     SwitchState,
     LampState,
     CoilState,
@@ -92,12 +95,14 @@ class PUPTriggerEngine
   bool CanTriggerNow(const Rule& rule, uint64_t nowMs) const;
   void CollectDueTriggers(uint64_t nowMs, std::vector<std::tuple<char, uint16_t, uint8_t, size_t>>& matched);
   void HandleStateChange(EventType type, int number, uint8_t state, std::unordered_map<int, uint8_t>& states);
+  void HandleBallChange(uint8_t currentBall);
 
   std::unordered_map<int, uint8_t> m_switchStates;
   std::unordered_map<int, uint8_t> m_lampStates;
   std::unordered_map<int, uint8_t> m_coilStates;
   std::vector<Rule> m_rules;
   TriggerCallback m_triggerCallback;
+  uint8_t m_currentBall = 0;
   bool m_attractMode = true;
   bool m_debug = false;
   mutable std::mutex m_mutex;
