@@ -74,6 +74,7 @@ constexpr size_t kSystem3To6CurrentBallOffset = 0x2A;
 
 using PinmameGetRawMemoryRegionFn = const uint8_t* (*)(int region);
 using PinmameGetRawMemoryRegionLengthFn = size_t (*)(int region);
+using PinmameReadMainCPUByteFn = int (*)(uint32_t address, uint8_t* pValue);
 
 void ConfigureSDLVideoDriverForHeadlessLinux()
 {
@@ -303,9 +304,11 @@ using PinmameLogMessageArg = LogCallbackTraits<PinmameOnLogMessageCallback>::Arg
 static uint64_t CurrentUnixMs();
 static PinmameGetRawMemoryRegionFn ResolvePinmameGetRawMemoryRegion();
 static PinmameGetRawMemoryRegionLengthFn ResolvePinmameGetRawMemoryRegionLength();
+static PinmameReadMainCPUByteFn ResolvePinmameReadMainCPUByte();
 static bool SupportsCurrentBallMemoryProbe(PINMAME_HARDWARE_GEN hardwareGen);
 static bool SupportsCurrentPlayerMemoryProbe(PINMAME_HARDWARE_GEN hardwareGen);
 static uint8_t NormalizeSystem3To6CurrentPlayer(uint8_t rawPlayer);
+static bool TryReadSystem3To6CpuByte(size_t offset, uint8_t* pValue);
 static bool TryReadCurrentPlayerFromPinmame(uint8_t* pCurrentPlayer);
 static bool TryReadCurrentBallFromPinmame(uint8_t* pCurrentBall);
 
@@ -413,6 +416,47 @@ static PinmameGetRawMemoryRegionLengthFn ResolvePinmameGetRawMemoryRegionLength(
 #endif
 }
 
+static PinmameReadMainCPUByteFn ResolvePinmameReadMainCPUByte()
+{
+#if defined(_WIN32) || defined(_WIN64)
+  static HMODULE pinmameModule = nullptr;
+  if (pinmameModule == nullptr)
+  {
+#if defined(_WIN64)
+    pinmameModule = GetModuleHandleA("pinmame64.dll");
+#else
+    pinmameModule = GetModuleHandleA("pinmame.dll");
+#endif
+  }
+
+  return pinmameModule == nullptr
+             ? nullptr
+             : reinterpret_cast<PinmameReadMainCPUByteFn>(GetProcAddress(pinmameModule, "PinmameReadMainCPUByte"));
+#else
+  void* symbol = dlsym(RTLD_DEFAULT, "PinmameReadMainCPUByte");
+  if (symbol != nullptr)
+  {
+    return reinterpret_cast<PinmameReadMainCPUByteFn>(symbol);
+  }
+
+  Dl_info pinmameInfo;
+  if (dladdr(reinterpret_cast<const void*>(PinmameRun), &pinmameInfo) != 0 && pinmameInfo.dli_fname != nullptr)
+  {
+    void* pinmameHandle = dlopen(pinmameInfo.dli_fname, RTLD_LAZY | RTLD_NOLOAD);
+    if (pinmameHandle != nullptr)
+    {
+      symbol = dlsym(pinmameHandle, "PinmameReadMainCPUByte");
+      if (symbol != nullptr)
+      {
+        return reinterpret_cast<PinmameReadMainCPUByteFn>(symbol);
+      }
+    }
+  }
+
+  return nullptr;
+#endif
+}
+
 static bool SupportsCurrentBallMemoryProbe(const PINMAME_HARDWARE_GEN hardwareGen)
 {
   return hardwareGen == PINMAME_HARDWARE_GEN_S3 || hardwareGen == PINMAME_HARDWARE_GEN_S3C ||
@@ -439,11 +483,17 @@ static uint8_t NormalizeSystem3To6CurrentPlayer(const uint8_t rawPlayer)
   return 0;
 }
 
-static bool TryReadCurrentPlayerFromPinmame(uint8_t* pCurrentPlayer)
+static bool TryReadSystem3To6CpuByte(const size_t offset, uint8_t* pValue)
 {
-  if (pCurrentPlayer == nullptr)
+  if (pValue == nullptr)
   {
     return false;
+  }
+
+  static PinmameReadMainCPUByteFn readMainCPUByte = ResolvePinmameReadMainCPUByte();
+  if (readMainCPUByte != nullptr && readMainCPUByte(static_cast<uint32_t>(offset), pValue) != 0)
+  {
+    return true;
   }
 
   static PinmameGetRawMemoryRegionFn getRawMemoryRegion = ResolvePinmameGetRawMemoryRegion();
@@ -455,7 +505,7 @@ static bool TryReadCurrentPlayerFromPinmame(uint8_t* pCurrentPlayer)
   }
 
   const size_t regionLength = getRawMemoryRegionLength(0);
-  if (regionLength <= kSystem3To6CurrentPlayerOffset)
+  if (regionLength <= offset)
   {
     return false;
   }
@@ -466,7 +516,24 @@ static bool TryReadCurrentPlayerFromPinmame(uint8_t* pCurrentPlayer)
     return false;
   }
 
-  *pCurrentPlayer = NormalizeSystem3To6CurrentPlayer(pRegion[kSystem3To6CurrentPlayerOffset]);
+  *pValue = pRegion[offset];
+  return true;
+}
+
+static bool TryReadCurrentPlayerFromPinmame(uint8_t* pCurrentPlayer)
+{
+  if (pCurrentPlayer == nullptr)
+  {
+    return false;
+  }
+
+  uint8_t rawPlayer = 0;
+  if (!TryReadSystem3To6CpuByte(kSystem3To6CurrentPlayerOffset, &rawPlayer))
+  {
+    return false;
+  }
+
+  *pCurrentPlayer = NormalizeSystem3To6CurrentPlayer(rawPlayer);
   return true;
 }
 
@@ -477,28 +544,7 @@ static bool TryReadCurrentBallFromPinmame(uint8_t* pCurrentBall)
     return false;
   }
 
-  static PinmameGetRawMemoryRegionFn getRawMemoryRegion = ResolvePinmameGetRawMemoryRegion();
-  static PinmameGetRawMemoryRegionLengthFn getRawMemoryRegionLength = ResolvePinmameGetRawMemoryRegionLength();
-
-  if (getRawMemoryRegion == nullptr || getRawMemoryRegionLength == nullptr)
-  {
-    return false;
-  }
-
-  const size_t regionLength = getRawMemoryRegionLength(0);
-  if (regionLength <= kSystem3To6CurrentBallOffset)
-  {
-    return false;
-  }
-
-  const uint8_t* pRegion = getRawMemoryRegion(0);
-  if (pRegion == nullptr)
-  {
-    return false;
-  }
-
-  *pCurrentBall = pRegion[kSystem3To6CurrentBallOffset];
-  return true;
+  return TryReadSystem3To6CpuByte(kSystem3To6CurrentBallOffset, pCurrentBall);
 }
 
 static bool ParseUint32Strict(const char* text, uint32_t* outValue)
