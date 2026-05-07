@@ -19,15 +19,18 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <filesystem>
 #include <fstream>
 #include <memory>
 #include <mutex>
-#include <sstream>
+#include <optional>
 #include <queue>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <type_traits>
 #include <unordered_map>
+#include <vector>
 
 #include "DMDUtil/Config.h"
 #include "DMDUtil/ConsoleDMD.h"
@@ -41,6 +44,7 @@
 #include "AudioOutput.h"
 #include "PUPTriggerEngine.h"
 #include "SDL3/SDL.h"
+#include "SDL3/SDL_filesystem.h"
 #include "SDL3_image/SDL_image.h"
 #include "SpeechCliSupport.h"
 #include "SpeechService.h"
@@ -59,6 +63,7 @@
 #endif
 
 #define MAIN_LOOP_SLEEP_US 20  // Main loop sleep time in microseconds
+constexpr auto kPinmameTrackedStatePollInterval = std::chrono::milliseconds(500);
 
 DMDUtil::DMD* pDmd;
 PPUC* ppuc;
@@ -69,8 +74,46 @@ std::unique_ptr<SpeechService> pSpeechService;
 
 constexpr char kSpeechTriggerSource = 'O';
 constexpr char kBoardEffectTriggerSource = 'F';
-constexpr size_t kSystem3To6CurrentPlayerOffset = 0x29;
-constexpr size_t kSystem3To6CurrentBallOffset = 0x2A;
+
+enum class PinmameMapEncoding
+{
+  INT,
+  BCD
+};
+
+enum class PinmameMapNibble
+{
+  BOTH,
+  HIGH,
+  LOW
+};
+
+struct PinmameTrackedField
+{
+  bool available = false;
+  uint32_t address = 0;
+  PinmameMapEncoding encoding = PinmameMapEncoding::INT;
+  PinmameMapNibble nibble = PinmameMapNibble::BOTH;
+  uint8_t mask = 0xFF;
+  int offset = 0;
+  bool treatZeroAsUnavailable = false;
+};
+
+struct PinmameTrackingConfig
+{
+  bool attemptedLoad = false;
+  bool loaded = false;
+  std::string mapPath;
+  PinmameTrackedField currentPlayer;
+  PinmameTrackedField currentBall;
+};
+
+struct PinmamePlatformMemoryRange
+{
+  uint32_t address = 0;
+  uint32_t size = 0;
+  PinmameMapNibble nibble = PinmameMapNibble::BOTH;
+};
 
 void ConfigureSDLVideoDriverForHeadlessLinux()
 {
@@ -298,13 +341,25 @@ using PinmameLogMessageArg = LogCallbackTraits<PinmameOnLogMessageCallback>::Arg
 #define PINMAME_CALLBACK_CAST(type, fn) reinterpret_cast<type>(fn)
 
 static uint64_t CurrentUnixMs();
+static std::string NormalizeRomNameForMapLookup(const char* rom);
+static std::filesystem::path GetExecutableDirectory();
+static std::filesystem::path GetPinmameBaseDirectory();
+static std::vector<std::filesystem::path> GetPinmameNvramMapsRootCandidates();
+static std::optional<std::filesystem::path> FindPinmameNvramMapsRoot();
 static std::string DescribeHardwareGen(PINMAME_HARDWARE_GEN hardwareGen);
-static bool SupportsCurrentBallMemoryProbe(PINMAME_HARDWARE_GEN hardwareGen);
-static bool SupportsCurrentPlayerMemoryProbe(PINMAME_HARDWARE_GEN hardwareGen);
-static uint8_t NormalizeSystem3To6CurrentPlayer(uint8_t rawPlayer);
-static bool TryReadSystem3To6CpuByte(size_t offset, uint8_t* pValue);
-static bool TryReadCurrentPlayerFromPinmame(uint8_t* pCurrentPlayer);
-static bool TryReadCurrentBallFromPinmame(uint8_t* pCurrentBall);
+static bool TryParseMapUnsigned(const YAML::Node& node, uint32_t* pValue);
+static std::optional<PinmameMapNibble> TryParseMapNibble(const YAML::Node& node);
+static bool TryLoadPlatformNibbleDefaults(const std::filesystem::path& path,
+                                          std::vector<PinmamePlatformMemoryRange>* pRanges, std::string* pError);
+static std::optional<PinmameMapNibble> ResolvePlatformNibbleDefault(
+    const std::vector<PinmamePlatformMemoryRange>& ranges, uint32_t address);
+static bool HardwareGenMatchesNvramMapPath(PINMAME_HARDWARE_GEN hardwareGen, const std::string& relativeMapPath);
+static bool TryLoadTrackedFieldFromMap(const YAML::Node& fieldNode,
+                                       const std::vector<PinmamePlatformMemoryRange>& platformRanges,
+                                       PinmameTrackedField* pField, std::string* pError);
+static bool TryLoadPinmameTrackingConfig(const char* rom, PINMAME_HARDWARE_GEN hardwareGen,
+                                         PinmameTrackingConfig* pConfig, std::string* pError);
+static bool TryDecodeTrackedPinmameValue(const PinmameTrackedField& field, uint8_t* pValue);
 
 static void PrintFlushedLogLine(const char* prefix, const char* message)
 {
@@ -328,6 +383,99 @@ static uint64_t CurrentUnixMs()
           .count());
 }
 
+static std::string NormalizeRomNameForMapLookup(const char* rom)
+{
+  if (rom == nullptr || rom[0] == '\0')
+  {
+    return "";
+  }
+
+  std::filesystem::path romPath(rom);
+  std::string romName = romPath.filename().string();
+  const std::string extension = romPath.extension().string();
+  if (!extension.empty())
+  {
+    romName.resize(romName.size() - extension.size());
+  }
+  return romName;
+}
+
+static std::filesystem::path GetExecutableDirectory()
+{
+  const char* basePath = SDL_GetBasePath();
+  if (basePath == nullptr || basePath[0] == '\0')
+  {
+    return std::filesystem::current_path();
+  }
+
+  std::filesystem::path path(basePath);
+  SDL_free(const_cast<char*>(basePath));
+  return path;
+}
+
+static std::filesystem::path GetPinmameBaseDirectory()
+{
+#if defined(_WIN32) || defined(_WIN64)
+  if (opt_pinmame_path != nullptr)
+  {
+    return std::filesystem::path(opt_pinmame_path);
+  }
+
+  const char* homeDrive = getenv("HOMEDRIVE");
+  const char* homePath = getenv("HOMEPATH");
+  if (homeDrive != nullptr && homePath != nullptr)
+  {
+    return std::filesystem::path(std::string(homeDrive) + std::string(homePath)) / "pinmame";
+  }
+#else
+  if (opt_pinmame_path != nullptr)
+  {
+    return std::filesystem::path(opt_pinmame_path);
+  }
+
+  const char* home = getenv("HOME");
+  if (home != nullptr)
+  {
+    return std::filesystem::path(home) / ".pinmame";
+  }
+#endif
+
+  return {};
+}
+
+static std::vector<std::filesystem::path> GetPinmameNvramMapsRootCandidates()
+{
+  const std::filesystem::path exeDir = GetExecutableDirectory();
+  const std::filesystem::path cwd = std::filesystem::current_path();
+  const std::filesystem::path pinmameDir = GetPinmameBaseDirectory();
+
+  std::vector<std::filesystem::path> candidates = {
+      exeDir / "pinmame-nvram-maps",
+      cwd / "pinmame-nvram-maps",
+  };
+
+  if (!pinmameDir.empty())
+  {
+    candidates.push_back(pinmameDir / "pinmame-nvram-maps");
+  }
+
+  return candidates;
+}
+
+static std::optional<std::filesystem::path> FindPinmameNvramMapsRoot()
+{
+  for (const auto& candidate : GetPinmameNvramMapsRootCandidates())
+  {
+    if (std::filesystem::exists(candidate / "index.json") && std::filesystem::exists(candidate / "maps") &&
+        std::filesystem::exists(candidate / "platforms"))
+    {
+      return candidate;
+    }
+  }
+
+  return std::nullopt;
+}
+
 static std::string DescribeHardwareGen(const PINMAME_HARDWARE_GEN hardwareGen)
 {
   struct HardwareGenLabel
@@ -337,30 +485,54 @@ static std::string DescribeHardwareGen(const PINMAME_HARDWARE_GEN hardwareGen)
   };
 
   static constexpr HardwareGenLabel kLabels[] = {
-      {PINMAME_HARDWARE_GEN_WPCALPHA_1, "WPCALPHA_1"}, {PINMAME_HARDWARE_GEN_WPCALPHA_2, "WPCALPHA_2"},
-      {PINMAME_HARDWARE_GEN_WPCDMD, "WPCDMD"},         {PINMAME_HARDWARE_GEN_WPCFLIPTRON, "WPCFLIPTRON"},
-      {PINMAME_HARDWARE_GEN_WPCDCS, "WPCDCS"},         {PINMAME_HARDWARE_GEN_WPCSECURITY, "WPCSECURITY"},
-      {PINMAME_HARDWARE_GEN_WPC95DCS, "WPC95DCS"},     {PINMAME_HARDWARE_GEN_WPC95, "WPC95"},
-      {PINMAME_HARDWARE_GEN_S11, "S11"},               {PINMAME_HARDWARE_GEN_S11X, "S11X"},
-      {PINMAME_HARDWARE_GEN_S11B2, "S11B2"},           {PINMAME_HARDWARE_GEN_S11C, "S11C"},
-      {PINMAME_HARDWARE_GEN_S9, "S9"},                 {PINMAME_HARDWARE_GEN_DE, "DE"},
-      {PINMAME_HARDWARE_GEN_DEDMD16, "DEDMD16"},       {PINMAME_HARDWARE_GEN_DEDMD32, "DEDMD32"},
-      {PINMAME_HARDWARE_GEN_DEDMD64, "DEDMD64"},       {PINMAME_HARDWARE_GEN_S7, "S7"},
-      {PINMAME_HARDWARE_GEN_S6, "S6"},                 {PINMAME_HARDWARE_GEN_S4, "S4"},
-      {PINMAME_HARDWARE_GEN_S3C, "S3C"},               {PINMAME_HARDWARE_GEN_S3, "S3"},
-      {PINMAME_HARDWARE_GEN_BY17, "BY17"},             {PINMAME_HARDWARE_GEN_BY35, "BY35"},
-      {PINMAME_HARDWARE_GEN_STMPU100, "STMPU100"},     {PINMAME_HARDWARE_GEN_STMPU200, "STMPU200"},
-      {PINMAME_HARDWARE_GEN_ASTRO, "ASTRO"},           {PINMAME_HARDWARE_GEN_HNK, "HNK"},
-      {PINMAME_HARDWARE_GEN_BYPROTO, "BYPROTO"},       {PINMAME_HARDWARE_GEN_BY6803, "BY6803"},
-      {PINMAME_HARDWARE_GEN_BY6803A, "BY6803A"},       {PINMAME_HARDWARE_GEN_BOWLING, "BOWLING"},
-      {PINMAME_HARDWARE_GEN_GTS1, "GTS1"},             {PINMAME_HARDWARE_GEN_GTS80, "GTS80"},
-      {PINMAME_HARDWARE_GEN_GTS80B, "GTS80B"},         {PINMAME_HARDWARE_GEN_WS, "WS"},
-      {PINMAME_HARDWARE_GEN_WS_1, "WS_1"},             {PINMAME_HARDWARE_GEN_WS_2, "WS_2"},
-      {PINMAME_HARDWARE_GEN_GTS3, "GTS3"},             {PINMAME_HARDWARE_GEN_ZAC1, "ZAC1"},
-      {PINMAME_HARDWARE_GEN_ZAC2, "ZAC2"},             {PINMAME_HARDWARE_GEN_SAM, "SAM"},
-      {PINMAME_HARDWARE_GEN_ALVG, "ALVG"},             {PINMAME_HARDWARE_GEN_ALVG_DMD2, "ALVG_DMD2"},
-      {PINMAME_HARDWARE_GEN_MRGAME, "MRGAME"},         {PINMAME_HARDWARE_GEN_SLEIC, "SLEIC"},
-      {PINMAME_HARDWARE_GEN_WICO, "WICO"},             {PINMAME_HARDWARE_GEN_SPA, "SPA"},
+      {PINMAME_HARDWARE_GEN_WPCALPHA_1, "WPCALPHA_1"},
+      {PINMAME_HARDWARE_GEN_WPCALPHA_2, "WPCALPHA_2"},
+      {PINMAME_HARDWARE_GEN_WPCDMD, "WPCDMD"},
+      {PINMAME_HARDWARE_GEN_WPCFLIPTRON, "WPCFLIPTRON"},
+      {PINMAME_HARDWARE_GEN_WPCDCS, "WPCDCS"},
+      {PINMAME_HARDWARE_GEN_WPCSECURITY, "WPCSECURITY"},
+      {PINMAME_HARDWARE_GEN_WPC95DCS, "WPC95DCS"},
+      {PINMAME_HARDWARE_GEN_WPC95, "WPC95"},
+      {PINMAME_HARDWARE_GEN_S11, "S11"},
+      {PINMAME_HARDWARE_GEN_S11X, "S11X"},
+      {PINMAME_HARDWARE_GEN_S11B2, "S11B2"},
+      {PINMAME_HARDWARE_GEN_S11C, "S11C"},
+      {PINMAME_HARDWARE_GEN_S9, "S9"},
+      {PINMAME_HARDWARE_GEN_DE, "DE"},
+      {PINMAME_HARDWARE_GEN_DEDMD16, "DEDMD16"},
+      {PINMAME_HARDWARE_GEN_DEDMD32, "DEDMD32"},
+      {PINMAME_HARDWARE_GEN_DEDMD64, "DEDMD64"},
+      {PINMAME_HARDWARE_GEN_S7, "S7"},
+      {PINMAME_HARDWARE_GEN_S6, "S6"},
+      {PINMAME_HARDWARE_GEN_S4, "S4"},
+      {PINMAME_HARDWARE_GEN_S3C, "S3C"},
+      {PINMAME_HARDWARE_GEN_S3, "S3"},
+      {PINMAME_HARDWARE_GEN_BY17, "BY17"},
+      {PINMAME_HARDWARE_GEN_BY35, "BY35"},
+      {PINMAME_HARDWARE_GEN_STMPU100, "STMPU100"},
+      {PINMAME_HARDWARE_GEN_STMPU200, "STMPU200"},
+      {PINMAME_HARDWARE_GEN_ASTRO, "ASTRO"},
+      {PINMAME_HARDWARE_GEN_HNK, "HNK"},
+      {PINMAME_HARDWARE_GEN_BYPROTO, "BYPROTO"},
+      {PINMAME_HARDWARE_GEN_BY6803, "BY6803"},
+      {PINMAME_HARDWARE_GEN_BY6803A, "BY6803A"},
+      {PINMAME_HARDWARE_GEN_BOWLING, "BOWLING"},
+      {PINMAME_HARDWARE_GEN_GTS1, "GTS1"},
+      {PINMAME_HARDWARE_GEN_GTS80, "GTS80"},
+      {PINMAME_HARDWARE_GEN_GTS80B, "GTS80B"},
+      {PINMAME_HARDWARE_GEN_WS, "WS"},
+      {PINMAME_HARDWARE_GEN_WS_1, "WS_1"},
+      {PINMAME_HARDWARE_GEN_WS_2, "WS_2"},
+      {PINMAME_HARDWARE_GEN_GTS3, "GTS3"},
+      {PINMAME_HARDWARE_GEN_ZAC1, "ZAC1"},
+      {PINMAME_HARDWARE_GEN_ZAC2, "ZAC2"},
+      {PINMAME_HARDWARE_GEN_SAM, "SAM"},
+      {PINMAME_HARDWARE_GEN_ALVG, "ALVG"},
+      {PINMAME_HARDWARE_GEN_ALVG_DMD2, "ALVG_DMD2"},
+      {PINMAME_HARDWARE_GEN_MRGAME, "MRGAME"},
+      {PINMAME_HARDWARE_GEN_SLEIC, "SLEIC"},
+      {PINMAME_HARDWARE_GEN_WICO, "WICO"},
+      {PINMAME_HARDWARE_GEN_SPA, "SPA"},
   };
 
   std::ostringstream stream;
@@ -387,66 +559,424 @@ static std::string DescribeHardwareGen(const PINMAME_HARDWARE_GEN hardwareGen)
   return stream.str();
 }
 
-static bool SupportsCurrentBallMemoryProbe(const PINMAME_HARDWARE_GEN hardwareGen)
+static bool TryParseMapUnsigned(const YAML::Node& node, uint32_t* pValue)
 {
-  return (hardwareGen & PINMAME_HARDWARE_GEN_S3) != 0 || (hardwareGen & PINMAME_HARDWARE_GEN_S3C) != 0 ||
-         (hardwareGen & PINMAME_HARDWARE_GEN_S4) != 0 || (hardwareGen & PINMAME_HARDWARE_GEN_S6) != 0;
-}
-
-static bool SupportsCurrentPlayerMemoryProbe(const PINMAME_HARDWARE_GEN hardwareGen)
-{
-  return SupportsCurrentBallMemoryProbe(hardwareGen);
-}
-
-static uint8_t NormalizeSystem3To6CurrentPlayer(const uint8_t rawPlayer)
-{
-  if (rawPlayer <= 3)
-  {
-    return static_cast<uint8_t>(rawPlayer + 1);
-  }
-
-  if (rawPlayer >= 1 && rawPlayer <= 4)
-  {
-    return rawPlayer;
-  }
-
-  return 0;
-}
-
-static bool TryReadSystem3To6CpuByte(const size_t offset, uint8_t* pValue)
-{
-  if (pValue == nullptr)
-  {
-    return false;
-  }
-  return PinmameReadMainCPUByte(static_cast<uint32_t>(offset), pValue) != 0;
-}
-
-static bool TryReadCurrentPlayerFromPinmame(uint8_t* pCurrentPlayer)
-{
-  if (pCurrentPlayer == nullptr)
+  if (!node || pValue == nullptr)
   {
     return false;
   }
 
-  uint8_t rawPlayer = 0;
-  if (!TryReadSystem3To6CpuByte(kSystem3To6CurrentPlayerOffset, &rawPlayer))
+  if (node.IsScalar())
   {
+    const std::string text = node.as<std::string>();
+    if (text.empty())
+    {
+      return false;
+    }
+
+    char* end = nullptr;
+    const unsigned long value = strtoul(text.c_str(), &end, 0);
+    if (end == nullptr || *end != '\0' || value > UINT32_MAX)
+    {
+      return false;
+    }
+
+    *pValue = static_cast<uint32_t>(value);
+    return true;
+  }
+
+  return false;
+}
+
+static std::optional<PinmameMapNibble> TryParseMapNibble(const YAML::Node& node)
+{
+  if (!node || !node.IsScalar())
+  {
+    return std::nullopt;
+  }
+
+  const std::string nibble = node.as<std::string>();
+  if (nibble == "both")
+  {
+    return PinmameMapNibble::BOTH;
+  }
+  if (nibble == "high")
+  {
+    return PinmameMapNibble::HIGH;
+  }
+  if (nibble == "low")
+  {
+    return PinmameMapNibble::LOW;
+  }
+
+  return std::nullopt;
+}
+
+static bool TryLoadPlatformNibbleDefaults(const std::filesystem::path& path,
+                                          std::vector<PinmamePlatformMemoryRange>* pRanges, std::string* pError)
+{
+  if (pRanges == nullptr)
+  {
+    if (pError) *pError = "platform range output missing";
     return false;
   }
 
-  *pCurrentPlayer = NormalizeSystem3To6CurrentPlayer(rawPlayer);
+  YAML::Node root;
+  try
+  {
+    root = YAML::LoadFile(path.string());
+  }
+  catch (const std::exception& ex)
+  {
+    if (pError) *pError = std::string("failed to parse platform file: ") + ex.what();
+    return false;
+  }
+
+  const YAML::Node memoryLayout = root["memory_layout"];
+  if (!memoryLayout || !memoryLayout.IsSequence())
+  {
+    if (pError) *pError = "platform file has no memory_layout sequence";
+    return false;
+  }
+
+  pRanges->clear();
+  for (const YAML::Node& entry : memoryLayout)
+  {
+    uint32_t address = 0;
+    uint32_t size = 0;
+    if (!TryParseMapUnsigned(entry["address"], &address) || !TryParseMapUnsigned(entry["size"], &size))
+    {
+      continue;
+    }
+
+    PinmamePlatformMemoryRange range;
+    range.address = address;
+    range.size = size;
+    range.nibble = TryParseMapNibble(entry["nibble"]).value_or(PinmameMapNibble::BOTH);
+    pRanges->push_back(range);
+  }
+
   return true;
 }
 
-static bool TryReadCurrentBallFromPinmame(uint8_t* pCurrentBall)
+static std::optional<PinmameMapNibble> ResolvePlatformNibbleDefault(
+    const std::vector<PinmamePlatformMemoryRange>& ranges, const uint32_t address)
 {
-  if (pCurrentBall == nullptr)
+  for (const auto& range : ranges)
+  {
+    if (address >= range.address && address < range.address + range.size)
+    {
+      return range.nibble;
+    }
+  }
+
+  return std::nullopt;
+}
+
+static bool HardwareGenMatchesNvramMapPath(const PINMAME_HARDWARE_GEN hardwareGen, const std::string& relativeMapPath)
+{
+  struct HardwareGenPathPrefix
+  {
+    PINMAME_HARDWARE_GEN bit;
+    const char* prefix;
+  };
+
+  static constexpr HardwareGenPathPrefix kPrefixes[] = {
+      {PINMAME_HARDWARE_GEN_S3, "maps/williams/system3/"},
+      {PINMAME_HARDWARE_GEN_S3C, "maps/williams/system3/"},
+      {PINMAME_HARDWARE_GEN_S4, "maps/williams/system4/"},
+      {PINMAME_HARDWARE_GEN_S6, "maps/williams/system6/"},
+      {PINMAME_HARDWARE_GEN_S7, "maps/williams/system7/"},
+      {PINMAME_HARDWARE_GEN_S9, "maps/williams/system9/"},
+      {PINMAME_HARDWARE_GEN_S11, "maps/williams/system11/"},
+      {PINMAME_HARDWARE_GEN_S11X, "maps/williams/system11/"},
+      {PINMAME_HARDWARE_GEN_S11B2, "maps/williams/system11/"},
+      {PINMAME_HARDWARE_GEN_S11C, "maps/williams/system11/"},
+      {PINMAME_HARDWARE_GEN_WPCALPHA_1, "maps/williams/wpc/"},
+      {PINMAME_HARDWARE_GEN_WPCALPHA_2, "maps/williams/wpc/"},
+      {PINMAME_HARDWARE_GEN_WPCDMD, "maps/williams/wpc/"},
+      {PINMAME_HARDWARE_GEN_WPCFLIPTRON, "maps/williams/wpc/"},
+      {PINMAME_HARDWARE_GEN_WPCDCS, "maps/williams/wpc/"},
+      {PINMAME_HARDWARE_GEN_WPCSECURITY, "maps/williams/wpc/"},
+      {PINMAME_HARDWARE_GEN_WPC95DCS, "maps/williams/wpc/"},
+      {PINMAME_HARDWARE_GEN_WPC95, "maps/williams/wpc/"},
+      {PINMAME_HARDWARE_GEN_DE, "maps/dataeast/"},
+      {PINMAME_HARDWARE_GEN_DEDMD16, "maps/dataeast/"},
+      {PINMAME_HARDWARE_GEN_DEDMD32, "maps/dataeast/"},
+      {PINMAME_HARDWARE_GEN_DEDMD64, "maps/dataeast/"},
+      {PINMAME_HARDWARE_GEN_BY17, "maps/bally/as-2518-17/"},
+      {PINMAME_HARDWARE_GEN_BY35, "maps/bally/as-2518-35/"},
+      {PINMAME_HARDWARE_GEN_BY6803, "maps/bally/as-2518-133/"},
+      {PINMAME_HARDWARE_GEN_BY6803A, "maps/bally/as-2518-133/"},
+      {PINMAME_HARDWARE_GEN_STMPU100, "maps/stern/m100/"},
+      {PINMAME_HARDWARE_GEN_STMPU200, "maps/stern/m200/"},
+      {PINMAME_HARDWARE_GEN_WS, "maps/sega/whitestar/"},
+      {PINMAME_HARDWARE_GEN_WS, "maps/stern/whitestar/"},
+      {PINMAME_HARDWARE_GEN_WS_1, "maps/sega/whitestar/"},
+      {PINMAME_HARDWARE_GEN_WS_1, "maps/stern/whitestar/"},
+      {PINMAME_HARDWARE_GEN_WS_2, "maps/sega/whitestar/"},
+      {PINMAME_HARDWARE_GEN_WS_2, "maps/stern/whitestar/"},
+      {PINMAME_HARDWARE_GEN_SAM, "maps/stern/sam/"},
+      {PINMAME_HARDWARE_GEN_GTS80, "maps/gottlieb/system80/"},
+      {PINMAME_HARDWARE_GEN_GTS80B, "maps/gottlieb/system80b/"},
+      {PINMAME_HARDWARE_GEN_GTS3, "maps/gottlieb/system3/"},
+  };
+
+  bool matchedKnownHardware = false;
+  for (const auto& prefix : kPrefixes)
+  {
+    if ((hardwareGen & prefix.bit) == 0)
+    {
+      continue;
+    }
+
+    matchedKnownHardware = true;
+    if (relativeMapPath.rfind(prefix.prefix, 0) == 0)
+    {
+      return true;
+    }
+  }
+
+  return !matchedKnownHardware;
+}
+
+static bool TryLoadTrackedFieldFromMap(const YAML::Node& fieldNode,
+                                       const std::vector<PinmamePlatformMemoryRange>& platformRanges,
+                                       PinmameTrackedField* pField, std::string* pError)
+{
+  if (pField == nullptr)
   {
     return false;
   }
 
-  return TryReadSystem3To6CpuByte(kSystem3To6CurrentBallOffset, pCurrentBall);
+  pField->available = false;
+  if (!fieldNode || !fieldNode.IsMap())
+  {
+    return true;
+  }
+
+  uint32_t address = 0;
+  if (!TryParseMapUnsigned(fieldNode["start"], &address))
+  {
+    if (pError) *pError = "tracked field is missing a valid start address";
+    return false;
+  }
+
+  const std::string encodingText = fieldNode["encoding"] ? fieldNode["encoding"].as<std::string>() : "";
+  PinmameMapEncoding encoding;
+  if (encodingText == "int")
+  {
+    encoding = PinmameMapEncoding::INT;
+  }
+  else if (encodingText == "bcd")
+  {
+    encoding = PinmameMapEncoding::BCD;
+  }
+  else
+  {
+    if (pError) *pError = "tracked field uses unsupported encoding: " + encodingText;
+    return false;
+  }
+
+  uint32_t mask = 0xFF;
+  if (fieldNode["mask"] && !TryParseMapUnsigned(fieldNode["mask"], &mask))
+  {
+    if (pError) *pError = "tracked field has an invalid mask";
+    return false;
+  }
+
+  PinmameMapNibble nibble = ResolvePlatformNibbleDefault(platformRanges, address).value_or(PinmameMapNibble::BOTH);
+  if (fieldNode["nibble"])
+  {
+    const auto parsedNibble = TryParseMapNibble(fieldNode["nibble"]);
+    if (!parsedNibble.has_value())
+    {
+      if (pError) *pError = "tracked field has an invalid nibble setting";
+      return false;
+    }
+    nibble = parsedNibble.value();
+  }
+
+  int offset = 0;
+  if (fieldNode["offset"])
+  {
+    offset = fieldNode["offset"].as<int>();
+  }
+
+  bool treatZeroAsUnavailable = false;
+  const YAML::Node specialValues = fieldNode["special_values"];
+  if (specialValues && specialValues.IsMap())
+  {
+    const YAML::Node zeroNode = specialValues["0"];
+    treatZeroAsUnavailable = zeroNode && zeroNode.IsScalar();
+  }
+
+  pField->available = true;
+  pField->address = address;
+  pField->encoding = encoding;
+  pField->nibble = nibble;
+  pField->mask = static_cast<uint8_t>(mask & 0xFF);
+  pField->offset = offset;
+  pField->treatZeroAsUnavailable = treatZeroAsUnavailable;
+  return true;
+}
+
+static bool TryLoadPinmameTrackingConfig(const char* rom, const PINMAME_HARDWARE_GEN hardwareGen,
+                                         PinmameTrackingConfig* pConfig, std::string* pError)
+{
+  if (pConfig == nullptr)
+  {
+    if (pError) *pError = "tracking config output missing";
+    return false;
+  }
+
+  pConfig->loaded = false;
+  pConfig->mapPath.clear();
+  pConfig->currentPlayer = PinmameTrackedField{};
+  pConfig->currentBall = PinmameTrackedField{};
+
+  const std::string romName = NormalizeRomNameForMapLookup(rom);
+  if (romName.empty())
+  {
+    if (pError) *pError = "ROM name is empty";
+    return false;
+  }
+
+  const auto mapsRoot = FindPinmameNvramMapsRoot();
+  if (!mapsRoot.has_value())
+  {
+    if (pError) *pError = "pinmame-nvram-maps assets not found";
+    return false;
+  }
+
+  YAML::Node indexRoot;
+  try
+  {
+    indexRoot = YAML::LoadFile((mapsRoot.value() / "index.json").string());
+  }
+  catch (const std::exception& ex)
+  {
+    if (pError) *pError = std::string("failed to parse index.json: ") + ex.what();
+    return false;
+  }
+
+  const YAML::Node mapPathNode = indexRoot[romName];
+  if (!mapPathNode || !mapPathNode.IsScalar())
+  {
+    if (pError) *pError = "no nvram map found for ROM " + romName;
+    return false;
+  }
+
+  const std::string relativeMapPath = mapPathNode.as<std::string>();
+  if (!HardwareGenMatchesNvramMapPath(hardwareGen, relativeMapPath))
+  {
+    if (pError) *pError = "nvram map path does not match reported hardware generation: " + relativeMapPath;
+    return false;
+  }
+
+  const std::filesystem::path mapPath = mapsRoot.value() / relativeMapPath;
+  YAML::Node mapRoot;
+  try
+  {
+    mapRoot = YAML::LoadFile(mapPath.string());
+  }
+  catch (const std::exception& ex)
+  {
+    if (pError) *pError = std::string("failed to parse map file: ") + ex.what();
+    return false;
+  }
+
+  const YAML::Node metadata = mapRoot["_metadata"];
+  const YAML::Node platformNode = metadata["platform"];
+  if (!platformNode || !platformNode.IsScalar())
+  {
+    if (pError) *pError = "map file is missing _metadata.platform";
+    return false;
+  }
+
+  std::vector<PinmamePlatformMemoryRange> platformRanges;
+  const std::filesystem::path platformPath =
+      mapsRoot.value() / "platforms" / (platformNode.as<std::string>() + ".json");
+  if (!TryLoadPlatformNibbleDefaults(platformPath, &platformRanges, pError))
+  {
+    return false;
+  }
+
+  const YAML::Node gameState = mapRoot["game_state"];
+  if (!gameState || !gameState.IsMap())
+  {
+    if (pError) *pError = "map file is missing game_state";
+    return false;
+  }
+
+  if (!TryLoadTrackedFieldFromMap(gameState["current_player"], platformRanges, &pConfig->currentPlayer, pError))
+  {
+    return false;
+  }
+  if (!TryLoadTrackedFieldFromMap(gameState["current_ball"], platformRanges, &pConfig->currentBall, pError))
+  {
+    return false;
+  }
+
+  if (!pConfig->currentPlayer.available && !pConfig->currentBall.available)
+  {
+    if (pError) *pError = "map file does not define current_player or current_ball";
+    return false;
+  }
+
+  pConfig->loaded = true;
+  pConfig->mapPath = relativeMapPath;
+  return true;
+}
+
+static bool TryDecodeTrackedPinmameValue(const PinmameTrackedField& field, uint8_t* pValue)
+{
+  if (!field.available || pValue == nullptr)
+  {
+    return false;
+  }
+
+  uint8_t rawByte = 0;
+  if (PinmameReadMainCPUByte(field.address, &rawByte) == 0)
+  {
+    return false;
+  }
+
+  uint8_t value = static_cast<uint8_t>(rawByte & field.mask);
+  switch (field.nibble)
+  {
+    case PinmameMapNibble::HIGH:
+      value = static_cast<uint8_t>((value >> 4) & 0x0F);
+      break;
+    case PinmameMapNibble::LOW:
+      value = static_cast<uint8_t>(value & 0x0F);
+      break;
+    case PinmameMapNibble::BOTH:
+      break;
+  }
+
+  uint8_t decodedValue = value;
+  if (field.encoding == PinmameMapEncoding::BCD)
+  {
+    if (field.nibble == PinmameMapNibble::BOTH)
+    {
+      decodedValue = static_cast<uint8_t>(((value >> 4) & 0x0F) * 10 + (value & 0x0F));
+    }
+  }
+
+  if (field.treatZeroAsUnavailable && decodedValue == 0)
+  {
+    return false;
+  }
+
+  const int adjustedValue = static_cast<int>(decodedValue) + field.offset;
+  if (adjustedValue < 0 || adjustedValue > UCHAR_MAX)
+  {
+    return false;
+  }
+
+  *pValue = static_cast<uint8_t>(adjustedValue);
+  return true;
 }
 
 static bool ParseUint32Strict(const char* text, uint32_t* outValue)
@@ -2567,9 +3097,8 @@ int main(int argc, char** argv)
   }
 
   const bool bench_test_mode = opt_switch_test || opt_coil_test || opt_lamp_test || opt_gi_test || opt_flasher_test;
-  const bool diagnostic_mode =
-      bench_test_mode || opt_debug || opt_debug_errors || opt_debug_switches || opt_debug_coils || opt_debug_lamps ||
-      opt_debug_effects;
+  const bool diagnostic_mode = bench_test_mode || opt_debug || opt_debug_errors || opt_debug_switches ||
+                               opt_debug_coils || opt_debug_lamps || opt_debug_effects;
   if (diagnostic_mode)
   {
     opt_translite = NULL;
@@ -3072,10 +3601,15 @@ int main(int argc, char** argv)
     signal(SIGABRT, signal_handler_graceful);
 
     int index_recv = 0;
-    PINMAME_HARDWARE_GEN hardwareGen;
+    PINMAME_HARDWARE_GEN hardwareGen = static_cast<PINMAME_HARDWARE_GEN>(0);
     bool loggedPinmameIdentity = false;
+    bool loggedTrackingConfig = false;
     bool loggedMissingCurrentBallApi = false;
     bool loggedMissingCurrentPlayerApi = false;
+    bool trackCurrentBall = false;
+    bool trackCurrentPlayer = false;
+    auto nextTrackedStatePollAt = std::chrono::steady_clock::time_point{};
+    PinmameTrackingConfig trackingConfig;
 
     ppuc->StartUpdates();
     if (opt_close_coin_door)
@@ -3098,8 +3632,29 @@ int main(int argc, char** argv)
         }
       }
 
-      const bool trackCurrentBall = pPUPTriggerEngine != nullptr && SupportsCurrentBallMemoryProbe(hardwareGen);
-      const bool trackCurrentPlayer = pPUPTriggerEngine != nullptr && SupportsCurrentPlayerMemoryProbe(hardwareGen);
+      if (loggedPinmameIdentity && !trackingConfig.attemptedLoad)
+      {
+        std::string trackingError;
+        trackingConfig.attemptedLoad = true;
+        if (!TryLoadPinmameTrackingConfig(opt_rom, hardwareGen, &trackingConfig, &trackingError))
+        {
+          if ((opt_debug || opt_debug_errors) && !trackingError.empty())
+          {
+            printf("PinMAME tracking map unavailable for ROM=%s: %s\n", opt_rom ? opt_rom : "(null)",
+                   trackingError.c_str());
+          }
+        }
+
+        trackCurrentBall = pPUPTriggerEngine != nullptr && trackingConfig.currentBall.available;
+        trackCurrentPlayer = pPUPTriggerEngine != nullptr && trackingConfig.currentPlayer.available;
+        nextTrackedStatePollAt = std::chrono::steady_clock::now();
+      }
+
+      if ((opt_debug || opt_debug_errors) && trackingConfig.loaded && !loggedTrackingConfig)
+      {
+        printf("PinMAME tracking map loaded: %s\n", trackingConfig.mapPath.c_str());
+        loggedTrackingConfig = true;
+      }
 
       if (game_state.load(std::memory_order_acquire) == 0)
       {
@@ -3110,31 +3665,37 @@ int main(int argc, char** argv)
         continue;
       }
 
-      if (trackCurrentBall)
+      const auto now = std::chrono::steady_clock::now();
+      if ((trackCurrentBall || trackCurrentPlayer) && now >= nextTrackedStatePollAt)
       {
-        uint8_t currentBall = 0;
-        if (TryReadCurrentBallFromPinmame(&currentBall))
-        {
-          pPUPTriggerEngine->SetCurrentBall(currentBall);
-        }
-        else if (!loggedMissingCurrentBallApi && (opt_debug || opt_debug_errors))
-        {
-          printf("Current-ball tracking unavailable: libpinmame does not expose raw memory access.\n");
-          loggedMissingCurrentBallApi = true;
-        }
-      }
+        nextTrackedStatePollAt = now + kPinmameTrackedStatePollInterval;
 
-      if (trackCurrentPlayer)
-      {
-        uint8_t currentPlayer = 0;
-        if (TryReadCurrentPlayerFromPinmame(&currentPlayer))
+        if (trackCurrentBall)
         {
-          pPUPTriggerEngine->SetCurrentPlayer(currentPlayer);
+          uint8_t currentBall = 0;
+          if (TryDecodeTrackedPinmameValue(trackingConfig.currentBall, &currentBall))
+          {
+            pPUPTriggerEngine->SetCurrentBall(currentBall);
+          }
+          else if (!loggedMissingCurrentBallApi && (opt_debug || opt_debug_errors))
+          {
+            printf("Current-ball tracking unavailable: libpinmame does not expose raw memory access.\n");
+            loggedMissingCurrentBallApi = true;
+          }
         }
-        else if (!loggedMissingCurrentPlayerApi && (opt_debug || opt_debug_errors))
+
+        if (trackCurrentPlayer)
         {
-          printf("Current-player tracking unavailable: libpinmame does not expose raw memory access.\n");
-          loggedMissingCurrentPlayerApi = true;
+          uint8_t currentPlayer = 0;
+          if (TryDecodeTrackedPinmameValue(trackingConfig.currentPlayer, &currentPlayer))
+          {
+            pPUPTriggerEngine->SetCurrentPlayer(currentPlayer);
+          }
+          else if (!loggedMissingCurrentPlayerApi && (opt_debug || opt_debug_errors))
+          {
+            printf("Current-player tracking unavailable: libpinmame does not expose raw memory access.\n");
+            loggedMissingCurrentPlayerApi = true;
+          }
         }
       }
 

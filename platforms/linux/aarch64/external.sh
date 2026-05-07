@@ -12,6 +12,7 @@ echo "  SDL_MIXER_SHA: ${SDL_MIXER_SHA}"
 echo "  FLITE_SHA: ${FLITE_SHA}"
 echo "  ESPEAK_NG_SHA: ${ESPEAK_NG_SHA}"
 echo "  PINMAME_SHA: ${PINMAME_SHA}"
+echo "  PINMAME_NVRAM_MAPS_SHA: ${PINMAME_NVRAM_MAPS_SHA}"
 echo "  LIBPPUC_SHA: ${LIBPPUC_SHA}"
 echo "  LIBSDLDMD_SHA: ${LIBSDLDMD_SHA}"
 echo ""
@@ -255,6 +256,25 @@ if [ "${PINMAME_EXPECTED_SHA}" != "${PINMAME_FOUND_SHA}" ]; then
    cd ..
 fi
 
+PINMAME_NVRAM_MAPS_EXPECTED_SHA="${PINMAME_NVRAM_MAPS_SHA}"
+PINMAME_NVRAM_MAPS_FOUND_SHA="$([ -f pinmame-nvram-maps/cache.txt ] && cat pinmame-nvram-maps/cache.txt || echo "")"
+
+if [ "${PINMAME_NVRAM_MAPS_EXPECTED_SHA}" != "${PINMAME_NVRAM_MAPS_FOUND_SHA}" ]; then
+   echo "Staging pinmame-nvram-maps. Expected: ${PINMAME_NVRAM_MAPS_EXPECTED_SHA}, Found: ${PINMAME_NVRAM_MAPS_FOUND_SHA}"
+
+   rm -rf pinmame-nvram-maps
+   mkdir pinmame-nvram-maps
+   cd pinmame-nvram-maps
+
+   curl -sL https://github.com/tomlogic/pinmame-nvram-maps/archive/${PINMAME_NVRAM_MAPS_SHA}.tar.gz -o pinmame-nvram-maps-${PINMAME_NVRAM_MAPS_SHA}.tar.gz
+   tar xzf pinmame-nvram-maps-${PINMAME_NVRAM_MAPS_SHA}.tar.gz
+   mv pinmame-nvram-maps-${PINMAME_NVRAM_MAPS_SHA} pinmame-nvram-maps
+
+   echo "$PINMAME_NVRAM_MAPS_EXPECTED_SHA" > cache.txt
+
+   cd ..
+fi
+
 #
 # libppuc
 #
@@ -308,6 +328,11 @@ cp -a flite/flite/install/lib/libflite*.a ../third-party/build-libs/linux-aarch6
 
 cp -a pinmame/pinmame/build/libpinmame.{so,so.*} ../third-party/runtime-libs/linux-aarch64/
 cp pinmame/pinmame/src/libpinmame/libpinmame.h ../third-party/include/
+rm -rf ../third-party/pinmame-nvram-maps
+mkdir -p ../third-party/pinmame-nvram-maps
+cp pinmame-nvram-maps/pinmame-nvram-maps/index.json ../third-party/pinmame-nvram-maps/
+cp -R pinmame-nvram-maps/pinmame-nvram-maps/maps ../third-party/pinmame-nvram-maps/
+cp -R pinmame-nvram-maps/pinmame-nvram-maps/platforms ../third-party/pinmame-nvram-maps/
 #cp pinmame/pinmame/src/libpinmame/pinmamedef.h ../third-party/include/
 
 if [ -n "${LIBSDLDMD_SHA}" ]; then

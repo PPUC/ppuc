@@ -18,3 +18,4 @@ cp build/ppuc-pinmame ppuc/
 cp build/ppuc-menu ppuc/
 cp build/ppuc-backbox ppuc/
 cp -P third-party/runtime-libs/linux-aarch64/*.so* ppuc/
+cp -R third-party/pinmame-nvram-maps ppuc/

@@ -300,6 +300,7 @@ else()
          cargs
          SDL3
          SDL3_image
+         yaml-cpp
       )
    else()
       target_link_libraries(ppuc-pinmame LINK_PUBLIC
@@ -310,6 +311,7 @@ else()
          cargs
          SDL3
          SDL3_image
+         yaml-cpp
       )
    endif()
 

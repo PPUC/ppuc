@@ -18,3 +18,4 @@ cp build/${BUILD_TYPE}/ppuc-pinmame ppuc/
 cp build/${BUILD_TYPE}/ppuc-menu ppuc/
 cp build/${BUILD_TYPE}/ppuc-backbox ppuc/
 cp -P third-party/runtime-libs/win-x86/*.dll ppuc/
+cp -R third-party/pinmame-nvram-maps ppuc/
