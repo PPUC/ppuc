@@ -2538,6 +2538,7 @@ int main(int argc, char** argv)
   const char* opt_skip_boards = NULL;
   const char* opt_switch_reply_delay_us_arg = NULL;
   uint32_t opt_switch_reply_delay_us = 0;
+  uint8_t opt_coil_hold_frames = 3;
   bool opt_close_coin_door = false;
   uint8_t opt_serum_timeout = 0;
   uint8_t opt_serum_skip_frames = 0;
@@ -2693,6 +2694,8 @@ int main(int argc, char** argv)
           opt_skip_boards = DuplicateOptionalIniString(value);
         else if (key == "SwitchReplyDelayUs")
           opt_switch_reply_delay_us_arg = DuplicateOptionalIniString(value);
+        else if (key == "CoilHoldFrames")
+          opt_coil_hold_frames = static_cast<uint8_t>(atoi(value.c_str()));
         else if (key == "CloseCoinDoor")
           opt_close_coin_door = ParseIniBool(value);
         else if (key == "HardReset")
@@ -3233,6 +3236,7 @@ int main(int argc, char** argv)
   ppuc->SetDebugErrors(opt_debug_errors);
   ppuc->SetForceHardReset(opt_hard_reset);
   ppuc->SetSkippedBoardsCsv(opt_skip_boards);
+  ppuc->SetCoilHoldFrames(opt_coil_hold_frames);
   ppuc->SetSwitchReplyDelayUs(opt_switch_reply_delay_us);
   ppuc->SetDisableFastFlipForTests(opt_switch_test || opt_coil_test || opt_lamp_test || opt_gi_test ||
                                    opt_flasher_test);
