@@ -72,6 +72,19 @@ These components are still in an early development stage and the documentation w
     * plays only while the game is not in attract mode
     * ducks while PinMAME or speech audio is active
     * optional
+* --switch-refresh-idle-ms VALUE
+    * re-read all IO board switches after this many milliseconds without non-button switch updates
+    * default: `15000`
+    * always active; the value must be greater than zero
+* --ball-search
+    * enable host-side ball search for coils marked `ballSearch: true` in the game YAML
+    * optional and disabled by default because newer ROMs often implement their own ball search
+* --ball-search-delay-ms VALUE
+    * first ball-search delay after no non-button switch activity while the game is running
+    * default: `15000`
+* --ball-search-round-delay-ms VALUE
+    * delay between complete ball-search rounds
+    * default: `5000`
 * --speech-backend value
     * speech backend to use: `auto`, `flite`, `espeak-ng`
     * optional
@@ -91,6 +104,58 @@ These components are still in an early development stage and the documentation w
     * help
 
 An example runtime ini file is available at `examples/ppuc-pinmame.ini`.
+
+### Switch Refresh And Ball Search
+
+`ppuc-pinmame` always runs a switch-refresh safety net. If no non-button switch
+update arrives for `Runtime.SwitchRefreshIdleMs`, the host sends a v2 switch
+refresh command. IO boards re-read their switch inputs, restart their local
+switch readers, and return full switch bitmaps through the normal switch chain.
+
+Switches can be marked as cabinet/player buttons in the game YAML:
+
+```yaml
+switches:
+  -
+    description: 'LEFT FLIPPER BUTTON'
+    number: 63
+    board: 1
+    port: 17
+    debounce: 3
+    debounceMode: fastFlip
+    button: true
+```
+
+Button switch activity does not postpone switch refresh or ball search. A held
+button does suppress ball search, so a player can hold a ball on a raised
+flipper without the host firing search coils.
+
+Host-side ball search is separate from switch refresh and is disabled by
+default. Enable it only for older ROMs that do not perform their own ball
+search:
+
+```ini
+[Runtime]
+BallSearch = true
+BallSearchDelayMs = 15000
+BallSearchRoundDelayMs = 5000
+```
+
+Only coils marked `ballSearch: true` are fired. They are pulsed one after
+another with the same short pulse style as coil test, then the host waits
+`BallSearchRoundDelayMs` before starting the next round if the machine is still
+quiet.
+
+```yaml
+pwmOutput:
+  -
+    description: 'Outhole Kicker'
+    number: 7
+    board: 4
+    port: 3
+    type: solenoid
+    ballSearch: true
+```
 
 ### PUP Trigger Rules
 

@@ -30,6 +30,7 @@
 #include <thread>
 #include <type_traits>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "DMDUtil/Config.h"
@@ -64,6 +65,10 @@
 
 #define MAIN_LOOP_SLEEP_US 20  // Main loop sleep time in microseconds
 constexpr auto kPinmameTrackedStatePollInterval = std::chrono::milliseconds(500);
+constexpr uint32_t kDefaultSwitchRefreshIdleMs = 15000;
+constexpr uint32_t kDefaultBallSearchDelayMs = 15000;
+constexpr uint32_t kDefaultBallSearchRoundDelayMs = 5000;
+constexpr uint32_t kBallSearchCoilPulseMs = 200;
 
 DMDUtil::DMD* pDmd;
 PPUC* ppuc;
@@ -316,6 +321,7 @@ const char* opt_virtual_dmd_renderer = "dots";
 const char* opt_pinmame_path = NULL;
 const char* opt_rom = NULL;
 std::atomic<int> game_state{0};
+std::atomic<bool> ball_search_game_running{false};
 bool running = true;
 volatile std::sig_atomic_t shutdown_requested = 0;
 
@@ -1205,6 +1211,159 @@ struct BenchTestRunner
   std::string interactiveInput;
 };
 
+static void ApplyBenchOutput(PPUC* ppuc, const BenchOutputStep& step, bool on);
+
+struct BallSearchRunner
+{
+  std::vector<BenchOutputStep> steps;
+  std::unordered_set<int> buttonSwitchNumbers;
+  std::unordered_map<int, uint8_t> currentSwitchStates;
+  std::chrono::steady_clock::time_point nextSearchAt{};
+  std::chrono::steady_clock::time_point phaseDeadline{};
+  size_t index = 0;
+  bool outputActive = false;
+  bool runningRound = false;
+};
+
+static std::vector<BenchOutputStep> BuildBallSearchSteps(PPUC* ppuc)
+{
+  std::vector<BenchOutputStep> steps;
+  for (const auto& coil : ppuc->GetCoils())
+  {
+    if (!coil.ballSearch)
+    {
+      continue;
+    }
+    if (coil.type != PWM_TYPE_SOLENOID && coil.type != PWM_TYPE_FLASHER &&
+        coil.type != PWM_TYPE_MOTOR && coil.type != PWM_TYPE_SHAKER)
+    {
+      continue;
+    }
+    if (IsVirtualizedBenchCoil(ppuc, coil))
+    {
+      continue;
+    }
+    steps.push_back({BenchOutputKind::SOLENOID, coil.board, coil.port, coil.number, 1, coil.type, coil.description, 0,
+                     static_cast<int>(kBallSearchCoilPulseMs), 0});
+  }
+  return steps;
+}
+
+static BallSearchRunner CreateBallSearchRunner(PPUC* ppuc, uint32_t delayMs)
+{
+  BallSearchRunner runner;
+  runner.steps = BuildBallSearchSteps(ppuc);
+  for (const auto& ppucSwitch : ppuc->GetSwitches())
+  {
+    if (ppucSwitch.button)
+    {
+      runner.buttonSwitchNumbers.insert(ppucSwitch.number);
+    }
+  }
+  runner.nextSearchAt = std::chrono::steady_clock::now() + std::chrono::milliseconds(delayMs);
+  return runner;
+}
+
+static void ResetBallSearchIdle(BallSearchRunner& runner, uint32_t delayMs)
+{
+  runner.nextSearchAt = std::chrono::steady_clock::now() + std::chrono::milliseconds(delayMs);
+}
+
+static void CancelActiveBallSearch(PPUC* ppuc, BallSearchRunner& runner)
+{
+  if (runner.outputActive && runner.index < runner.steps.size())
+  {
+    ApplyBenchOutput(ppuc, runner.steps[runner.index], false);
+  }
+  runner.outputActive = false;
+  runner.runningRound = false;
+  runner.index = 0;
+}
+
+static bool IsAnyBallSearchButtonPressed(const BallSearchRunner& runner)
+{
+  for (const int number : runner.buttonSwitchNumbers)
+  {
+    const auto it = runner.currentSwitchStates.find(number);
+    if (it != runner.currentSwitchStates.end() && it->second != 0)
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
+static void NoteBallSearchSwitchUpdate(PPUC* ppuc, BallSearchRunner& runner, int switchNumber, uint8_t state,
+                                       uint32_t delayMs)
+{
+  runner.currentSwitchStates[switchNumber] = state;
+  if (runner.buttonSwitchNumbers.find(switchNumber) != runner.buttonSwitchNumbers.end())
+  {
+    return;
+  }
+  CancelActiveBallSearch(ppuc, runner);
+  ResetBallSearchIdle(runner, delayMs);
+}
+
+static void ServiceBallSearchRunner(PPUC* ppuc, BallSearchRunner& runner, bool gameRunning, uint32_t delayMs,
+                                    uint32_t roundDelayMs)
+{
+  if (runner.steps.empty())
+  {
+    return;
+  }
+
+  const auto now = std::chrono::steady_clock::now();
+  if (!gameRunning)
+  {
+    CancelActiveBallSearch(ppuc, runner);
+    runner.nextSearchAt = now + std::chrono::milliseconds(delayMs);
+    return;
+  }
+
+  if (IsAnyBallSearchButtonPressed(runner))
+  {
+    CancelActiveBallSearch(ppuc, runner);
+    runner.nextSearchAt = now + std::chrono::milliseconds(delayMs);
+    return;
+  }
+
+  if (!runner.runningRound && now < runner.nextSearchAt)
+  {
+    return;
+  }
+
+  if (!runner.runningRound)
+  {
+    runner.runningRound = true;
+    runner.index = 0;
+    runner.outputActive = false;
+  }
+
+  if (runner.outputActive)
+  {
+    if (now < runner.phaseDeadline)
+    {
+      return;
+    }
+    ApplyBenchOutput(ppuc, runner.steps[runner.index], false);
+    runner.outputActive = false;
+    ++runner.index;
+  }
+
+  if (runner.index >= runner.steps.size())
+  {
+    runner.runningRound = false;
+    runner.index = 0;
+    runner.nextSearchAt = now + std::chrono::milliseconds(roundDelayMs);
+    return;
+  }
+
+  ApplyBenchOutput(ppuc, runner.steps[runner.index], true);
+  runner.outputActive = true;
+  runner.phaseDeadline = now + std::chrono::milliseconds(kBallSearchCoilPulseMs);
+}
+
 #if !defined(_WIN32) && !defined(_WIN64)
 class ScopedRawTerminalMode
 {
@@ -2091,6 +2250,22 @@ static struct cag_option options[] = {
      .access_name = "switch-reply-delay-us",
      .value_name = "VALUE",
      .description = "Per-board switch reply delay in microseconds"},
+    {.identifier = 'g',
+     .access_name = "switch-refresh-idle-ms",
+     .value_name = "VALUE",
+     .description = "Force a full switch refresh after this many ms without non-button switch updates"},
+    {.identifier = 'B',
+     .access_name = "ball-search",
+     .value_name = NULL,
+     .description = "Enable host-side ball search for coils marked ballSearch in the game YAML"},
+    {.identifier = '!',
+     .access_name = "ball-search-delay-ms",
+     .value_name = "VALUE",
+     .description = "Start ball search after this many ms without non-button switch updates during play"},
+    {.identifier = '@',
+     .access_name = "ball-search-round-delay-ms",
+     .value_name = "VALUE",
+     .description = "Delay between complete ball-search coil rounds in milliseconds"},
     {.identifier = '8',
      .access_name = "close-coin-door",
      .value_name = NULL,
@@ -2438,6 +2613,7 @@ void PINMAMECALLBACK OnSolenoidUpdated(PinmameSolenoidState* p_solenoidState, co
 
   if (isGameOnCoil)
   {
+    ball_search_game_running.store(coilState != 0, std::memory_order_release);
     if (pAudioOutput != nullptr)
     {
       pAudioOutput->SetMusicEnabled(coilState != 0);
@@ -2538,6 +2714,13 @@ int main(int argc, char** argv)
   const char* opt_skip_boards = NULL;
   const char* opt_switch_reply_delay_us_arg = NULL;
   uint32_t opt_switch_reply_delay_us = 0;
+  const char* opt_switch_refresh_idle_ms_arg = NULL;
+  uint32_t opt_switch_refresh_idle_ms = kDefaultSwitchRefreshIdleMs;
+  bool opt_ball_search = false;
+  const char* opt_ball_search_delay_ms_arg = NULL;
+  uint32_t opt_ball_search_delay_ms = kDefaultBallSearchDelayMs;
+  const char* opt_ball_search_round_delay_ms_arg = NULL;
+  uint32_t opt_ball_search_round_delay_ms = kDefaultBallSearchRoundDelayMs;
   uint8_t opt_coil_hold_frames = 3;
   bool opt_close_coin_door = false;
   uint8_t opt_serum_timeout = 0;
@@ -2694,6 +2877,14 @@ int main(int argc, char** argv)
           opt_skip_boards = DuplicateOptionalIniString(value);
         else if (key == "SwitchReplyDelayUs")
           opt_switch_reply_delay_us_arg = DuplicateOptionalIniString(value);
+        else if (key == "SwitchRefreshIdleMs")
+          opt_switch_refresh_idle_ms_arg = DuplicateOptionalIniString(value);
+        else if (key == "BallSearch")
+          opt_ball_search = ParseIniBool(value);
+        else if (key == "BallSearchDelayMs")
+          opt_ball_search_delay_ms_arg = DuplicateOptionalIniString(value);
+        else if (key == "BallSearchRoundDelayMs")
+          opt_ball_search_round_delay_ms_arg = DuplicateOptionalIniString(value);
         else if (key == "CoilHoldFrames")
           opt_coil_hold_frames = static_cast<uint8_t>(atoi(value.c_str()));
         else if (key == "CloseCoinDoor")
@@ -2878,6 +3069,18 @@ int main(int argc, char** argv)
       case '7':
         opt_switch_reply_delay_us_arg = cag_option_get_value(&cag_context);
         break;
+      case 'g':
+        opt_switch_refresh_idle_ms_arg = cag_option_get_value(&cag_context);
+        break;
+      case 'B':
+        opt_ball_search = true;
+        break;
+      case '!':
+        opt_ball_search_delay_ms_arg = cag_option_get_value(&cag_context);
+        break;
+      case '@':
+        opt_ball_search_round_delay_ms_arg = cag_option_get_value(&cag_context);
+        break;
       case '8':
         opt_close_coin_door = true;
         break;
@@ -3007,6 +3210,28 @@ int main(int argc, char** argv)
   if (opt_switch_reply_delay_us_arg && !ParseUint32Strict(opt_switch_reply_delay_us_arg, &opt_switch_reply_delay_us))
   {
     fprintf(stderr, "Invalid value for --switch-reply-delay-us: %s\n", opt_switch_reply_delay_us_arg);
+    return 1;
+  }
+  if (opt_switch_refresh_idle_ms_arg &&
+      !ParseUint32Strict(opt_switch_refresh_idle_ms_arg, &opt_switch_refresh_idle_ms))
+  {
+    fprintf(stderr, "Invalid value for --switch-refresh-idle-ms: %s\n", opt_switch_refresh_idle_ms_arg);
+    return 1;
+  }
+  if (opt_switch_refresh_idle_ms == 0)
+  {
+    fprintf(stderr, "--switch-refresh-idle-ms must be greater than 0 because switch re-reading is always active\n");
+    return 1;
+  }
+  if (opt_ball_search_delay_ms_arg && !ParseUint32Strict(opt_ball_search_delay_ms_arg, &opt_ball_search_delay_ms))
+  {
+    fprintf(stderr, "Invalid value for --ball-search-delay-ms: %s\n", opt_ball_search_delay_ms_arg);
+    return 1;
+  }
+  if (opt_ball_search_round_delay_ms_arg &&
+      !ParseUint32Strict(opt_ball_search_round_delay_ms_arg, &opt_ball_search_round_delay_ms))
+  {
+    fprintf(stderr, "Invalid value for --ball-search-round-delay-ms: %s\n", opt_ball_search_round_delay_ms_arg);
     return 1;
   }
 
@@ -3238,6 +3463,7 @@ int main(int argc, char** argv)
   ppuc->SetSkippedBoardsCsv(opt_skip_boards);
   ppuc->SetCoilHoldFrames(opt_coil_hold_frames);
   ppuc->SetSwitchReplyDelayUs(opt_switch_reply_delay_us);
+  ppuc->SetSwitchRefreshIdleMs(opt_switch_refresh_idle_ms);
   ppuc->SetDisableFastFlipForTests(opt_switch_test || opt_coil_test || opt_lamp_test || opt_gi_test ||
                                    opt_flasher_test);
 
@@ -3591,6 +3817,13 @@ int main(int argc, char** argv)
     printf("Unable to open serial communication to PPUC boards on %s.\n", opt_serial ? opt_serial : "(null)");
     return 1;
   }
+  BallSearchRunner ballSearchRunner =
+      opt_no_serial || !opt_ball_search ? BallSearchRunner{} : CreateBallSearchRunner(ppuc, opt_ball_search_delay_ms);
+  if ((opt_debug || opt_debug_coils) && !opt_no_serial && !ballSearchRunner.steps.empty())
+  {
+    printf("Ball search configured: coils=%zu delayMs=%u roundDelayMs=%u\n", ballSearchRunner.steps.size(),
+           opt_ball_search_delay_ms, opt_ball_search_round_delay_ms);
+  }
 
   if (!initializeSpeechIfNeeded())
   {
@@ -3636,6 +3869,7 @@ int main(int argc, char** argv)
     auto nextTrackedStatePollAt = std::chrono::steady_clock::time_point{};
     PinmameTrackingConfig trackingConfig;
 
+    ball_search_game_running.store(false, std::memory_order_release);
     ppuc->StartUpdates();
     if (opt_close_coin_door)
     {
@@ -3728,6 +3962,8 @@ int main(int argc, char** argv)
       while ((switchState = ppuc->GetNextSwitchState()) != nullptr)
       {
         const uint8_t newSwitchState = switchState->state == 0 ? 0 : 1;
+        NoteBallSearchSwitchUpdate(ppuc, ballSearchRunner, switchState->number, newSwitchState,
+                                   opt_ball_search_delay_ms);
 
         // Switches between 200 and 240 are custom switches within the io-boards which should not be sent to
         // pinmame. Switches above 240 will become negative values, for example 243 => -3.
@@ -3747,6 +3983,10 @@ int main(int argc, char** argv)
           pPUPTriggerEngine->OnSwitchState(switchState->number, newSwitchState);
         }
       }
+
+      ServiceBallSearchRunner(ppuc, ballSearchRunner,
+                              ball_search_game_running.load(std::memory_order_acquire),
+                              opt_ball_search_delay_ms, opt_ball_search_round_delay_ms);
 
       int count = PinmameGetChangedLamps(changedLampStates);
       for (int c = 0; c < count; c++)
@@ -3873,6 +4113,7 @@ int main(int argc, char** argv)
       // Emergency shutdown path:
       // Serum/libdmdutil teardown can race across worker threads when interrupted by signal.
       // Exit the process before Pinmame/DMD teardown runs to avoid use-after-free in external code.
+      CancelActiveBallSearch(ppuc, ballSearchRunner);
       ppuc->StopUpdates();
       if (!opt_no_serial)
       {
@@ -3882,6 +4123,7 @@ int main(int argc, char** argv)
       _Exit(0);
     }
 
+    CancelActiveBallSearch(ppuc, ballSearchRunner);
     ppuc->StopUpdates();
     PinmameStop();
   }

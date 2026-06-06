@@ -14,6 +14,8 @@ The command-line app sits above `../libppuc` and indirectly above `../io-boards`
 - Treat `src/ppuc.cpp` as the main runtime entry point for machine behavior.
 - Test-mode options (`--switch-test`, `--lamp-test`, `--gi-test`, `--flasher-test`, `--coil-test`) depend on `libppuc` behavior. If a regression appears there, inspect `../libppuc/src/PPUC.cpp` and `../libppuc/src/RS485Comm.cpp` first.
 - For non-WPC games, GI behavior may be forced from `libppuc` rather than driven by PinMAME GI updates.
+- `ppuc-pinmame` owns host-side ball search. It is disabled by default and is enabled with `--ball-search` or `Runtime.BallSearch=true`; only coils marked `ballSearch: true` in YAML are pulsed.
+- Switch refresh is always active by default through `--switch-refresh-idle-ms` / `Runtime.SwitchRefreshIdleMs` and uses `button: true` switch metadata to ignore cabinet/flipper button activity for the idle decision.
 
 ## Confirmed Cross-Layer Finding
 
