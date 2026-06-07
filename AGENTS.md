@@ -16,6 +16,7 @@ The command-line app sits above `../libppuc` and indirectly above `../io-boards`
 - For non-WPC games, GI behavior may be forced from `libppuc` rather than driven by PinMAME GI updates.
 - `ppuc-pinmame` owns host-side ball search. It is disabled by default and is enabled with `--ball-search` or `Runtime.BallSearch=true`; only coils marked `ballSearch: true` in YAML are pulsed.
 - Switch refresh is always active by default through `--switch-refresh-idle-ms` / `Runtime.SwitchRefreshIdleMs` and uses `button: true` switch metadata to ignore cabinet/flipper button activity for the idle decision.
+- Runtime output/switch-poll cadence is configurable with `--output-frame-interval-ms` / `Runtime.OutputFrameIntervalMs`; the default remains 4 ms.
 
 ## Confirmed Cross-Layer Finding
 

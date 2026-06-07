@@ -66,6 +66,7 @@
 #define MAIN_LOOP_SLEEP_US 20  // Main loop sleep time in microseconds
 constexpr auto kPinmameTrackedStatePollInterval = std::chrono::milliseconds(500);
 constexpr uint32_t kDefaultSwitchRefreshIdleMs = 15000;
+constexpr uint32_t kDefaultOutputFrameIntervalMs = 4;
 constexpr uint32_t kDefaultBallSearchDelayMs = 15000;
 constexpr uint32_t kDefaultBallSearchRoundDelayMs = 5000;
 constexpr uint32_t kBallSearchCoilPulseMs = 200;
@@ -2254,6 +2255,10 @@ static struct cag_option options[] = {
      .access_name = "switch-refresh-idle-ms",
      .value_name = "VALUE",
      .description = "Force a full switch refresh after this many ms without non-button switch updates"},
+    {.identifier = '%',
+     .access_name = "output-frame-interval-ms",
+     .value_name = "VALUE",
+     .description = "Runtime output frame interval in milliseconds; lower values increase switch poll cadence"},
     {.identifier = 'B',
      .access_name = "ball-search",
      .value_name = NULL,
@@ -2716,6 +2721,8 @@ int main(int argc, char** argv)
   uint32_t opt_switch_reply_delay_us = 0;
   const char* opt_switch_refresh_idle_ms_arg = NULL;
   uint32_t opt_switch_refresh_idle_ms = kDefaultSwitchRefreshIdleMs;
+  const char* opt_output_frame_interval_ms_arg = NULL;
+  uint32_t opt_output_frame_interval_ms = kDefaultOutputFrameIntervalMs;
   bool opt_ball_search = false;
   const char* opt_ball_search_delay_ms_arg = NULL;
   uint32_t opt_ball_search_delay_ms = kDefaultBallSearchDelayMs;
@@ -2879,6 +2886,8 @@ int main(int argc, char** argv)
           opt_switch_reply_delay_us_arg = DuplicateOptionalIniString(value);
         else if (key == "SwitchRefreshIdleMs")
           opt_switch_refresh_idle_ms_arg = DuplicateOptionalIniString(value);
+        else if (key == "OutputFrameIntervalMs")
+          opt_output_frame_interval_ms_arg = DuplicateOptionalIniString(value);
         else if (key == "BallSearch")
           opt_ball_search = ParseIniBool(value);
         else if (key == "BallSearchDelayMs")
@@ -3072,6 +3081,9 @@ int main(int argc, char** argv)
       case 'g':
         opt_switch_refresh_idle_ms_arg = cag_option_get_value(&cag_context);
         break;
+      case '%':
+        opt_output_frame_interval_ms_arg = cag_option_get_value(&cag_context);
+        break;
       case 'B':
         opt_ball_search = true;
         break;
@@ -3221,6 +3233,17 @@ int main(int argc, char** argv)
   if (opt_switch_refresh_idle_ms == 0)
   {
     fprintf(stderr, "--switch-refresh-idle-ms must be greater than 0 because switch re-reading is always active\n");
+    return 1;
+  }
+  if (opt_output_frame_interval_ms_arg &&
+      !ParseUint32Strict(opt_output_frame_interval_ms_arg, &opt_output_frame_interval_ms))
+  {
+    fprintf(stderr, "Invalid value for --output-frame-interval-ms: %s\n", opt_output_frame_interval_ms_arg);
+    return 1;
+  }
+  if (opt_output_frame_interval_ms == 0)
+  {
+    fprintf(stderr, "--output-frame-interval-ms must be greater than 0\n");
     return 1;
   }
   if (opt_ball_search_delay_ms_arg && !ParseUint32Strict(opt_ball_search_delay_ms_arg, &opt_ball_search_delay_ms))
@@ -3464,6 +3487,7 @@ int main(int argc, char** argv)
   ppuc->SetCoilHoldFrames(opt_coil_hold_frames);
   ppuc->SetSwitchReplyDelayUs(opt_switch_reply_delay_us);
   ppuc->SetSwitchRefreshIdleMs(opt_switch_refresh_idle_ms);
+  ppuc->SetOutputFrameIntervalMs(opt_output_frame_interval_ms);
   ppuc->SetDisableFastFlipForTests(opt_switch_test || opt_coil_test || opt_lamp_test || opt_gi_test ||
                                    opt_flasher_test);
 

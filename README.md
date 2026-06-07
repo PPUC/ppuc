@@ -111,6 +111,9 @@ An example runtime ini file is available at `examples/ppuc-pinmame.ini`.
 update arrives for `Runtime.SwitchRefreshIdleMs`, the host sends a v2 switch
 refresh command. IO boards re-read their switch inputs, restart their local
 switch readers, and return full switch bitmaps through the normal switch chain.
+The normal runtime output/switch-poll cadence is controlled by
+`Runtime.OutputFrameIntervalMs` or `--output-frame-interval-ms`; the default is
+`4`.
 
 Switches can be marked as cabinet/player buttons in the game YAML:
 
@@ -136,6 +139,7 @@ search:
 
 ```ini
 [Runtime]
+OutputFrameIntervalMs = 4
 BallSearch = true
 BallSearchDelayMs = 15000
 BallSearchRoundDelayMs = 5000
