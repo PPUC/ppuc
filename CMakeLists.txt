@@ -100,6 +100,27 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
    endif()
 endif()
 
+set(PPUC_YAML_CPP_LINK_LIBRARY yaml-cpp)
+if(NOT (PLATFORM STREQUAL "win" OR PLATFORM STREQUAL "win-mingw"))
+   file(GLOB PPUC_STAGED_YAML_CPP_LIBS
+      "${PPUC_STAGED_RUNTIME_LIB_DIR}/libyaml-cpp${CMAKE_SHARED_LIBRARY_SUFFIX}"
+      "${PPUC_STAGED_RUNTIME_LIB_DIR}/libyaml-cpp${CMAKE_SHARED_LIBRARY_SUFFIX}.*"
+   )
+   list(SORT PPUC_STAGED_YAML_CPP_LIBS)
+   if(PPUC_STAGED_YAML_CPP_LIBS)
+      list(GET PPUC_STAGED_YAML_CPP_LIBS 0 PPUC_YAML_CPP_LINK_LIBRARY)
+      message(STATUS "yaml-cpp library: ${PPUC_YAML_CPP_LINK_LIBRARY}")
+   else()
+      find_library(PPUC_SYSTEM_YAML_CPP_LIBRARY NAMES yaml-cpp)
+      if(PPUC_SYSTEM_YAML_CPP_LIBRARY)
+         set(PPUC_YAML_CPP_LINK_LIBRARY "${PPUC_SYSTEM_YAML_CPP_LIBRARY}")
+         message(STATUS "yaml-cpp library: ${PPUC_YAML_CPP_LINK_LIBRARY}")
+      else()
+         message(FATAL_ERROR "Could not find yaml-cpp library. Run the platform external.sh script first.")
+      endif()
+   endif()
+endif()
+
 add_executable(ppuc-pinmame
    src/AudioOutput.cpp
    src/PUPTriggerEngine.cpp
@@ -300,7 +321,7 @@ else()
          cargs
          SDL3
          SDL3_image
-         yaml-cpp
+         ${PPUC_YAML_CPP_LINK_LIBRARY}
       )
    else()
       target_link_libraries(ppuc-pinmame LINK_PUBLIC
@@ -311,7 +332,7 @@ else()
          cargs
          SDL3
          SDL3_image
-         yaml-cpp
+         ${PPUC_YAML_CPP_LINK_LIBRARY}
       )
    endif()
 
