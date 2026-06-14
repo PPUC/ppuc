@@ -19,6 +19,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -3283,7 +3284,15 @@ int main(int argc, char** argv)
   ppuc = new PPUC();
 
   // Load config file. But options set via command line are preferred.
-  ppuc->LoadConfiguration(config_file);
+  try
+  {
+    ppuc->LoadConfiguration(config_file);
+  }
+  catch (const std::exception& e)
+  {
+    fprintf(stderr, "%s\n", e.what());
+    return 1;
+  }
 
   if (!opt_debug)
   {
