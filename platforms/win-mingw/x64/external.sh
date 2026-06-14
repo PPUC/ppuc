@@ -24,7 +24,12 @@ echo "Cache dir: ${CACHE_DIR}"
 echo "Procs: ${NUM_PROCS}"
 echo ""
 
-mkdir -p external ${CACHE_DIR}
+mkdir -p \
+   external \
+   ${CACHE_DIR} \
+   third-party/include \
+   third-party/build-libs/win-mingw-x64 \
+   third-party/runtime-libs/win-mingw-x64
 cd external
 
 LIBSDLDMD_EXPECTED_SHA="${LIBSDLDMD_SHA}"
