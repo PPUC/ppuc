@@ -230,8 +230,26 @@ cp SDL3_mixer/SDL_mixer/build/libSDL3_mixer64.dll.a ../third-party/build-libs/wi
 cp SDL3_mixer/SDL_mixer/build/SDL3_mixer64.dll ../third-party/runtime-libs/win-mingw-x64/
 cp -r SDL3_mixer/SDL_mixer/include/SDL3_mixer ../third-party/include/
 
-cp pinmame/pinmame/build/libpinmame.dll.a ../third-party/build-libs/win-mingw-x64/pinmame64.dll.a
-cp pinmame/pinmame/build/libpinmame.dll ../third-party/runtime-libs/win-mingw-x64/pinmame64.dll
+PINMAME_BUILD_DIR="pinmame/pinmame/build"
+PINMAME_IMPORT_LIB="${PINMAME_BUILD_DIR}/pinmame64.dll.a"
+PINMAME_RUNTIME_DLL="${PINMAME_BUILD_DIR}/pinmame64.dll"
+
+if [ ! -f "${PINMAME_IMPORT_LIB}" ]; then
+   PINMAME_IMPORT_LIB="${PINMAME_BUILD_DIR}/libpinmame.dll.a"
+fi
+
+if [ ! -f "${PINMAME_RUNTIME_DLL}" ]; then
+   PINMAME_RUNTIME_DLL="${PINMAME_BUILD_DIR}/libpinmame.dll"
+fi
+
+if [ ! -f "${PINMAME_IMPORT_LIB}" ] || [ ! -f "${PINMAME_RUNTIME_DLL}" ]; then
+   echo "Could not find PinMAME MinGW build outputs in ${PINMAME_BUILD_DIR}"
+   find "${PINMAME_BUILD_DIR}" -maxdepth 2 -type f \( -name '*pinmame*.dll.a' -o -name '*pinmame*.dll' \) -print
+   exit 1
+fi
+
+cp "${PINMAME_IMPORT_LIB}" ../third-party/build-libs/win-mingw-x64/pinmame64.dll.a
+cp "${PINMAME_RUNTIME_DLL}" ../third-party/runtime-libs/win-mingw-x64/pinmame64.dll
 cp pinmame/pinmame/src/libpinmame/libpinmame.h ../third-party/include/
 rm -rf ../third-party/pinmame-nvram-maps
 mkdir -p ../third-party/pinmame-nvram-maps
