@@ -143,10 +143,13 @@ The conditions are written with readable words:
 - `player(...)`
 - `history(...)`
 - `sequence(...)`
+- `state(...)`
 - `switch(...)`
+- `switch_group(...)`
 - `lamp(...)`
 - `coil(...)`
 - `switch_rising(...)`
+- `switch_rising_group(...)`
 - `lamp_rising(...)`
 - `coil_rising(...)`
 - `attract`
@@ -156,6 +159,55 @@ Current limitation:
 `player(...)` can now be supplied either by runtime state updates or by rules that use `set_player=<n>`.
 Trigger history is retained per player for a rolling time window and is cleared when the table returns to attract mode.
 Rules can also use `clear_player_history=<n>` to drop stored history for a specific player before the new trigger is recorded.
+
+### Interceptor Rules
+
+Interceptor behavior is part of the same rules file. Rules still observe
+physical switch state, even when a switch event is suppressed before it reaches
+PinMAME.
+
+Additional rule options:
+
+- `set_state=<name>` with optional `state_ms=<milliseconds>`
+- `clear_state=<name>`
+- `suppress_switch=<number>`
+- `pulse_coil=<number>` with optional `pulse_ms=<milliseconds>`; default is 120 ms
+- `blink_lamp=<number>` with optional `blink_on_ms=<milliseconds>` and
+  `blink_off_ms=<milliseconds>`; defaults are 250/250 ms
+
+Additional expression functions:
+
+- `state(<name>)`
+- `switch_group(<name>)`
+- `switch_rising_group(<name>)`
+- `switch_falling_group(<name>)`
+- `switch_rising(<n1>, <n2>, ...)`
+- `switch_falling(<n1>, <n2>, ...)`
+
+`suppress_switch=<number>` blocks a matching switch close from being forwarded
+to PinMAME and also blocks the matching switch open. Host-side coil pulses and
+lamp blinking temporarily override normal PinMAME output for that output number;
+when the override ends, the last PinMAME output state is restored.
+
+Switch groups can be declared in game YAML:
+
+```yaml
+switchGroups:
+  playfield:
+    switches: [10, 11, 12, 13]
+```
+
+The group `buttons` is built in from switches marked `button: true` and cannot
+be overridden.
+
+Example:
+
+```text
+S ball-save-ready set_state=ball_save_ready : switch_rising(15)
+S ball-save-active set_state=ball_save state_ms=5000 clear_state=ball_save_ready : state(ball_save_ready) && switch_rising_group(playfield)
+S shoot-again-blink blink_lamp=8 : state(ball_save_ready) || state(ball_save)
+S outhole-save suppress_switch=9 pulse_coil=7 pulse_ms=120 : state(ball_save) && switch_rising(9)
+```
 
 So the intended reading is:
 

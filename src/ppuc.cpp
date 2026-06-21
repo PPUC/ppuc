@@ -384,6 +384,131 @@ static void PrintFlushedLogLine(const char* prefix, const char* message)
   fflush(stdout);
 }
 
+struct InterceptorOutputOverrides
+{
+  struct CoilPulse
+  {
+    std::chrono::steady_clock::time_point until{};
+  };
+
+  struct LampBlink
+  {
+    uint32_t onMs = 250;
+    uint32_t offMs = 250;
+    bool outputOn = false;
+    std::chrono::steady_clock::time_point nextToggle{};
+  };
+
+  std::unordered_map<int, uint8_t> pinmameCoils;
+  std::unordered_map<int, uint8_t> pinmameLamps;
+  std::unordered_map<int, CoilPulse> coilPulses;
+  std::unordered_map<int, LampBlink> lampBlinks;
+
+  void ApplyPinmameCoil(PPUC* controller, int number, uint8_t state)
+  {
+    pinmameCoils[number] = state == 0 ? 0 : 1;
+    const auto now = std::chrono::steady_clock::now();
+    const auto pulseIt = coilPulses.find(number);
+    if (pulseIt != coilPulses.end() && now < pulseIt->second.until)
+    {
+      controller->SetSolenoidState(number, 1);
+      return;
+    }
+    controller->SetSolenoidState(number, state == 0 ? 0 : 1);
+  }
+
+  void ApplyPinmameLamp(PPUC* controller, int number, uint8_t state)
+  {
+    pinmameLamps[number] = state == 0 ? 0 : 1;
+    if (lampBlinks.find(number) != lampBlinks.end())
+    {
+      return;
+    }
+    controller->SetLampState(number, state == 0 ? 0 : 1);
+  }
+
+  void PulseCoil(PPUC* controller, int number, uint32_t durationMs)
+  {
+    const auto now = std::chrono::steady_clock::now();
+    auto& pulse = coilPulses[number];
+    const auto until = now + std::chrono::milliseconds(durationMs == 0 ? 1 : durationMs);
+    if (until > pulse.until)
+    {
+      pulse.until = until;
+    }
+    controller->SetSolenoidState(number, 1);
+  }
+
+  void StartBlinkLamp(PPUC* controller, int number, uint32_t onMs, uint32_t offMs)
+  {
+    auto& blink = lampBlinks[number];
+    blink.onMs = onMs == 0 ? 250 : onMs;
+    blink.offMs = offMs == 0 ? 250 : offMs;
+    blink.outputOn = true;
+    blink.nextToggle = std::chrono::steady_clock::now() + std::chrono::milliseconds(blink.onMs);
+    controller->SetLampState(number, 1);
+  }
+
+  void StopBlinkLamp(PPUC* controller, int number)
+  {
+    lampBlinks.erase(number);
+    const uint8_t restore = pinmameLamps.count(number) == 0 ? 0 : pinmameLamps[number];
+    controller->SetLampState(number, restore);
+  }
+
+  void Service(PPUC* controller)
+  {
+    const auto now = std::chrono::steady_clock::now();
+
+    auto coilIt = coilPulses.begin();
+    while (coilIt != coilPulses.end())
+    {
+      if (now >= coilIt->second.until)
+      {
+        const int number = coilIt->first;
+        coilIt = coilPulses.erase(coilIt);
+        const uint8_t restore = pinmameCoils.count(number) == 0 ? 0 : pinmameCoils[number];
+        controller->SetSolenoidState(number, restore);
+      }
+      else
+      {
+        ++coilIt;
+      }
+    }
+
+    for (auto& entry : lampBlinks)
+    {
+      LampBlink& blink = entry.second;
+      if (now < blink.nextToggle)
+      {
+        continue;
+      }
+
+      blink.outputOn = !blink.outputOn;
+      blink.nextToggle = now + std::chrono::milliseconds(blink.outputOn ? blink.onMs : blink.offMs);
+      controller->SetLampState(entry.first, blink.outputOn ? 1 : 0);
+    }
+  }
+
+  void HandleAction(PPUC* controller, const PUPTriggerEngine::RuleAction& action)
+  {
+    switch (action.type)
+    {
+      case PUPTriggerEngine::ActionType::PulseCoil:
+        PulseCoil(controller, action.number, action.durationMs);
+        break;
+      case PUPTriggerEngine::ActionType::StartBlinkLamp:
+        StartBlinkLamp(controller, action.number, action.onMs, action.offMs);
+        break;
+      case PUPTriggerEngine::ActionType::StopBlinkLamp:
+        StopBlinkLamp(controller, action.number);
+        break;
+    }
+  }
+};
+
+InterceptorOutputOverrides g_interceptorOutputs;
+
 static uint64_t CurrentUnixMs()
 {
   return static_cast<uint64_t>(
@@ -2615,7 +2740,7 @@ void PINMAMECALLBACK OnSolenoidUpdated(PinmameSolenoidState* p_solenoidState, co
     printf("OnSolenoidUpdated: solenoid=%d, state=%d\n", p_solenoidState->solNo, coilState);
   }
 
-  ppuc->SetSolenoidState(p_solenoidState->solNo, coilState);
+  g_interceptorOutputs.ApplyPinmameCoil(ppuc, p_solenoidState->solNo, coilState);
 
   if (isGameOnCoil)
   {
@@ -3617,6 +3742,15 @@ int main(int argc, char** argv)
   {
     pPUPTriggerEngine = std::make_unique<PUPTriggerEngine>();
     pPUPTriggerEngine->SetDebug(opt_debug || opt_debug_effects);
+    pPUPTriggerEngine->SetSwitchGroups(ppuc->GetSwitchGroups());
+    pPUPTriggerEngine->SetActionCallback(
+        [](const PUPTriggerEngine::RuleAction& action)
+        {
+          if (ppuc != nullptr)
+          {
+            g_interceptorOutputs.HandleAction(ppuc, action);
+          }
+        });
     pPUPTriggerEngine->SetTriggerCallback(
         [](const char source, const uint16_t id, const uint8_t value)
         {
@@ -3954,6 +4088,7 @@ int main(int argc, char** argv)
         {
           pPUPTriggerEngine->Update();
         }
+        g_interceptorOutputs.Service(ppuc);
         continue;
       }
 
@@ -3998,9 +4133,15 @@ int main(int argc, char** argv)
         NoteBallSearchSwitchUpdate(ppuc, ballSearchRunner, switchState->number, newSwitchState,
                                    opt_ball_search_delay_ms);
 
+        PUPTriggerEngine::SwitchProcessResult switchProcess;
+        if (pPUPTriggerEngine)
+        {
+          switchProcess = pPUPTriggerEngine->ProcessSwitchState(switchState->number, newSwitchState);
+        }
+
         // Switches between 200 and 240 are custom switches within the io-boards which should not be sent to
         // pinmame. Switches above 240 will become negative values, for example 243 => -3.
-        if (switchState->number < 200 || switchState->number > 241)
+        if (switchProcess.forwardToCpu && (switchState->number < 200 || switchState->number > 241))
         {
           const int switchNumber = (switchState->number < 241) ? switchState->number : 240 - switchState->number;
           PinmameSetSwitch(switchNumber, newSwitchState);
@@ -4011,10 +4152,7 @@ int main(int argc, char** argv)
           printf("Switch updated: #%d, %d\n", switchState->number, newSwitchState);
         }
 
-        if (pPUPTriggerEngine)
-        {
-          pPUPTriggerEngine->OnSwitchState(switchState->number, newSwitchState);
-        }
+        delete switchState;
       }
 
       ServiceBallSearchRunner(ppuc, ballSearchRunner,
@@ -4032,7 +4170,7 @@ int main(int argc, char** argv)
           printf("Lamp updated: #%d, %d\n", lampNo, lampState);
         }
 
-        ppuc->SetLampState(lampNo, lampState);
+        g_interceptorOutputs.ApplyPinmameLamp(ppuc, static_cast<int>(lampNo), lampState);
 
         if (pPUPTriggerEngine)
         {
@@ -4061,6 +4199,7 @@ int main(int argc, char** argv)
       {
         pPUPTriggerEngine->Update();
       }
+      g_interceptorOutputs.Service(ppuc);
 
       {  // Needs to be a separate scope for the lock_guard
         // Process any pending render requests

@@ -2,6 +2,7 @@
 
 #include <ctype.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <fstream>
 #include <sstream>
@@ -135,6 +136,24 @@ bool ParseUInt32Token(const std::string& token, uint32_t& out)
   }
 
   out = static_cast<uint32_t>(value);
+  return true;
+}
+
+bool IsNameToken(const std::string& token)
+{
+  if (token.empty())
+  {
+    return false;
+  }
+
+  for (char c : token)
+  {
+    const unsigned char uc = static_cast<unsigned char>(c);
+    if (!(::isalnum(uc) || c == '_' || c == '-' || c == '.'))
+    {
+      return false;
+    }
+  }
   return true;
 }
 
@@ -327,9 +346,17 @@ class TriggerExpressionParser
     {
       return ParseSequenceFunction();
     }
+    else if (identifier == "state")
+    {
+      return ParseNamedStateFunction();
+    }
     else if (identifier == "switch")
     {
       functionType = PUPTriggerEngine::ExprNodeType::SwitchState;
+    }
+    else if (identifier == "switch_group")
+    {
+      return ParseGroupFunction(PUPTriggerEngine::ExprNodeType::SwitchGroupState, identifier);
     }
     else if (identifier == "lamp")
     {
@@ -341,11 +368,19 @@ class TriggerExpressionParser
     }
     else if (identifier == "switch_rising")
     {
-      functionType = PUPTriggerEngine::ExprNodeType::SwitchRising;
+      return ParseSwitchNumberListFunction(PUPTriggerEngine::ExprNodeType::SwitchRising, identifier);
     }
     else if (identifier == "switch_falling")
     {
-      functionType = PUPTriggerEngine::ExprNodeType::SwitchFalling;
+      return ParseSwitchNumberListFunction(PUPTriggerEngine::ExprNodeType::SwitchFalling, identifier);
+    }
+    else if (identifier == "switch_rising_group")
+    {
+      return ParseGroupFunction(PUPTriggerEngine::ExprNodeType::SwitchRisingGroup, identifier);
+    }
+    else if (identifier == "switch_falling_group")
+    {
+      return ParseGroupFunction(PUPTriggerEngine::ExprNodeType::SwitchFallingGroup, identifier);
     }
     else if (identifier == "lamp_rising")
     {
@@ -393,6 +428,108 @@ class TriggerExpressionParser
     auto node = std::make_unique<PUPTriggerEngine::ExprNode>();
     node->type = functionType;
     node->number = number;
+    node->numbers.push_back(number);
+    return node;
+  }
+
+  std::unique_ptr<PUPTriggerEngine::ExprNode> ParseNamedStateFunction()
+  {
+    SkipWhitespace();
+    if (!Match("("))
+    {
+      m_error = "missing ( after function 'state'";
+      return nullptr;
+    }
+
+    const std::string name = ParseArgumentToken();
+    if (name.empty())
+    {
+      m_error = "expected state name in function 'state'";
+      return nullptr;
+    }
+
+    SkipWhitespace();
+    if (!Match(")"))
+    {
+      m_error = "missing ) in function 'state'";
+      return nullptr;
+    }
+
+    auto node = std::make_unique<PUPTriggerEngine::ExprNode>();
+    node->type = PUPTriggerEngine::ExprNodeType::NamedState;
+    node->name = name;
+    return node;
+  }
+
+  std::unique_ptr<PUPTriggerEngine::ExprNode> ParseGroupFunction(
+      PUPTriggerEngine::ExprNodeType type, const std::string& identifier)
+  {
+    SkipWhitespace();
+    if (!Match("("))
+    {
+      m_error = "missing ( after function '" + identifier + "'";
+      return nullptr;
+    }
+
+    const std::string name = ParseArgumentToken();
+    if (name.empty())
+    {
+      m_error = "expected group name in function '" + identifier + "'";
+      return nullptr;
+    }
+
+    SkipWhitespace();
+    if (!Match(")"))
+    {
+      m_error = "missing ) in function '" + identifier + "'";
+      return nullptr;
+    }
+
+    auto node = std::make_unique<PUPTriggerEngine::ExprNode>();
+    node->type = type;
+    node->name = name;
+    return node;
+  }
+
+  std::unique_ptr<PUPTriggerEngine::ExprNode> ParseSwitchNumberListFunction(
+      PUPTriggerEngine::ExprNodeType type, const std::string& identifier)
+  {
+    SkipWhitespace();
+    if (!Match("("))
+    {
+      m_error = "missing ( after function '" + identifier + "'";
+      return nullptr;
+    }
+
+    std::vector<int> numbers;
+    while (true)
+    {
+      int number = 0;
+      if (!ParseUnsignedNumber(number))
+      {
+        m_error = "expected numeric argument in function '" + identifier + "'";
+        return nullptr;
+      }
+      numbers.push_back(number);
+
+      SkipWhitespace();
+      if (!Match(","))
+      {
+        break;
+      }
+      SkipWhitespace();
+    }
+
+    if (!Match(")"))
+    {
+      m_error = "missing ) in function '" + identifier + "'";
+      return nullptr;
+    }
+
+    auto node = std::make_unique<PUPTriggerEngine::ExprNode>();
+    node->type = type;
+    node->number = numbers.empty() ? 0 : numbers.front();
+    node->numbers = std::move(numbers);
     return node;
   }
 
@@ -725,6 +862,106 @@ bool PUPTriggerEngine::LoadRules(const char* path, std::string& error)
         continue;
       }
 
+      if (option.rfind("set_state=", 0) == 0)
+      {
+        const std::string name = option.substr(10);
+        if (!IsNameToken(name))
+        {
+          error = "Invalid PUP trigger line " + std::to_string(lineNo) + ": set_state must be a name token.";
+          return false;
+        }
+        rule.setState = name;
+        continue;
+      }
+
+      if (option.rfind("clear_state=", 0) == 0)
+      {
+        const std::string name = option.substr(12);
+        if (!IsNameToken(name))
+        {
+          error = "Invalid PUP trigger line " + std::to_string(lineNo) + ": clear_state must be a name token.";
+          return false;
+        }
+        rule.clearState = name;
+        continue;
+      }
+
+      if (option.rfind("state_ms=", 0) == 0)
+      {
+        if (!ParseUInt32Token(option.substr(9), rule.stateMs))
+        {
+          error = "Invalid PUP trigger line " + std::to_string(lineNo) + ": state_ms must be uint32 milliseconds.";
+          return false;
+        }
+        continue;
+      }
+
+      if (option.rfind("suppress_switch=", 0) == 0)
+      {
+        uint16_t number = 0;
+        if (!ParseUInt16Token(option.substr(16), number))
+        {
+          error = "Invalid PUP trigger line " + std::to_string(lineNo) + ": suppress_switch must be uint16.";
+          return false;
+        }
+        rule.suppressSwitch = static_cast<int>(number);
+        continue;
+      }
+
+      if (option.rfind("pulse_coil=", 0) == 0)
+      {
+        uint16_t number = 0;
+        if (!ParseUInt16Token(option.substr(11), number))
+        {
+          error = "Invalid PUP trigger line " + std::to_string(lineNo) + ": pulse_coil must be uint16.";
+          return false;
+        }
+        rule.pulseCoil = static_cast<int>(number);
+        continue;
+      }
+
+      if (option.rfind("pulse_ms=", 0) == 0)
+      {
+        if (!ParseUInt32Token(option.substr(9), rule.pulseMs))
+        {
+          error = "Invalid PUP trigger line " + std::to_string(lineNo) + ": pulse_ms must be uint32 milliseconds.";
+          return false;
+        }
+        continue;
+      }
+
+      if (option.rfind("blink_lamp=", 0) == 0)
+      {
+        uint16_t number = 0;
+        if (!ParseUInt16Token(option.substr(11), number))
+        {
+          error = "Invalid PUP trigger line " + std::to_string(lineNo) + ": blink_lamp must be uint16.";
+          return false;
+        }
+        rule.blinkLamp = static_cast<int>(number);
+        continue;
+      }
+
+      if (option.rfind("blink_on_ms=", 0) == 0)
+      {
+        if (!ParseUInt32Token(option.substr(12), rule.blinkOnMs) || rule.blinkOnMs == 0)
+        {
+          error = "Invalid PUP trigger line " + std::to_string(lineNo) + ": blink_on_ms must be a positive uint32.";
+          return false;
+        }
+        continue;
+      }
+
+      if (option.rfind("blink_off_ms=", 0) == 0)
+      {
+        if (!ParseUInt32Token(option.substr(13), rule.blinkOffMs) || rule.blinkOffMs == 0)
+        {
+          error = "Invalid PUP trigger line " + std::to_string(lineNo) + ": blink_off_ms must be a positive uint32.";
+          return false;
+        }
+        continue;
+      }
+
       if (!hasValue)
       {
         if (!ParseUInt8Token(option, rule.value))
@@ -758,6 +995,8 @@ bool PUPTriggerEngine::LoadRules(const char* path, std::string& error)
   m_switchStates.clear();
   m_lampStates.clear();
   m_coilStates.clear();
+  m_namedStates.clear();
+  m_suppressedSwitchOpen.clear();
   m_history.clear();
   m_currentBall = 0;
   m_currentPlayer = 0;
@@ -774,6 +1013,18 @@ void PUPTriggerEngine::SetTriggerCallback(TriggerCallback callback)
 {
   std::lock_guard<std::mutex> lock(m_mutex);
   m_triggerCallback = std::move(callback);
+}
+
+void PUPTriggerEngine::SetActionCallback(ActionCallback callback)
+{
+  std::lock_guard<std::mutex> lock(m_mutex);
+  m_actionCallback = std::move(callback);
+}
+
+void PUPTriggerEngine::SetSwitchGroups(const std::unordered_map<std::string, std::vector<uint16_t>>& switchGroups)
+{
+  std::lock_guard<std::mutex> lock(m_mutex);
+  m_switchGroups = switchGroups;
 }
 
 void PUPTriggerEngine::SetAttractMode(bool attractMode)
@@ -798,30 +1049,24 @@ void PUPTriggerEngine::Update()
 {
   const uint64_t nowMs = GetNowMs();
   std::vector<MatchedTrigger> matched;
+  std::vector<RuleAction> actions;
   TriggerCallback triggerCallback;
+  ActionCallback actionCallback;
   bool debug = false;
   {
     std::lock_guard<std::mutex> lock(m_mutex);
     PruneHistoryLocked(nowMs);
-    CollectDueTriggers(nowMs, matched);
+    PruneNamedStatesLocked(nowMs);
+    const TriggerEvent timerEvent = {EventType::Timer, 0, 0, 0};
+    CollectBlinkActions(nowMs, timerEvent, actions);
+    CollectDueTriggers(nowMs, matched, actions);
     RecordMatchedTriggers(matched, nowMs);
     triggerCallback = m_triggerCallback;
+    actionCallback = m_actionCallback;
     debug = m_debug;
   }
 
-  for (const auto& match : matched)
-  {
-    if (debug)
-    {
-      printf("PUP trigger matched (line=%zu player=%u ball=%u): source=%c id=%u value=%u\n", match.line,
-             match.player, match.ball, match.source, match.id, match.value);
-    }
-
-    if (match.source != kSilentTriggerSource && triggerCallback)
-    {
-      triggerCallback(match.source, match.id, match.value);
-    }
-  }
+  DispatchMatchesAndActions(matched, actions, triggerCallback, actionCallback, debug);
 }
 
 uint8_t PUPTriggerEngine::GetState(const std::unordered_map<int, uint8_t>& states, int number) const
@@ -858,17 +1103,42 @@ bool PUPTriggerEngine::EvaluateExpression(const ExprNode* node, const TriggerEve
     case ExprNodeType::SequenceState:
       return SequenceOccurred(node->triggerIds, node->windowMs, GetNowMs());
     case ExprNodeType::SwitchState:
+      if (!node->numbers.empty())
+      {
+        for (int number : node->numbers)
+        {
+          if (GetState(m_switchStates, number) != 0)
+          {
+            return true;
+          }
+        }
+        return false;
+      }
       return GetState(m_switchStates, node->number) != 0;
     case ExprNodeType::LampState:
       return GetState(m_lampStates, node->number) != 0;
     case ExprNodeType::CoilState:
       return GetState(m_coilStates, node->number) != 0;
+    case ExprNodeType::NamedState:
+      return NamedStateActive(node->name, GetNowMs());
+    case ExprNodeType::SwitchGroupState:
+      return SwitchGroupStateActive(node->name);
     case ExprNodeType::SwitchRising:
-      return event.type == EventType::Switch && event.number == node->number && event.oldValue == 0 &&
-             event.newValue != 0;
+      return event.type == EventType::Switch &&
+             (node->numbers.empty() ||
+              std::find(node->numbers.begin(), node->numbers.end(), event.number) != node->numbers.end()) &&
+             event.oldValue == 0 && event.newValue != 0;
     case ExprNodeType::SwitchFalling:
-      return event.type == EventType::Switch && event.number == node->number && event.oldValue != 0 &&
-             event.newValue == 0;
+      return event.type == EventType::Switch &&
+             (node->numbers.empty() ||
+              std::find(node->numbers.begin(), node->numbers.end(), event.number) != node->numbers.end()) &&
+             event.oldValue != 0 && event.newValue == 0;
+    case ExprNodeType::SwitchRisingGroup:
+      return event.type == EventType::Switch && event.oldValue == 0 && event.newValue != 0 &&
+             SwitchGroupContainsEvent(node->name, event);
+    case ExprNodeType::SwitchFallingGroup:
+      return event.type == EventType::Switch && event.oldValue != 0 && event.newValue == 0 &&
+             SwitchGroupContainsEvent(node->name, event);
     case ExprNodeType::LampRising:
       return event.type == EventType::Lamp && event.number == node->number && event.oldValue == 0 &&
              event.newValue != 0;
@@ -941,6 +1211,45 @@ bool PUPTriggerEngine::SequenceOccurred(const std::vector<uint16_t>& triggerIds,
   return false;
 }
 
+bool PUPTriggerEngine::NamedStateActive(const std::string& name, uint64_t nowMs) const
+{
+  const auto it = m_namedStates.find(name);
+  if (it == m_namedStates.end())
+  {
+    return false;
+  }
+  return it->second == 0 || nowMs < it->second;
+}
+
+bool PUPTriggerEngine::SwitchGroupStateActive(const std::string& name) const
+{
+  const auto it = m_switchGroups.find(name);
+  if (it == m_switchGroups.end())
+  {
+    return false;
+  }
+
+  for (const uint16_t number : it->second)
+  {
+    if (GetState(m_switchStates, static_cast<int>(number)) != 0)
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool PUPTriggerEngine::SwitchGroupContainsEvent(const std::string& name, const TriggerEvent& event) const
+{
+  const auto it = m_switchGroups.find(name);
+  if (it == m_switchGroups.end())
+  {
+    return false;
+  }
+
+  return std::find(it->second.begin(), it->second.end(), static_cast<uint16_t>(event.number)) != it->second.end();
+}
+
 bool PUPTriggerEngine::UsesEventEdges(const ExprNode* node) const
 {
   if (!node)
@@ -952,6 +1261,8 @@ bool PUPTriggerEngine::UsesEventEdges(const ExprNode* node) const
   {
     case ExprNodeType::SwitchRising:
     case ExprNodeType::SwitchFalling:
+    case ExprNodeType::SwitchRisingGroup:
+    case ExprNodeType::SwitchFallingGroup:
     case ExprNodeType::LampRising:
     case ExprNodeType::LampFalling:
     case ExprNodeType::CoilRising:
@@ -974,7 +1285,8 @@ bool PUPTriggerEngine::CanTriggerNow(const Rule& rule, uint64_t nowMs) const
   return rule.cooldownMs == 0 || nowMs >= (rule.lastTriggeredMs + static_cast<uint64_t>(rule.cooldownMs));
 }
 
-void PUPTriggerEngine::CollectDueTriggers(uint64_t nowMs, std::vector<MatchedTrigger>& matched)
+void PUPTriggerEngine::CollectDueTriggers(uint64_t nowMs, std::vector<MatchedTrigger>& matched,
+                                          std::vector<RuleAction>& actions)
 {
   for (auto& rule : m_rules)
   {
@@ -991,8 +1303,32 @@ void PUPTriggerEngine::CollectDueTriggers(uint64_t nowMs, std::vector<MatchedTri
     rule.lastTriggeredMs = nowMs;
     rule.pending = false;
     rule.pendingTriggerMs = 0;
+    ApplyRuleSideEffects(rule, nowMs, actions);
     matched.push_back({rule.source, rule.id, rule.value, rule.line,
                        rule.setPlayer != 0 ? rule.setPlayer : m_currentPlayer, m_currentBall});
+  }
+}
+
+void PUPTriggerEngine::CollectBlinkActions(uint64_t nowMs, const TriggerEvent& event, std::vector<RuleAction>& actions)
+{
+  for (auto& rule : m_rules)
+  {
+    if (rule.blinkLamp < 0)
+    {
+      continue;
+    }
+
+    const bool active = EvaluateExpression(rule.expression.get(), event);
+    if (active && !rule.blinkActive)
+    {
+      rule.blinkActive = true;
+      actions.push_back({ActionType::StartBlinkLamp, rule.blinkLamp, 0, rule.blinkOnMs, rule.blinkOffMs});
+    }
+    else if (!active && rule.blinkActive)
+    {
+      rule.blinkActive = false;
+      actions.push_back({ActionType::StopBlinkLamp, rule.blinkLamp, 0, 0, 0});
+    }
   }
 }
 
@@ -1008,12 +1344,47 @@ void PUPTriggerEngine::RecordMatchedTriggers(const std::vector<MatchedTrigger>& 
   }
 }
 
+void PUPTriggerEngine::ApplyRuleSideEffects(Rule& rule, uint64_t nowMs, std::vector<RuleAction>& actions)
+{
+  if (!rule.clearState.empty())
+  {
+    m_namedStates.erase(rule.clearState);
+  }
+
+  if (!rule.setState.empty())
+  {
+    const uint64_t expiresAt = rule.stateMs == 0 ? 0 : nowMs + static_cast<uint64_t>(rule.stateMs);
+    m_namedStates[rule.setState] = expiresAt;
+  }
+
+  if (rule.pulseCoil >= 0)
+  {
+    actions.push_back({ActionType::PulseCoil, rule.pulseCoil, rule.pulseMs, 0, 0});
+  }
+}
+
 void PUPTriggerEngine::PruneHistoryLocked(const uint64_t nowMs)
 {
   while (!m_history.empty() && nowMs > m_history.front().timestampMs &&
          nowMs - m_history.front().timestampMs > static_cast<uint64_t>(kHistoryRetentionMs))
   {
     m_history.pop_front();
+  }
+}
+
+void PUPTriggerEngine::PruneNamedStatesLocked(const uint64_t nowMs)
+{
+  auto it = m_namedStates.begin();
+  while (it != m_namedStates.end())
+  {
+    if (it->second != 0 && nowMs >= it->second)
+    {
+      it = m_namedStates.erase(it);
+    }
+    else
+    {
+      ++it;
+    }
   }
 }
 
@@ -1038,15 +1409,49 @@ void PUPTriggerEngine::ClearPlayerHistoryLocked(const uint8_t player)
   }
 }
 
-void PUPTriggerEngine::HandleStateChange(EventType type, int number, uint8_t state, std::unordered_map<int, uint8_t>& states)
+void PUPTriggerEngine::DispatchMatchesAndActions(const std::vector<MatchedTrigger>& matched,
+                                                 const std::vector<RuleAction>& actions,
+                                                 TriggerCallback triggerCallback,
+                                                 ActionCallback actionCallback,
+                                                 bool debug)
+{
+  for (const auto& match : matched)
+  {
+    if (debug)
+    {
+      printf("PUP trigger matched (line=%zu player=%u ball=%u): source=%c id=%u value=%u\n", match.line,
+             match.player, match.ball, match.source, match.id, match.value);
+    }
+
+    if (match.source != kSilentTriggerSource && triggerCallback)
+    {
+      triggerCallback(match.source, match.id, match.value);
+    }
+  }
+
+  if (actionCallback)
+  {
+    for (const auto& action : actions)
+    {
+      actionCallback(action);
+    }
+  }
+}
+
+PUPTriggerEngine::SwitchProcessResult PUPTriggerEngine::HandleStateChange(EventType type, int number, uint8_t state,
+                                                                          std::unordered_map<int, uint8_t>& states)
 {
   const uint64_t nowMs = GetNowMs();
   std::vector<MatchedTrigger> matched;
+  std::vector<RuleAction> actions;
   TriggerCallback triggerCallback;
+  ActionCallback actionCallback;
   bool debug = false;
+  SwitchProcessResult result;
   {
     std::lock_guard<std::mutex> lock(m_mutex);
     PruneHistoryLocked(nowMs);
+    PruneNamedStatesLocked(nowMs);
 
     const uint8_t oldState = GetState(states, number);
     states[number] = state;
@@ -1101,45 +1506,51 @@ void PUPTriggerEngine::HandleStateChange(EventType type, int number, uint8_t sta
       }
 
       rule.lastTriggeredMs = nowMs;
+      ApplyRuleSideEffects(rule, nowMs, actions);
       const uint8_t matchedPlayer = rule.setPlayer != 0 ? rule.setPlayer : m_currentPlayer;
       if (rule.clearPlayerHistory != 0)
       {
         ClearPlayerHistoryLocked(rule.clearPlayerHistory == 255 ? matchedPlayer : rule.clearPlayerHistory);
       }
+      if (type == EventType::Switch && rule.suppressSwitch == number && state != 0)
+      {
+        result.forwardToCpu = false;
+        m_suppressedSwitchOpen.insert(number);
+      }
       matched.push_back({rule.source, rule.id, rule.value, rule.line, matchedPlayer, m_currentBall});
     }
 
-    CollectDueTriggers(nowMs, matched);
+    if (type == EventType::Switch && state == 0 && m_suppressedSwitchOpen.find(number) != m_suppressedSwitchOpen.end())
+    {
+      result.forwardToCpu = false;
+      m_suppressedSwitchOpen.erase(number);
+    }
+
+    CollectBlinkActions(nowMs, event, actions);
+    CollectDueTriggers(nowMs, matched, actions);
     RecordMatchedTriggers(matched, nowMs);
 
     triggerCallback = m_triggerCallback;
+    actionCallback = m_actionCallback;
     debug = m_debug;
   }
 
-  for (const auto& match : matched)
-  {
-    if (debug)
-    {
-      printf("PUP trigger matched (line=%zu player=%u ball=%u): source=%c id=%u value=%u\n", match.line,
-             match.player, match.ball, match.source, match.id, match.value);
-    }
-
-    if (match.source != kSilentTriggerSource && triggerCallback)
-    {
-      triggerCallback(match.source, match.id, match.value);
-    }
-  }
+  DispatchMatchesAndActions(matched, actions, triggerCallback, actionCallback, debug);
+  return result;
 }
 
 void PUPTriggerEngine::HandleBallChange(uint8_t currentBall)
 {
   const uint64_t nowMs = GetNowMs();
   std::vector<MatchedTrigger> matched;
+  std::vector<RuleAction> actions;
   TriggerCallback triggerCallback;
+  ActionCallback actionCallback;
   bool debug = false;
   {
     std::lock_guard<std::mutex> lock(m_mutex);
     PruneHistoryLocked(nowMs);
+    PruneNamedStatesLocked(nowMs);
 
     const uint8_t oldBall = m_currentBall;
     if (oldBall == currentBall)
@@ -1199,6 +1610,7 @@ void PUPTriggerEngine::HandleBallChange(uint8_t currentBall)
       }
 
       rule.lastTriggeredMs = nowMs;
+      ApplyRuleSideEffects(rule, nowMs, actions);
       const uint8_t matchedPlayer = rule.setPlayer != 0 ? rule.setPlayer : m_currentPlayer;
       if (rule.clearPlayerHistory != 0)
       {
@@ -1207,37 +1619,30 @@ void PUPTriggerEngine::HandleBallChange(uint8_t currentBall)
       matched.push_back({rule.source, rule.id, rule.value, rule.line, matchedPlayer, m_currentBall});
     }
 
-    CollectDueTriggers(nowMs, matched);
+    CollectBlinkActions(nowMs, event, actions);
+    CollectDueTriggers(nowMs, matched, actions);
     RecordMatchedTriggers(matched, nowMs);
 
     triggerCallback = m_triggerCallback;
+    actionCallback = m_actionCallback;
     debug = m_debug;
   }
 
-  for (const auto& match : matched)
-  {
-    if (debug)
-    {
-      printf("PUP trigger matched (line=%zu player=%u ball=%u): source=%c id=%u value=%u\n", match.line,
-             match.player, match.ball, match.source, match.id, match.value);
-    }
-
-    if (match.source != kSilentTriggerSource && triggerCallback)
-    {
-      triggerCallback(match.source, match.id, match.value);
-    }
-  }
+  DispatchMatchesAndActions(matched, actions, triggerCallback, actionCallback, debug);
 }
 
 void PUPTriggerEngine::HandlePlayerChange(uint8_t currentPlayer)
 {
   const uint64_t nowMs = GetNowMs();
   std::vector<MatchedTrigger> matched;
+  std::vector<RuleAction> actions;
   TriggerCallback triggerCallback;
+  ActionCallback actionCallback;
   bool debug = false;
   {
     std::lock_guard<std::mutex> lock(m_mutex);
     PruneHistoryLocked(nowMs);
+    PruneNamedStatesLocked(nowMs);
 
     const uint8_t oldPlayer = m_currentPlayer;
     if (oldPlayer == currentPlayer)
@@ -1297,6 +1702,7 @@ void PUPTriggerEngine::HandlePlayerChange(uint8_t currentPlayer)
       }
 
       rule.lastTriggeredMs = nowMs;
+      ApplyRuleSideEffects(rule, nowMs, actions);
       const uint8_t matchedPlayer = rule.setPlayer != 0 ? rule.setPlayer : m_currentPlayer;
       if (rule.clearPlayerHistory != 0)
       {
@@ -1305,41 +1711,36 @@ void PUPTriggerEngine::HandlePlayerChange(uint8_t currentPlayer)
       matched.push_back({rule.source, rule.id, rule.value, rule.line, matchedPlayer, m_currentBall});
     }
 
-    CollectDueTriggers(nowMs, matched);
+    CollectBlinkActions(nowMs, event, actions);
+    CollectDueTriggers(nowMs, matched, actions);
     RecordMatchedTriggers(matched, nowMs);
 
     triggerCallback = m_triggerCallback;
+    actionCallback = m_actionCallback;
     debug = m_debug;
   }
 
-  for (const auto& match : matched)
-  {
-    if (debug)
-    {
-      printf("PUP trigger matched (line=%zu player=%u ball=%u): source=%c id=%u value=%u\n", match.line,
-             match.player, match.ball, match.source, match.id, match.value);
-    }
-
-    if (match.source != kSilentTriggerSource && triggerCallback)
-    {
-      triggerCallback(match.source, match.id, match.value);
-    }
-  }
+  DispatchMatchesAndActions(matched, actions, triggerCallback, actionCallback, debug);
 }
 
 void PUPTriggerEngine::OnSwitchState(int number, uint8_t state)
 {
-  HandleStateChange(EventType::Switch, number, state == 0 ? 0 : 1, m_switchStates);
+  ProcessSwitchState(number, state);
+}
+
+PUPTriggerEngine::SwitchProcessResult PUPTriggerEngine::ProcessSwitchState(int number, uint8_t state)
+{
+  return HandleStateChange(EventType::Switch, number, state == 0 ? 0 : 1, m_switchStates);
 }
 
 void PUPTriggerEngine::OnLampState(int number, uint8_t state)
 {
-  HandleStateChange(EventType::Lamp, number, state == 0 ? 0 : 1, m_lampStates);
+  (void)HandleStateChange(EventType::Lamp, number, state == 0 ? 0 : 1, m_lampStates);
 }
 
 void PUPTriggerEngine::OnCoilState(int number, uint8_t state)
 {
-  HandleStateChange(EventType::Coil, number, state == 0 ? 0 : 1, m_coilStates);
+  (void)HandleStateChange(EventType::Coil, number, state == 0 ? 0 : 1, m_coilStates);
 }
 
 void PUPTriggerEngine::SetCurrentBall(uint8_t currentBall)

@@ -197,6 +197,36 @@ Rule options:
   * wait before firing after the expression matches
   * for state-based expressions, the condition must still be true when the delay expires
   * for edge expressions like `switch_rising(...)`, the matching edge arms the delayed trigger once
+* `set_state=<name>` with optional `state_ms=<milliseconds>`
+  * set a named transient state that can be tested with `state(<name>)`
+  * omit `state_ms` for a state that remains set until `clear_state=<name>`
+* `clear_state=<name>`
+  * clear a named state when the rule matches
+* `suppress_switch=<number>`
+  * prevent a matching physical switch close from being reported to PinMAME
+  * the matching switch open is also suppressed so PinMAME sees no edge
+* `pulse_coil=<number>` with optional `pulse_ms=<milliseconds>`
+  * pulse a coil from the host; default pulse is 120 ms
+* `blink_lamp=<number>` with optional `blink_on_ms=<milliseconds>` and `blink_off_ms=<milliseconds>`
+  * blink a lamp while the rule expression remains true; defaults are 250/250 ms
+
+Additional expression functions:
+* `state(<name>)`
+* `switch_group(<name>)`
+* `switch_rising_group(<name>)`
+* `switch_falling_group(<name>)`
+* `switch_rising(<n1>, <n2>, ...)` and `switch_falling(<n1>, <n2>, ...)`
+
+Switch groups can be declared in the game YAML:
+
+```yaml
+switchGroups:
+  playfield:
+    switches: [10, 11, 12, 13]
+```
+
+The group `buttons` is built in from switches marked `button: true` and cannot
+be overridden in YAML.
 
 Example:
 
@@ -206,6 +236,10 @@ P 101 1 cooldown=500 : switch_rising(13) && attract
 P 102 1 delay=750 : switch(13) && attract
 O 60010 1 : lamp_rising(23) && !attract
 F cabinet-attract 1 : lamp_rising(5) && attract
+S ball-save-ready set_state=ball_save_ready : switch_rising(15)
+S ball-save-active set_state=ball_save state_ms=5000 clear_state=ball_save_ready : state(ball_save_ready) && switch_rising_group(playfield)
+S shoot-again-blink blink_lamp=8 : state(ball_save_ready) || state(ball_save)
+S outhole-save suppress_switch=9 pulse_coil=7 pulse_ms=120 : state(ball_save) && switch_rising(9)
 ```
 
 A ready-to-use sample file is available at `examples/pup-triggers.rules`.

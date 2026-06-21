@@ -1,6 +1,9 @@
 # Format:
 # <source> <id> [value] [cooldown=<milliseconds>] [delay=<milliseconds>] [set_player=<number>]
-#              [clear_player_history=<number>] : <expression>
+#              [clear_player_history=<number>] [set_state=<name>] [state_ms=<milliseconds>]
+#              [clear_state=<name>] [suppress_switch=<number>] [pulse_coil=<number>]
+#              [pulse_ms=<milliseconds>] [blink_lamp=<number>] [blink_on_ms=<milliseconds>]
+#              [blink_off_ms=<milliseconds>] : <expression>
 # Special source:
 # - S                      silent rule: apply state/history side effects, but emit no external trigger
 #
@@ -10,12 +13,16 @@
 # - history(<id>)           true if this trigger id fired before for the current player
 # - history(<id>, <ms>)     same, limited to the last <ms> milliseconds
 # - sequence(<ms>, <id1>, <id2>, ...) true if those trigger ids fired in order within <ms>
+# - state(<name>)           true while a named state is active
 # - switch(<number>)        current switch state (true when closed)
+# - switch_group(<name>)    true if any switch in a configured group is closed
 # - lamp(<number>)          current lamp state (true when lit)
 # - coil(<number>)          current coil state (true when active)
 # - attract / attract()     true if table is in attract mode (no game running)
-# - switch_rising(<number>) switch transitioned 0 -> 1 in this event
+# - switch_rising(<number>[, <number>...]) switch transitioned 0 -> 1 in this event
 # - switch_falling(<number>)
+# - switch_rising_group(<name>)
+# - switch_falling_group(<name>)
 # - lamp_rising(<number>)
 # - lamp_falling(<number>)
 # - coil_rising(<number>)
@@ -58,3 +65,10 @@ P 104 1 cooldown=500 : switch_rising(13) && attract
 # Trigger 750ms after switch 13 closes in attract mode.
 # If switch 13 opens again before 750ms, this delayed trigger is cancelled.
 P 105 1 delay=750 : switch(13) && attract
+
+# Interceptor example: host-side ball save.
+# Requires a YAML switchGroups.playfield list, plus real switch/lamp/coil numbers.
+# S ball-save-ready set_state=ball_save_ready : switch_rising(15)
+# S ball-save-active set_state=ball_save state_ms=5000 clear_state=ball_save_ready : state(ball_save_ready) && switch_rising_group(playfield)
+# S shoot-again-blink blink_lamp=8 : state(ball_save_ready) || state(ball_save)
+# S outhole-save suppress_switch=9 pulse_coil=7 pulse_ms=120 : state(ball_save) && switch_rising(9)
