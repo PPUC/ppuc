@@ -243,6 +243,7 @@ S outhole-save suppress_switch=9 pulse_coil=7 pulse_ms=120 : state(ball_save) &&
 ```
 
 A ready-to-use sample file is available at `examples/pup-triggers.rules`.
+Interceptor-specific behavior is documented in `INTERCEPTOR.md`.
 
 Speech trigger source:
 * `O`

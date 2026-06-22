@@ -209,6 +209,9 @@ S shoot-again-blink blink_lamp=8 : state(ball_save_ready) || state(ball_save)
 S outhole-save suppress_switch=9 pulse_coil=7 pulse_ms=120 : state(ball_save) && switch_rising(9)
 ```
 
+See `INTERCEPTOR.md` for the complete interceptor feature reference and runtime
+behavior notes.
+
 So the intended reading is:
 
 - rule header: target/output channel plus trigger ID
