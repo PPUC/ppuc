@@ -293,6 +293,15 @@ Ready-to-use samples are available at:
 
 ### Compiling
 
+The platform build scripts stage pinned third-party dependencies into
+`third-party`. For local development, they automatically prefer sibling
+checkouts named `../libppuc` and `../libsdldmd` when those directories exist,
+then fall back to the pinned GitHub archives from `platforms/config.sh`.
+
+Set `PPUC_USE_LOCAL_DEPS=0` to force the pinned archive path, or set
+`PPUC_LOCAL_DEPS_ROOT=/path/to/workspace` to look for local dependency
+checkouts somewhere other than the parent directory.
+
 #### Windows (x64)
 
 ```shell
