@@ -6,6 +6,7 @@ SDL_IMAGE_SHA=bec9134a26c7d0f31b36d6083c25296e04cabff5
 SDL_MIXER_SHA=72a81869b45e249e8e67102db4e98dd2441f05a1
 FLITE_SHA=6c9f20dc915b17f5619340069889db0aa007fcdc
 ESPEAK_NG_SHA=1.52.0
+LUA_VERSION=5.4.8
 PINMAME_SHA=bf74d40ef837bdfc377c0266c0ef71b3ed59a751
 PINMAME_NVRAM_MAPS_SHA=fa1086d57118e12f4802f3a9683c1e6acfb6ec6d
 LIBPPUC_SHA=715dd76055e2552b31dcff35508721bf0445a396
@@ -67,6 +68,30 @@ ppuc_prepare_dependency_source() {
       tar xzf "${name}-${sha}.tar.gz"
       mv "${name}-${sha}" "${name}"
    fi
+}
+
+ppuc_stage_lua_source() {
+   local expected="${LUA_VERSION}"
+   local found
+
+   found="$([ -f lua/cache.txt ] && cat lua/cache.txt || echo "")"
+   if [ "${expected}" != "${found}" ] || [ ! -f lua/lua/src/lua.h ]; then
+      echo "Preparing Lua. Expected: ${expected}, Found: ${found}"
+
+      rm -rf lua
+      mkdir lua
+      cd lua
+
+      ppuc_prepare_dependency_source lua "${LUA_VERSION}" "https://www.lua.org/ftp/lua-${LUA_VERSION}.tar.gz"
+      echo "${expected}" > cache.txt
+
+      cd ..
+   fi
+
+   mkdir -p ../third-party/include/lua ../third-party/lua-src
+   cp lua/lua/src/*.h ../third-party/include/lua/
+   cp lua/lua/src/*.h ../third-party/lua-src/
+   cp lua/lua/src/*.c ../third-party/lua-src/
 }
 
 if [ -z "${BUILD_TYPE}" ]; then

@@ -44,13 +44,12 @@
 #include "SDLDMD/SDLDMD.h"
 #endif
 #include "AudioOutput.h"
-#include "PUPTriggerEngine.h"
+#include "LuaRulesEngine.h"
 #include "SDL3/SDL.h"
 #include "SDL3/SDL_filesystem.h"
 #include "SDL3_image/SDL_image.h"
 #include "SpeechCliSupport.h"
 #include "SpeechService.h"
-#include "SpeechTriggerMap.h"
 #include "cargs.h"
 #include "io-boards/Event.h"
 #include "io-boards/PPUCPlatforms.h"
@@ -74,12 +73,10 @@ constexpr uint32_t kBallSearchCoilPulseMs = 200;
 
 DMDUtil::DMD* pDmd;
 PPUC* ppuc;
-std::unique_ptr<PUPTriggerEngine> pPUPTriggerEngine;
-std::unique_ptr<SpeechTriggerMap> pSpeechTriggerMap;
+std::unique_ptr<LuaRulesEngine> pLuaRulesEngine;
 std::unique_ptr<AudioOutput> pAudioOutput;
 std::unique_ptr<SpeechService> pSpeechService;
 
-constexpr char kSpeechTriggerSource = 'O';
 constexpr char kBoardEffectTriggerSource = 'F';
 
 enum class PinmameMapEncoding
@@ -307,7 +304,6 @@ bool opt_no_serial = false;
 bool opt_no_sound = false;
 bool opt_speech = false;
 bool opt_greeting = false;
-const char* opt_speech_file = NULL;
 const char* opt_music_files = NULL;
 uint32_t opt_music_gap_ms = 2000;
 const char* opt_speech_backend = "auto";
@@ -441,9 +437,19 @@ struct InterceptorOutputOverrides
 
   void StartBlinkLamp(PPUC* controller, int number, uint32_t onMs, uint32_t offMs)
   {
+    const uint32_t normalizedOnMs = onMs == 0 ? 250 : onMs;
+    const uint32_t normalizedOffMs = offMs == 0 ? 250 : offMs;
+    const auto existing = lampBlinks.find(number);
+    if (existing != lampBlinks.end())
+    {
+      existing->second.onMs = normalizedOnMs;
+      existing->second.offMs = normalizedOffMs;
+      return;
+    }
+
     auto& blink = lampBlinks[number];
-    blink.onMs = onMs == 0 ? 250 : onMs;
-    blink.offMs = offMs == 0 ? 250 : offMs;
+    blink.onMs = normalizedOnMs;
+    blink.offMs = normalizedOffMs;
     blink.outputOn = true;
     blink.nextToggle = std::chrono::steady_clock::now() + std::chrono::milliseconds(blink.onMs);
     controller->SetLampState(number, 1);
@@ -490,17 +496,17 @@ struct InterceptorOutputOverrides
     }
   }
 
-  void HandleAction(PPUC* controller, const PUPTriggerEngine::RuleAction& action)
+  void HandleAction(PPUC* controller, const RulesAction& action)
   {
     switch (action.type)
     {
-      case PUPTriggerEngine::ActionType::PulseCoil:
+      case RulesActionType::PulseCoil:
         PulseCoil(controller, action.number, action.durationMs);
         break;
-      case PUPTriggerEngine::ActionType::StartBlinkLamp:
+      case RulesActionType::StartBlinkLamp:
         StartBlinkLamp(controller, action.number, action.onMs, action.offMs);
         break;
-      case PUPTriggerEngine::ActionType::StopBlinkLamp:
+      case RulesActionType::StopBlinkLamp:
         StopBlinkLamp(controller, action.number);
         break;
     }
@@ -2295,10 +2301,6 @@ static struct cag_option options[] = {
      .access_name = "greeting",
      .value_name = NULL,
      .description = "Speak a startup greeting for speech debugging (optional)"},
-    {.identifier = '9',
-     .access_name = "speech-file",
-     .value_name = "VALUE",
-     .description = "Path to speech trigger text file (optional)"},
     {.identifier = 'o',
      .access_name = "music-files",
      .value_name = "VALUE",
@@ -2342,9 +2344,9 @@ static struct cag_option options[] = {
      .value_name = "VALUE",
      .description = "Enable PUP videos (optional)"},
     {.identifier = 'y',
-     .access_name = "pup-triggers",
+     .access_name = "rules",
      .value_name = "VALUE",
-     .description = "Path to PUP trigger rules file (optional)"},
+     .description = "Path to Lua rules file (optional)"},
     {.identifier = 'i',
      .access_letters = "i",
      .access_name = "console-display",
@@ -2768,18 +2770,18 @@ void PINMAMECALLBACK OnSolenoidUpdated(PinmameSolenoidState* p_solenoidState, co
     }
   }
 
-  if (pPUPTriggerEngine)
+  if (pLuaRulesEngine)
   {
     if (isGameOnCoil)
     {
-      pPUPTriggerEngine->SetAttractMode(coilState == 0);
+      pLuaRulesEngine->SetAttractMode(coilState == 0);
       if (coilState == 0)
       {
-        pPUPTriggerEngine->SetCurrentBall(0);
-        pPUPTriggerEngine->SetCurrentPlayer(0);
+        pLuaRulesEngine->SetCurrentBall(0);
+        pLuaRulesEngine->SetCurrentPlayer(0);
       }
     }
-    pPUPTriggerEngine->OnCoilState(p_solenoidState->solNo, coilState);
+    pLuaRulesEngine->OnCoilState(p_solenoidState->solNo, coilState);
   }
 }
 
@@ -2838,7 +2840,7 @@ int main(int argc, char** argv)
   cag_option_context cag_context;
   const char* config_file = NULL;
   const char* opt_ini_file = NULL;
-  const char* opt_pup_triggers = NULL;
+  const char* opt_rules = NULL;
   const char* opt_backbox_address = NULL;
   uint16_t opt_backbox_port = 6789;
   const char* opt_serial = NULL;
@@ -2956,10 +2958,8 @@ int main(int argc, char** argv)
           opt_serial = DuplicateOptionalIniString(value);
         else if (key == "PinmamePath")
           opt_pinmame_path = DuplicateOptionalIniString(value);
-        else if (key == "PUPTriggers")
-          opt_pup_triggers = DuplicateOptionalIniString(value);
-        else if (key == "SpeechFile")
-          opt_speech_file = DuplicateOptionalIniString(value);
+        else if (key == "Rules")
+          opt_rules = DuplicateOptionalIniString(value);
         else if (key == "MusicFiles")
           opt_music_files = DuplicateOptionalIniString(value);
         else if (key == "MusicGapMs")
@@ -3143,9 +3143,6 @@ int main(int argc, char** argv)
       case 'Y':
         opt_greeting = true;
         break;
-      case '9':
-        opt_speech_file = cag_option_get_value(&cag_context);
-        break;
       case 'o':
         opt_music_files = cag_option_get_value(&cag_context);
         break;
@@ -3180,7 +3177,7 @@ int main(int argc, char** argv)
         opt_pup = true;
         break;
       case 'y':
-        opt_pup_triggers = cag_option_get_value(&cag_context);
+        opt_rules = cag_option_get_value(&cag_context);
         break;
       case 'i':
         opt_console_display = true;
@@ -3427,7 +3424,7 @@ int main(int argc, char** argv)
   if (!ValidateSpeechAudioUsage(opt_no_sound,
                                 (opt_speech || HasOptionValue(opt_speech_voice) ||
                                  HasOptionValue(opt_speech_rate_arg) || HasOptionValue(opt_speech_pitch_arg)),
-                                opt_greeting, opt_speech_file, &speechValidationError))
+                                opt_greeting, &speechValidationError))
   {
     fprintf(stderr, "%s\n", speechValidationError.c_str());
     return 1;
@@ -3470,7 +3467,7 @@ int main(int argc, char** argv)
 
   const auto initializeSpeechIfNeeded = [&]() -> bool
   {
-    if (pSpeechService != nullptr || !(opt_speech || opt_greeting || opt_speech_file))
+    if (pSpeechService != nullptr || !(opt_speech || opt_greeting))
     {
       return true;
     }
@@ -3738,20 +3735,28 @@ int main(int argc, char** argv)
   }
   dmdConfig->SetRoundedCorners(opt_rounded_corners);
 
-  if (opt_pup_triggers)
+  if (opt_rules)
   {
-    pPUPTriggerEngine = std::make_unique<PUPTriggerEngine>();
-    pPUPTriggerEngine->SetDebug(opt_debug || opt_debug_effects);
-    pPUPTriggerEngine->SetSwitchGroups(ppuc->GetSwitchGroups());
-    pPUPTriggerEngine->SetActionCallback(
-        [](const PUPTriggerEngine::RuleAction& action)
+    pLuaRulesEngine = std::make_unique<LuaRulesEngine>();
+    pLuaRulesEngine->SetDebug(opt_debug || opt_debug_effects);
+    pLuaRulesEngine->SetSwitchGroups(ppuc->GetSwitchGroups());
+    pLuaRulesEngine->SetActionCallback(
+        [](const RulesAction& action)
         {
           if (ppuc != nullptr)
           {
             g_interceptorOutputs.HandleAction(ppuc, action);
           }
         });
-    pPUPTriggerEngine->SetTriggerCallback(
+    pLuaRulesEngine->SetSpeechCallback(
+        [](const std::string& text)
+        {
+          if (pSpeechService != nullptr)
+          {
+            pSpeechService->SpeakText(text);
+          }
+        });
+    pLuaRulesEngine->SetTriggerCallback(
         [](const char source, const uint16_t id, const uint8_t value)
         {
           if (source == kBoardEffectTriggerSource)
@@ -3767,19 +3772,6 @@ int main(int argc, char** argv)
             return;
           }
 
-          if (source == kSpeechTriggerSource)
-          {
-            if (pSpeechService && pSpeechTriggerMap)
-            {
-              const std::string* text = pSpeechTriggerMap->Find(id);
-              if (text)
-              {
-                pSpeechService->SpeakText(*text);
-              }
-            }
-            return;
-          }
-
           if (pDmd)
           {
             pDmd->SetPUPTrigger(source, id, value);
@@ -3787,25 +3779,12 @@ int main(int argc, char** argv)
         });
 
     std::string error;
-    if (!pPUPTriggerEngine->LoadRules(opt_pup_triggers, error))
+    if (!pLuaRulesEngine->LoadScript(opt_rules, error))
     {
-      printf("%s: %s\n", error.c_str(), opt_pup_triggers);
+      printf("%s: %s\n", error.c_str(), opt_rules);
       return 1;
     }
-    printf("Loaded %zu PUP trigger rule(s) from %s\n", pPUPTriggerEngine->GetRuleCount(), opt_pup_triggers);
-  }
-
-  if (opt_speech_file)
-  {
-    pSpeechTriggerMap = std::make_unique<SpeechTriggerMap>();
-    std::string error;
-    if (!pSpeechTriggerMap->Load(opt_speech_file, error))
-    {
-      printf("%s: %s\n", error.c_str(), opt_speech_file);
-      return 1;
-    }
-    printf("Loaded %zu speech trigger text entr%s from %s\n", pSpeechTriggerMap->GetEntryCount(),
-           pSpeechTriggerMap->GetEntryCount() == 1 ? "y" : "ies", opt_speech_file);
+    printf("Loaded Lua rules from %s\n", opt_rules);
   }
 
   PinmameConfig config = {
@@ -4071,8 +4050,8 @@ int main(int argc, char** argv)
           }
         }
 
-        trackCurrentBall = pPUPTriggerEngine != nullptr && trackingConfig.currentBall.available;
-        trackCurrentPlayer = pPUPTriggerEngine != nullptr && trackingConfig.currentPlayer.available;
+        trackCurrentBall = pLuaRulesEngine != nullptr && trackingConfig.currentBall.available;
+        trackCurrentPlayer = pLuaRulesEngine != nullptr && trackingConfig.currentPlayer.available;
         nextTrackedStatePollAt = std::chrono::steady_clock::now();
       }
 
@@ -4084,9 +4063,14 @@ int main(int argc, char** argv)
 
       if (game_state.load(std::memory_order_acquire) == 0)
       {
-        if (pPUPTriggerEngine)
+        if (pLuaRulesEngine)
         {
-          pPUPTriggerEngine->Update();
+          pLuaRulesEngine->Update();
+          if (pLuaRulesEngine->HasFatalError())
+          {
+            printf("Lua rules error: %s\n", pLuaRulesEngine->GetFatalError().c_str());
+            running = false;
+          }
         }
         g_interceptorOutputs.Service(ppuc);
         continue;
@@ -4102,7 +4086,7 @@ int main(int argc, char** argv)
           uint8_t currentBall = 0;
           if (TryDecodeTrackedPinmameValue(trackingConfig.currentBall, &currentBall))
           {
-            pPUPTriggerEngine->SetCurrentBall(currentBall);
+            pLuaRulesEngine->SetCurrentBall(currentBall);
           }
           else if (!loggedMissingCurrentBallApi && (opt_debug || opt_debug_errors))
           {
@@ -4116,7 +4100,7 @@ int main(int argc, char** argv)
           uint8_t currentPlayer = 0;
           if (TryDecodeTrackedPinmameValue(trackingConfig.currentPlayer, &currentPlayer))
           {
-            pPUPTriggerEngine->SetCurrentPlayer(currentPlayer);
+            pLuaRulesEngine->SetCurrentPlayer(currentPlayer);
           }
           else if (!loggedMissingCurrentPlayerApi && (opt_debug || opt_debug_errors))
           {
@@ -4133,10 +4117,15 @@ int main(int argc, char** argv)
         NoteBallSearchSwitchUpdate(ppuc, ballSearchRunner, switchState->number, newSwitchState,
                                    opt_ball_search_delay_ms);
 
-        PUPTriggerEngine::SwitchProcessResult switchProcess;
-        if (pPUPTriggerEngine)
+        LuaRulesEngine::SwitchProcessResult switchProcess;
+        if (pLuaRulesEngine)
         {
-          switchProcess = pPUPTriggerEngine->ProcessSwitchState(switchState->number, newSwitchState);
+          switchProcess = pLuaRulesEngine->ProcessSwitchState(switchState->number, newSwitchState);
+          if (pLuaRulesEngine->HasFatalError())
+          {
+            printf("Lua rules error: %s\n", pLuaRulesEngine->GetFatalError().c_str());
+            running = false;
+          }
         }
 
         // Switches between 200 and 240 are custom switches within the io-boards which should not be sent to
@@ -4172,9 +4161,14 @@ int main(int argc, char** argv)
 
         g_interceptorOutputs.ApplyPinmameLamp(ppuc, static_cast<int>(lampNo), lampState);
 
-        if (pPUPTriggerEngine)
+        if (pLuaRulesEngine)
         {
-          pPUPTriggerEngine->OnLampState(static_cast<int>(lampNo), lampState);
+          pLuaRulesEngine->OnLampState(static_cast<int>(lampNo), lampState);
+          if (pLuaRulesEngine->HasFatalError())
+          {
+            printf("Lua rules error: %s\n", pLuaRulesEngine->GetFatalError().c_str());
+            running = false;
+          }
         }
       }
 
@@ -4195,9 +4189,14 @@ int main(int argc, char** argv)
         }
       }
 
-      if (pPUPTriggerEngine)
+      if (pLuaRulesEngine)
       {
-        pPUPTriggerEngine->Update();
+        pLuaRulesEngine->Update();
+        if (pLuaRulesEngine->HasFatalError())
+        {
+          printf("Lua rules error: %s\n", pLuaRulesEngine->GetFatalError().c_str());
+          running = false;
+        }
       }
       g_interceptorOutputs.Service(ppuc);
 

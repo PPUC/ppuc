@@ -61,11 +61,8 @@ These components are still in an early development stage and the documentation w
 * -p VALUE
     * Serum ignore number of unknown frames
     * optional
-* --pup-triggers path
-    * path to a lightweight PUP trigger rules file
-    * optional
-* --speech-file path
-    * path to a speech trigger text file used with speech trigger rules
+* --rules path
+    * path to a Lua rules file
     * optional
 * --music-files csv
     * comma-separated MP3 playlist for gameplay background music
@@ -161,61 +158,54 @@ pwmOutput:
     ballSearch: true
 ```
 
-### PUP Trigger Rules
+### Lua Rules
 
-Use `--pup-triggers <file>` to map switch/lamp/coil conditions to calls of `SetPUPTrigger(source, id, value)`.
-This trigger feature is independent from `--pup`, and can also drive speech callouts and board-local PPUC effects.
+Use `--rules <file>` to run a Lua rules script. Rules are independent from `--pup`,
+and can also drive speech callouts, board-local PPUC effects, and host-side
+interceptor behavior.
 
-Rule syntax:
+Rules define handlers on the `ppuc` namespace:
 
-```text
-<source> <id-or-name> [value] [cooldown=<milliseconds>] [delay=<milliseconds>] : <expression>
+```lua
+function ppuc.onSwitchChanged(number, state)
+  if ppuc.switchClosing(13) and ppuc.lampState(42) then
+    ppuc.pupTrigger("P", 100, 1)
+  end
+
+  if ppuc.stateActive("ballSave") and ppuc.switchClosing(9) then
+    ppuc.suppressSwitch(9)
+    ppuc.pulseCoil(7, 120)
+  end
+end
+
+function ppuc.onLampChanged(number, state)
+  if ppuc.lampRising(23) and not ppuc.attractMode() then
+    ppuc.speech("New highscore!")
+  end
+end
 ```
 
-Expression functions:
-* `switch(<number>)`
-* `lamp(<number>)`
-* `coil(<number>)`
-* `attract` or `attract()`
-* `switch_rising(<number>)`
-* `switch_falling(<number>)`
-* `lamp_rising(<number>)`
-* `lamp_falling(<number>)`
-* `coil_rising(<number>)`
-* `coil_falling(<number>)`
+Supported handlers:
+* `ppuc.onSwitchChanged(number, state)`
+* `ppuc.onLampChanged(number, state)`
+* `ppuc.onCoilChanged(number, state)`
+* `ppuc.onBallChanged(ball)`
+* `ppuc.onPlayerChanged(player)`
+* `ppuc.onRulesUpdate()`
 
-Operators:
-* `!`
-* `&&`
-* `||`
-* parentheses `(...)`
+State and edge helpers:
+* `ppuc.switchState(number)`, `ppuc.lampState(number)`, `ppuc.coilState(number)`
+* `ppuc.switchClosing(number)`, `ppuc.switchOpening(number)`
+* `ppuc.lampRising(number)`, `ppuc.lampFalling(number)`
+* `ppuc.coilRising(number)`, `ppuc.coilFalling(number)`
+* `ppuc.currentBall()`, `ppuc.currentPlayer()`, `ppuc.attractMode()`
 
-Rule options:
-* `cooldown=<milliseconds>`
-  * suppress retriggering until the cooldown window has elapsed
-* `delay=<milliseconds>`
-  * wait before firing after the expression matches
-  * for state-based expressions, the condition must still be true when the delay expires
-  * for edge expressions like `switch_rising(...)`, the matching edge arms the delayed trigger once
-* `set_state=<name>` with optional `state_ms=<milliseconds>`
-  * set a named transient state that can be tested with `state(<name>)`
-  * omit `state_ms` for a state that remains set until `clear_state=<name>`
-* `clear_state=<name>`
-  * clear a named state when the rule matches
-* `suppress_switch=<number>`
-  * prevent a matching physical switch close from being reported to PinMAME
-  * the matching switch open is also suppressed so PinMAME sees no edge
-* `pulse_coil=<number>` with optional `pulse_ms=<milliseconds>`
-  * pulse a coil from the host; default pulse is 120 ms
-* `blink_lamp=<number>` with optional `blink_on_ms=<milliseconds>` and `blink_off_ms=<milliseconds>`
-  * blink a lamp while the rule expression remains true; defaults are 250/250 ms
-
-Additional expression functions:
-* `state(<name>)`
-* `switch_group(<name>)`
-* `switch_rising_group(<name>)`
-* `switch_falling_group(<name>)`
-* `switch_rising(<n1>, <n2>, ...)` and `switch_falling(<n1>, <n2>, ...)`
+Named states, history, and switch groups:
+* `ppuc.setState(name)` and `ppuc.setState(name, durationMs)`
+* `ppuc.clearState(name)` and `ppuc.stateActive(name)`
+* `ppuc.triggerHistory(id)` and `ppuc.triggerHistory(id, windowMs)`
+* `ppuc.triggerSequence(windowMs, id1, id2, id3)`
+* `ppuc.switchGroupState(name)`, `ppuc.switchGroupClosing(name)`, `ppuc.switchGroupOpening(name)`
 
 Switch groups can be declared in the game YAML:
 
@@ -228,49 +218,28 @@ switchGroups:
 The group `buttons` is built in from switches marked `button: true` and cannot
 be overridden in YAML.
 
-Example:
+Outputs and integrations:
+* `ppuc.pupTrigger(source, id, value)`
+* `ppuc.speech(text)`
+* `ppuc.effectTrigger(id, value)`
+* `ppuc.suppressSwitch(number)`
+* `ppuc.pulseCoil(number, durationMs)`
+* `ppuc.blinkLamp(number, onMs, offMs)` and `ppuc.stopBlinkLamp(number)`
 
-```text
-P 100 1 : switch_rising(13) && lamp(42)
-P 101 1 cooldown=500 : switch_rising(13) && attract
-P 102 1 delay=750 : switch(13) && attract
-O 60010 1 : lamp_rising(23) && !attract
-F cabinet-attract 1 : lamp_rising(5) && attract
-S ball-save-ready set_state=ball_save_ready : switch_rising(15)
-S ball-save-active set_state=ball_save state_ms=5000 clear_state=ball_save_ready : state(ball_save_ready) && switch_rising_group(playfield)
-S shoot-again-blink blink_lamp=8 : state(ball_save_ready) || state(ball_save)
-S outhole-save suppress_switch=9 pulse_coil=7 pulse_ms=120 : state(ball_save) && switch_rising(9)
-```
-
-A ready-to-use sample file is available at `examples/pup-triggers.rules`.
+A ready-to-use sample file is available at `examples/rules.lua`.
 Interceptor-specific behavior is documented in `INTERCEPTOR.md`.
 
-Speech trigger source:
-* `O`
-  * spoken callout target
-  * the trigger `id` is looked up in a `--speech-file`
+Board effect trigger source:
 * `F`
   * board-local effect trigger
   * forwarded to `libppuc` as a runtime event with source `EVENT_SOURCE_EFFECT`
   * use matching `trigger.source: F` plus `trigger.name` or `trigger.number` in the game YAML effect block
 
-### Speech Trigger Text Files
+Speech callouts use the configured speech backend directly from Lua:
 
-Use `--speech-file <file>` together with `--speech` and `--pup-triggers` to map speech trigger IDs to spoken text.
-
-Syntax:
-
-```text
-<trigger-id> : <text to speak>
+```lua
+ppuc.speech("New highscore!")
 ```
-
-Example:
-
-```text
-60010: New highscore!
-```
-
-If a trigger rule emits source `O` with id `60010`, the speech backend will speak that text.
 
 Speech backends:
 * `auto`
@@ -287,8 +256,7 @@ Examples:
 * `--speech-backend flite --speech-voice kal`
 
 Ready-to-use samples are available at:
-* `examples/flash.rules`
-* `examples/flash.speech`
+* `examples/rules.lua`
 
 
 ### Compiling

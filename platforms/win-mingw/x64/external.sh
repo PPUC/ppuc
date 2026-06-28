@@ -9,6 +9,7 @@ NUM_PROCS=$(nproc)
 echo "Building libraries..."
 echo "  SDL_IMAGE_SHA: ${SDL_IMAGE_SHA}"
 echo "  SDL_MIXER_SHA: ${SDL_MIXER_SHA}"
+echo "  LUA_VERSION: ${LUA_VERSION}"
 echo "  PINMAME_SHA: ${PINMAME_SHA}"
 echo "  PINMAME_NVRAM_MAPS_SHA: ${PINMAME_NVRAM_MAPS_SHA}"
 echo "  LIBPPUC_SHA: ${LIBPPUC_SHA}"
@@ -33,6 +34,8 @@ mkdir -p \
    third-party/build-libs/win-mingw-x64 \
    third-party/runtime-libs/win-mingw-x64
 cd external
+
+ppuc_stage_lua_source
 
 LIBSDLDMD_EXPECTED_SHA="$(ppuc_dependency_cache_key libsdldmd "${LIBSDLDMD_SHA}")"
 LIBSDLDMD_FOUND_SHA="$([ -f libsdldmd/cache.txt ] && cat libsdldmd/cache.txt || echo "")"

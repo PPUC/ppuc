@@ -18,7 +18,6 @@ bool ParseSpeechCliOptions(const char* backendArg,
 bool ValidateSpeechAudioUsage(bool noSound,
                               bool speechEnabled,
                               bool greetingEnabled,
-                              const char* speechFile,
                               std::string* errorMessage);
 
 bool CreateConfiguredSpeechService(AudioOutput& audioOutput,

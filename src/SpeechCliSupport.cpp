@@ -145,22 +145,11 @@ bool ParseSpeechCliOptions(const char* backendArg,
 bool ValidateSpeechAudioUsage(bool noSound,
                               bool speechEnabled,
                               bool greetingEnabled,
-                              const char* speechFile,
                               std::string* errorMessage)
 {
   if (errorMessage != nullptr)
   {
     errorMessage->clear();
-  }
-
-  if (speechFile != nullptr && speechFile[0] != '\0' && noSound)
-  {
-    if (errorMessage != nullptr)
-    {
-      *errorMessage =
-          "--speech-file requires audio output and cannot be used with --no-sound";
-    }
-    return false;
   }
 
   if (noSound && (speechEnabled || greetingEnabled))

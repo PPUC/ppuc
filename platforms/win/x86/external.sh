@@ -7,6 +7,7 @@ source ./platforms/config.sh
 echo "Building libraries..."
 echo "  SDL_IMAGE_SHA: ${SDL_IMAGE_SHA}"
 echo "  SDL_MIXER_SHA: ${SDL_MIXER_SHA}"
+echo "  LUA_VERSION: ${LUA_VERSION}"
 echo "  PINMAME_SHA: ${PINMAME_SHA}"
 echo "  PINMAME_NVRAM_MAPS_SHA: ${PINMAME_NVRAM_MAPS_SHA}"
 echo "  LIBPPUC_SHA: ${LIBPPUC_SHA}"
@@ -25,6 +26,8 @@ echo ""
 
 mkdir -p external ${CACHE_DIR}
 cd external
+
+ppuc_stage_lua_source
 
 #
 # build libsdldmd, SDL3_image, SDL3_mixer

@@ -92,7 +92,7 @@ Two PWM effects should be defined in the Flash YAML.
 - Priority: `1`
 - Repeat: `0`
 
-Under the new model, this effect remains defined in YAML, but its trigger logic belongs only in the rule file.
+Under the new model, this effect remains defined in YAML, but its trigger logic belongs only in the Lua rules file.
 
 #### Flash Shaker
 
@@ -105,12 +105,12 @@ Under the new model, this effect remains defined in YAML, but its trigger logic 
 - Priority: `2`
 - Repeat: `0`
 
-This is a second shaker pattern that should be triggered from the rule file instead of from YAML-generated trigger entries.
+This is a second shaker pattern that should be triggered from the Lua rules file instead of from YAML-generated trigger entries.
 
-## Trigger Rules From `flash.rules`
+## Lua Rules From `rules.lua`
 
 Rules file:
-[flash.rules](/Volumes/data/workspace/PPUC/ppuc_combined/ppuc/examples/flash.rules)
+[rules.lua](/Volumes/data/workspace/PPUC/ppuc_combined/ppuc/examples/rules.lua)
 
 These rules watch ROM-visible switch, lamp, and coil changes and emit additional actions.
 
@@ -118,7 +118,7 @@ These rules watch ROM-visible switch, lamp, and coil changes and emit additional
 
 The word `source` comes from the older effect-trigger vocabulary inherited from DOF, the Direct Output Framework.
 
-That old name is still visible in some code and protocol constants, but in the first field of a rule line it is better understood as a target channel, not as the source of the condition.
+That old name is still visible in some code and protocol constants. In Lua rules, the target channel is passed explicitly to functions such as `ppuc.pupTrigger(...)`, `ppuc.speech(...)`, and `ppuc.effectTrigger(...)`.
 
 Example:
 
@@ -243,22 +243,13 @@ Current `D` triggers:
 These are not original ROM outputs.
 They are interpretation layers built from ROM state transitions.
 
-### Speech Trigger Rules
+### Speech Rules
 
-Target channel `O` is used for speech.
+Speech callout text is defined directly in Lua with `ppuc.speech(...)`.
 
 Current speech-triggered rule:
 
-- `60010`: Highscore
-
-The speech text is defined in:
-[flash.speech](/Volumes/data/workspace/PPUC/ppuc_combined/ppuc/examples/flash.speech)
-
-Current speech lines:
-
-- `60010`: `New highscore!`
-- `60009`: `Game over.`
-- `60007`: `Extra ball!`
+- Highscore: `ppuc.speech("New highscore!")`
 
 Only IDs emitted by an `O` rule are spoken.
 Right now the rules file explicitly emits `O 60010`, so `New highscore!` is the currently wired speech callout from the sample rule set.
@@ -305,17 +296,14 @@ Matching YAML effect definition:
   repeat: -1
 ```
 
-The name is hashed deterministically on both sides, so the rule file and YAML can refer to the same effect without a hand-maintained numeric ID table.
+The name is hashed deterministically on both sides, so the Lua rules file and YAML can refer to the same effect without a hand-maintained numeric ID table.
 No YAML `trigger:` block is required for named effects anymore.
 
-### Sample `F` Rules Added In The Repo
+### Sample Effect Rules Added In The Repo
 
-The sample `flash.rules` now also contains:
+The sample `rules.lua` contains calls such as:
 
-- `F cabinet-flash-attract 1 cooldown=20000 : lamp_rising(5) && attract`
-- `F shaker-flash-hit 1 : coil_rising(6) && !attract`
-
-Rules can also use `delay=<milliseconds>` when an effect should fire after a hold time instead of immediately.
+- `ppuc.effectTrigger(1000, 1)`
 
 These demonstrate the intended future direction:
 
@@ -325,13 +313,13 @@ These demonstrate the intended future direction:
 Important current status:
 
 - the runtime `F` transport path is implemented
-- the sample `F` rules exist
+- sample Lua effect rules exist
 - named YAML effects can now auto-register themselves as `F` targets
 
 So the intended setup is now:
 
 - YAML defines effect targets and parameters
-- `flash.rules` defines all boolean logic and trigger conditions
+- `rules.lua` defines all boolean logic and trigger conditions
 - YAML effect `trigger:` blocks are no longer needed for named effects
 
 ## Config Tool Status

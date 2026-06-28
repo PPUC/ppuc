@@ -1109,8 +1109,7 @@ int main(int argc, char* argv[])
   }
 
   std::string speechError;
-  if (!ValidateSpeechAudioUsage(optNoSound, optSpeech, optGreeting, nullptr,
-                                &speechError))
+  if (!ValidateSpeechAudioUsage(optNoSound, optSpeech, optGreeting, &speechError))
   {
     fprintf(stderr, "%s\n", speechError.c_str());
     return 1;
