@@ -2806,6 +2806,21 @@ void PINMAMECALLBACK OnSolenoidUpdated(PinmameSolenoidState* p_solenoidState, co
 
   g_interceptorOutputs.ApplyPinmameCoil(ppuc, p_solenoidState->solNo, coilState);
 
+  for (const PPUCCoilGiMapping& mapping : ppuc->GetCoilGiMappings())
+  {
+    if (mapping.coil != p_solenoidState->solNo)
+    {
+      continue;
+    }
+    const uint8_t brightness = coilState != 0 ? mapping.onBrightness : mapping.offBrightness;
+    if (opt_debug || opt_debug_coils)
+    {
+      printf("Coil GI mapping: solenoid=%d, state=%d, gi=%u, brightness=%u\n", p_solenoidState->solNo, coilState,
+             mapping.gi, brightness);
+    }
+    ppuc->SetGIState(mapping.gi, brightness);
+  }
+
   if (isGameOnCoil)
   {
     ball_search_game_running.store(coilState != 0, std::memory_order_release);
