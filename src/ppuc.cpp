@@ -380,6 +380,12 @@ static void PrintFlushedLogLine(const char* prefix, const char* message)
   fflush(stdout);
 }
 
+static void SendSwitchToCpu(int number, uint8_t state)
+{
+  const int switchNumber = (number < 241) ? number : 240 - number;
+  PinmameSetSwitch(switchNumber, state == 0 ? 0 : 1);
+}
+
 struct InterceptorOutputOverrides
 {
   struct CoilPulse
@@ -500,6 +506,9 @@ struct InterceptorOutputOverrides
   {
     switch (action.type)
     {
+      case RulesActionType::SendSwitchToCpu:
+        SendSwitchToCpu(action.number, action.state);
+        break;
       case RulesActionType::PulseCoil:
         PulseCoil(controller, action.number, action.durationMs);
         break;
@@ -1259,6 +1268,59 @@ static const char* DuplicateOptionalIniString(const std::string& value)
     return nullptr;
   }
   return DuplicateIniString(value);
+}
+
+static bool CollectRulesScripts(const char* pathArg, std::vector<std::string>& scripts, std::string& error)
+{
+  scripts.clear();
+  error.clear();
+
+  if (!HasOptionValue(pathArg))
+  {
+    error = "Rules path is empty";
+    return false;
+  }
+
+  std::error_code ec;
+  const std::filesystem::path rulesPath(pathArg);
+  if (std::filesystem::is_regular_file(rulesPath, ec))
+  {
+    scripts.push_back(rulesPath.string());
+    return true;
+  }
+
+  if (std::filesystem::is_directory(rulesPath, ec))
+  {
+    for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(rulesPath, ec))
+    {
+      if (ec)
+      {
+        error = "Unable to read Lua rules directory";
+        return false;
+      }
+      if (!entry.is_regular_file(ec))
+      {
+        ec.clear();
+        continue;
+      }
+      const std::filesystem::path filePath = entry.path();
+      if (filePath.extension() == ".lua")
+      {
+        scripts.push_back(filePath.string());
+      }
+    }
+
+    std::sort(scripts.begin(), scripts.end());
+    if (scripts.empty())
+    {
+      error = "Lua rules directory contains no .lua files";
+      return false;
+    }
+    return true;
+  }
+
+  error = "Rules path is not a file or directory";
+  return false;
 }
 
 static const char* kAnsiStrikeOn = "\033[9m";
@@ -3778,13 +3840,24 @@ int main(int argc, char** argv)
           }
         });
 
+    std::vector<std::string> ruleScripts;
     std::string error;
-    if (!pLuaRulesEngine->LoadScript(opt_rules, error))
+    if (!CollectRulesScripts(opt_rules, ruleScripts, error))
     {
       printf("%s: %s\n", error.c_str(), opt_rules);
       return 1;
     }
-    printf("Loaded Lua rules from %s\n", opt_rules);
+
+    if (!pLuaRulesEngine->LoadScripts(ruleScripts, error))
+    {
+      printf("%s: %s\n", error.c_str(), opt_rules);
+      return 1;
+    }
+
+    for (const std::string& ruleScript : ruleScripts)
+    {
+      printf("Loaded Lua rules from %s\n", ruleScript.c_str());
+    }
   }
 
   PinmameConfig config = {
@@ -4132,8 +4205,7 @@ int main(int argc, char** argv)
         // pinmame. Switches above 240 will become negative values, for example 243 => -3.
         if (switchProcess.forwardToCpu && (switchState->number < 200 || switchState->number > 241))
         {
-          const int switchNumber = (switchState->number < 241) ? switchState->number : 240 - switchState->number;
-          PinmameSetSwitch(switchNumber, newSwitchState);
+          SendSwitchToCpu(switchState->number, newSwitchState);
         }
 
         if (opt_debug || opt_debug_switches)

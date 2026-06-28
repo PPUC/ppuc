@@ -37,6 +37,7 @@ class LuaRulesEngine
   void SetActionCallback(ActionCallback callback);
   void SetSwitchGroups(const std::unordered_map<std::string, std::vector<uint16_t>>& switchGroups);
   bool LoadScript(const char* path, std::string& error);
+  bool LoadScripts(const std::vector<std::string>& paths, std::string& error);
   void Update();
 
   SwitchProcessResult ProcessSwitchState(int number, uint8_t state);
@@ -73,6 +74,13 @@ class LuaRulesEngine
     uint64_t timestampMs = 0;
   };
 
+  struct ScheduledCallback
+  {
+    uint64_t dueMs = 0;
+    uint64_t sequence = 0;
+    int ref = 0;
+  };
+
   uint8_t GetState(const std::unordered_map<int, uint8_t>& states, int number) const;
   bool IsRising(EventType type, int number) const;
   bool IsFalling(EventType type, int number) const;
@@ -81,6 +89,7 @@ class LuaRulesEngine
   bool HistoryContains(uint16_t id, uint32_t windowMs, uint64_t nowMs) const;
   bool SequenceOccurred(const std::vector<uint16_t>& ids, uint32_t windowMs, uint64_t nowMs) const;
   bool NamedStateActive(const std::string& name, uint64_t nowMs) const;
+  bool StartOnceEvery(const std::string& name, uint32_t durationMs, uint64_t nowMs);
   uint64_t GetNowMs() const;
   void PruneHistoryLocked(uint64_t nowMs);
   void PruneNamedStatesLocked(uint64_t nowMs);
@@ -88,9 +97,17 @@ class LuaRulesEngine
 
   bool InitializeLua(std::string& error);
   void RegisterApi();
+  void ClearRegisteredHandlers();
+  void ClearScheduledCallbacks();
+  void ClearPpucHandlers();
+  void CapturePpucHandlers();
+  bool LoadScriptIntoState(const char* path, std::string& error);
   bool CallHandler(const char* name);
   bool CallHandler(const char* name, int arg1);
   bool CallHandler(const char* name, int arg1, int arg2);
+  bool CallRegisteredHandler(int handlerRef, const char* name, const std::vector<int>& args);
+  bool CallScheduledCallback(int callbackRef);
+  void RunDueScheduledCallbacks(uint64_t nowMs);
   void SetFatalError(const std::string& error);
 
   static LuaRulesEngine* FromLua(lua_State* L);
@@ -100,12 +117,6 @@ class LuaRulesEngine
   static int LuaCurrentBall(lua_State* L);
   static int LuaCurrentPlayer(lua_State* L);
   static int LuaAttractMode(lua_State* L);
-  static int LuaSwitchClosing(lua_State* L);
-  static int LuaSwitchOpening(lua_State* L);
-  static int LuaLampRising(lua_State* L);
-  static int LuaLampFalling(lua_State* L);
-  static int LuaCoilRising(lua_State* L);
-  static int LuaCoilFalling(lua_State* L);
   static int LuaSwitchGroupState(lua_State* L);
   static int LuaSwitchGroupClosing(lua_State* L);
   static int LuaSwitchGroupOpening(lua_State* L);
@@ -114,10 +125,13 @@ class LuaRulesEngine
   static int LuaStateActive(lua_State* L);
   static int LuaTriggerHistory(lua_State* L);
   static int LuaTriggerSequence(lua_State* L);
+  static int LuaOnlyOnceEvery(lua_State* L);
+  static int LuaAfter(lua_State* L);
   static int LuaPupTrigger(lua_State* L);
   static int LuaSpeech(lua_State* L);
   static int LuaEffectTrigger(lua_State* L);
   static int LuaSuppressSwitch(lua_State* L);
+  static int LuaSendSwitchToCpu(lua_State* L);
   static int LuaPulseCoil(lua_State* L);
   static int LuaBlinkLamp(lua_State* L);
   static int LuaStopBlinkLamp(lua_State* L);
@@ -128,8 +142,10 @@ class LuaRulesEngine
   std::unordered_map<int, uint8_t> m_coilStates;
   std::unordered_map<std::string, uint64_t> m_namedStates;
   std::unordered_map<std::string, std::vector<uint16_t>> m_switchGroups;
+  std::unordered_map<std::string, std::vector<int>> m_handlers;
   std::unordered_set<int> m_suppressedSwitchOpen;
   std::deque<HistoryEntry> m_history;
+  std::deque<ScheduledCallback> m_scheduledCallbacks;
   CurrentEvent m_currentEvent;
   TriggerCallback m_triggerCallback;
   SpeechCallback m_speechCallback;
@@ -140,5 +156,6 @@ class LuaRulesEngine
   bool m_debug = false;
   bool m_fatalError = false;
   std::string m_fatalErrorMessage;
+  uint64_t m_nextScheduledSequence = 0;
   mutable std::mutex m_mutex;
 };

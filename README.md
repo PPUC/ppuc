@@ -62,7 +62,7 @@ These components are still in an early development stage and the documentation w
     * Serum ignore number of unknown frames
     * optional
 * --rules path
-    * path to a Lua rules file
+    * path to one Lua rules file or a directory containing Lua rule files
     * optional
 * --music-files csv
     * comma-separated MP3 playlist for gameplay background music
@@ -160,30 +160,36 @@ pwmOutput:
 
 ### Lua Rules
 
-Use `--rules <file>` to run a Lua rules script. Rules are independent from `--pup`,
-and can also drive speech callouts, board-local PPUC effects, and host-side
-interceptor behavior.
+Use `--rules <path>` to run Lua rules. The path can point to one `.lua` file or
+to a directory. Directory loading is non-recursive, loads top-level `*.lua`
+files in filename order, and fails on the first load or runtime error. Rules
+are independent from `--pup`, and can also drive speech callouts, board-local
+PPUC effects, and host-side interceptor behavior.
 
 Rules define handlers on the `ppuc` namespace:
 
 ```lua
 function ppuc.onSwitchChanged(number, state)
-  if ppuc.switchClosing(13) and ppuc.lampState(42) then
+  if number == 13 and state == 1 and ppuc.lampState(42) then
     ppuc.pupTrigger("P", 100, 1)
   end
 
-  if ppuc.stateActive("ballSave") and ppuc.switchClosing(9) then
+  if ppuc.stateActive("ballSave") and number == 9 and state == 1 then
     ppuc.suppressSwitch(9)
     ppuc.pulseCoil(7, 120)
   end
 end
 
 function ppuc.onLampChanged(number, state)
-  if ppuc.lampRising(23) and not ppuc.attractMode() then
+  if number == 23 and state == 1 and not ppuc.attractMode() then
     ppuc.speech("New highscore!")
   end
 end
 ```
+
+When multiple rule files define the same handler, all handlers run in load
+order. Rule files share one Lua state, so use `local` helper functions and
+variables unless cross-file globals are intentional.
 
 Supported handlers:
 * `ppuc.onSwitchChanged(number, state)`
@@ -193,18 +199,17 @@ Supported handlers:
 * `ppuc.onPlayerChanged(player)`
 * `ppuc.onRulesUpdate()`
 
-State and edge helpers:
+State helpers and handler values:
 * `ppuc.switchState(number)`, `ppuc.lampState(number)`, `ppuc.coilState(number)`
-* `ppuc.switchClosing(number)`, `ppuc.switchOpening(number)`
-* `ppuc.lampRising(number)`, `ppuc.lampFalling(number)`
-* `ppuc.coilRising(number)`, `ppuc.coilFalling(number)`
 * `ppuc.currentBall()`, `ppuc.currentPlayer()`, `ppuc.attractMode()`
+* Changed handlers receive `number` and `state`; use `state == 1` for active/closed/on and `state == 0` for inactive/open/off.
 
 Named states, history, and switch groups:
 * `ppuc.setState(name)` and `ppuc.setState(name, durationMs)`
 * `ppuc.clearState(name)` and `ppuc.stateActive(name)`
 * `ppuc.triggerHistory(id)` and `ppuc.triggerHistory(id, windowMs)`
 * `ppuc.triggerSequence(windowMs, id1, id2, id3)`
+* `ppuc.onlyOnceEvery(name, durationMs)` returns true only once per named time window
 * `ppuc.switchGroupState(name)`, `ppuc.switchGroupClosing(name)`, `ppuc.switchGroupOpening(name)`
 
 Switch groups can be declared in the game YAML:
@@ -219,12 +224,27 @@ The group `buttons` is built in from switches marked `button: true` and cannot
 be overridden in YAML.
 
 Outputs and integrations:
+* `ppuc.after(delayMs, function() ... end)` schedules non-blocking delayed Lua work
 * `ppuc.pupTrigger(source, id, value)`
 * `ppuc.speech(text)`
-* `ppuc.effectTrigger(id, value)`
+* `ppuc.effectTrigger(id, value)` or `ppuc.effectTrigger(name, value)`
 * `ppuc.suppressSwitch(number)`
+* `ppuc.sendSwitchToCpu(number, state)`
 * `ppuc.pulseCoil(number, durationMs)`
 * `ppuc.blinkLamp(number, onMs, offMs)` and `ppuc.stopBlinkLamp(number)`
+
+`ppuc.after(...)` does not sleep inside the PinMAME loop. It stores the callback
+and runs it from the normal rules update tick after the requested delay:
+
+```lua
+function ppuc.onSwitchChanged(number, state)
+  if number == 16 and state == 1 then
+    ppuc.after(500, function()
+      ppuc.speech("Test")
+    end)
+  end
+end
+```
 
 A ready-to-use sample file is available at `examples/rules.lua`.
 Interceptor-specific behavior is documented in `INTERCEPTOR.md`.

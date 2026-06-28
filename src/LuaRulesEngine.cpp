@@ -16,6 +16,14 @@ namespace
 {
 constexpr uint32_t kHistoryRetentionMs = 60000;
 constexpr char kBoardEffectTriggerSource = 'F';
+constexpr const char* kHandlerNames[] = {
+    "onSwitchChanged",
+    "onLampChanged",
+    "onCoilChanged",
+    "onBallChanged",
+    "onPlayerChanged",
+    "onRulesUpdate",
+};
 
 using LuaFn = int (*)(lua_State*);
 
@@ -31,6 +39,25 @@ void SetPpucFunction(lua_State* L, LuaRulesEngine* engine, const char* name, Lua
   lua_pushcclosure(L, fn, 1);
   lua_setfield(L, -2, name);
 }
+
+uint16_t HashNamedTriggerId(const char* name)
+{
+  if (name == nullptr)
+  {
+    return 0;
+  }
+
+  uint32_t hash = 2166136261u;
+  while (*name != '\0')
+  {
+    hash ^= static_cast<uint8_t>(*name++);
+    hash *= 16777619u;
+  }
+
+  hash ^= (hash >> 16);
+  const uint16_t reduced = static_cast<uint16_t>(hash & 0xFFFFu);
+  return reduced == 0 ? 1 : reduced;
+}
 }  // namespace
 
 LuaRulesEngine::LuaRulesEngine() = default;
@@ -39,6 +66,8 @@ LuaRulesEngine::~LuaRulesEngine()
 {
   if (m_lua != nullptr)
   {
+    ClearRegisteredHandlers();
+    ClearScheduledCallbacks();
     lua_close(m_lua);
     m_lua = nullptr;
   }
@@ -112,13 +141,6 @@ void LuaRulesEngine::RegisterApi()
   SetPpucFunction(m_lua, this, "currentPlayer", LuaCurrentPlayer);
   SetPpucFunction(m_lua, this, "attractMode", LuaAttractMode);
 
-  SetPpucFunction(m_lua, this, "switchClosing", LuaSwitchClosing);
-  SetPpucFunction(m_lua, this, "switchOpening", LuaSwitchOpening);
-  SetPpucFunction(m_lua, this, "lampRising", LuaLampRising);
-  SetPpucFunction(m_lua, this, "lampFalling", LuaLampFalling);
-  SetPpucFunction(m_lua, this, "coilRising", LuaCoilRising);
-  SetPpucFunction(m_lua, this, "coilFalling", LuaCoilFalling);
-
   SetPpucFunction(m_lua, this, "switchGroupState", LuaSwitchGroupState);
   SetPpucFunction(m_lua, this, "switchGroupClosing", LuaSwitchGroupClosing);
   SetPpucFunction(m_lua, this, "switchGroupOpening", LuaSwitchGroupOpening);
@@ -128,11 +150,14 @@ void LuaRulesEngine::RegisterApi()
   SetPpucFunction(m_lua, this, "stateActive", LuaStateActive);
   SetPpucFunction(m_lua, this, "triggerHistory", LuaTriggerHistory);
   SetPpucFunction(m_lua, this, "triggerSequence", LuaTriggerSequence);
+  SetPpucFunction(m_lua, this, "onlyOnceEvery", LuaOnlyOnceEvery);
+  SetPpucFunction(m_lua, this, "after", LuaAfter);
 
   SetPpucFunction(m_lua, this, "pupTrigger", LuaPupTrigger);
   SetPpucFunction(m_lua, this, "speech", LuaSpeech);
   SetPpucFunction(m_lua, this, "effectTrigger", LuaEffectTrigger);
   SetPpucFunction(m_lua, this, "suppressSwitch", LuaSuppressSwitch);
+  SetPpucFunction(m_lua, this, "sendSwitchToCpu", LuaSendSwitchToCpu);
   SetPpucFunction(m_lua, this, "pulseCoil", LuaPulseCoil);
   SetPpucFunction(m_lua, this, "blinkLamp", LuaBlinkLamp);
   SetPpucFunction(m_lua, this, "stopBlinkLamp", LuaStopBlinkLamp);
@@ -142,14 +167,96 @@ void LuaRulesEngine::RegisterApi()
 
 bool LuaRulesEngine::LoadScript(const char* path, std::string& error)
 {
+  return LoadScripts(std::vector<std::string>{path}, error);
+}
+
+bool LuaRulesEngine::LoadScripts(const std::vector<std::string>& paths, std::string& error)
+{
   std::lock_guard<std::mutex> lock(m_mutex);
   m_fatalError = false;
   m_fatalErrorMessage.clear();
+  ClearRegisteredHandlers();
+  ClearScheduledCallbacks();
 
   if (!InitializeLua(error))
   {
     return false;
   }
+
+  for (const std::string& path : paths)
+  {
+    if (!LoadScriptIntoState(path.c_str(), error))
+    {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+void LuaRulesEngine::ClearRegisteredHandlers()
+{
+  if (m_lua == nullptr)
+  {
+    m_handlers.clear();
+    return;
+  }
+
+  for (auto& entry : m_handlers)
+  {
+    for (const int ref : entry.second)
+    {
+      luaL_unref(m_lua, LUA_REGISTRYINDEX, ref);
+    }
+  }
+  m_handlers.clear();
+}
+
+void LuaRulesEngine::ClearScheduledCallbacks()
+{
+  if (m_lua != nullptr)
+  {
+    for (const ScheduledCallback& callback : m_scheduledCallbacks)
+    {
+      luaL_unref(m_lua, LUA_REGISTRYINDEX, callback.ref);
+    }
+  }
+  m_scheduledCallbacks.clear();
+  m_nextScheduledSequence = 0;
+}
+
+void LuaRulesEngine::ClearPpucHandlers()
+{
+  lua_getglobal(m_lua, "ppuc");
+  for (const char* name : kHandlerNames)
+  {
+    lua_pushnil(m_lua);
+    lua_setfield(m_lua, -2, name);
+  }
+  lua_pop(m_lua, 1);
+}
+
+void LuaRulesEngine::CapturePpucHandlers()
+{
+  lua_getglobal(m_lua, "ppuc");
+  for (const char* name : kHandlerNames)
+  {
+    lua_getfield(m_lua, -1, name);
+    if (lua_isfunction(m_lua, -1))
+    {
+      m_handlers[name].push_back(luaL_ref(m_lua, LUA_REGISTRYINDEX));
+    }
+    else
+    {
+      lua_pop(m_lua, 1);
+    }
+  }
+  lua_pop(m_lua, 1);
+}
+
+bool LuaRulesEngine::LoadScriptIntoState(const char* path, std::string& error)
+{
+  ClearPpucHandlers();
 
   if (luaL_loadfile(m_lua, path) != LUA_OK)
   {
@@ -165,70 +272,132 @@ bool LuaRulesEngine::LoadScript(const char* path, std::string& error)
     return false;
   }
 
+  CapturePpucHandlers();
   return true;
 }
 
 bool LuaRulesEngine::CallHandler(const char* name)
 {
-  lua_getglobal(m_lua, "ppuc");
-  lua_getfield(m_lua, -1, name);
-  if (!lua_isfunction(m_lua, -1))
+  const auto it = m_handlers.find(name);
+  if (it == m_handlers.end())
   {
-    lua_pop(m_lua, 2);
     return true;
   }
 
-  lua_remove(m_lua, -2);
-  if (lua_pcall(m_lua, 0, 0, 0) != LUA_OK)
+  for (const int handlerRef : it->second)
   {
-    SetFatalError(lua_tostring(m_lua, -1));
-    lua_pop(m_lua, 1);
-    return false;
+    if (!CallRegisteredHandler(handlerRef, name, {}))
+    {
+      return false;
+    }
   }
   return true;
 }
 
 bool LuaRulesEngine::CallHandler(const char* name, int arg1)
 {
-  lua_getglobal(m_lua, "ppuc");
-  lua_getfield(m_lua, -1, name);
-  if (!lua_isfunction(m_lua, -1))
+  const auto it = m_handlers.find(name);
+  if (it == m_handlers.end())
   {
-    lua_pop(m_lua, 2);
     return true;
   }
 
-  lua_remove(m_lua, -2);
-  lua_pushinteger(m_lua, arg1);
-  if (lua_pcall(m_lua, 1, 0, 0) != LUA_OK)
+  for (const int handlerRef : it->second)
   {
-    SetFatalError(lua_tostring(m_lua, -1));
-    lua_pop(m_lua, 1);
-    return false;
+    if (!CallRegisteredHandler(handlerRef, name, {arg1}))
+    {
+      return false;
+    }
   }
   return true;
 }
 
 bool LuaRulesEngine::CallHandler(const char* name, int arg1, int arg2)
 {
-  lua_getglobal(m_lua, "ppuc");
-  lua_getfield(m_lua, -1, name);
-  if (!lua_isfunction(m_lua, -1))
+  const auto it = m_handlers.find(name);
+  if (it == m_handlers.end())
   {
-    lua_pop(m_lua, 2);
     return true;
   }
 
-  lua_remove(m_lua, -2);
-  lua_pushinteger(m_lua, arg1);
-  lua_pushinteger(m_lua, arg2);
-  if (lua_pcall(m_lua, 2, 0, 0) != LUA_OK)
+  for (const int handlerRef : it->second)
   {
-    SetFatalError(lua_tostring(m_lua, -1));
+    if (!CallRegisteredHandler(handlerRef, name, {arg1, arg2}))
+    {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool LuaRulesEngine::CallRegisteredHandler(int handlerRef, const char* name, const std::vector<int>& args)
+{
+  lua_rawgeti(m_lua, LUA_REGISTRYINDEX, handlerRef);
+  for (const int arg : args)
+  {
+    lua_pushinteger(m_lua, arg);
+  }
+
+  if (lua_pcall(m_lua, static_cast<int>(args.size()), 0, 0) != LUA_OK)
+  {
+    std::string error = lua_tostring(m_lua, -1);
+    if (name != nullptr && name[0] != '\0')
+    {
+      error = std::string(name) + ": " + error;
+    }
+    SetFatalError(error);
     lua_pop(m_lua, 1);
     return false;
   }
   return true;
+}
+
+bool LuaRulesEngine::CallScheduledCallback(int callbackRef)
+{
+  lua_rawgeti(m_lua, LUA_REGISTRYINDEX, callbackRef);
+  luaL_unref(m_lua, LUA_REGISTRYINDEX, callbackRef);
+
+  if (lua_pcall(m_lua, 0, 0, 0) != LUA_OK)
+  {
+    std::string error = lua_tostring(m_lua, -1);
+    SetFatalError(std::string("scheduled callback: ") + error);
+    lua_pop(m_lua, 1);
+    return false;
+  }
+  return true;
+}
+
+void LuaRulesEngine::RunDueScheduledCallbacks(uint64_t nowMs)
+{
+  std::vector<ScheduledCallback> due;
+  for (auto it = m_scheduledCallbacks.begin(); it != m_scheduledCallbacks.end();)
+  {
+    if (it->dueMs <= nowMs)
+    {
+      due.push_back(*it);
+      it = m_scheduledCallbacks.erase(it);
+    }
+    else
+    {
+      ++it;
+    }
+  }
+
+  std::sort(due.begin(), due.end(), [](const ScheduledCallback& a, const ScheduledCallback& b) {
+    if (a.dueMs != b.dueMs)
+    {
+      return a.dueMs < b.dueMs;
+    }
+    return a.sequence < b.sequence;
+  });
+
+  for (const ScheduledCallback& callback : due)
+  {
+    if (!CallScheduledCallback(callback.ref) || m_fatalError)
+    {
+      return;
+    }
+  }
 }
 
 void LuaRulesEngine::Update()
@@ -243,6 +412,11 @@ void LuaRulesEngine::Update()
   PruneHistoryLocked(nowMs);
   PruneNamedStatesLocked(nowMs);
   m_currentEvent = CurrentEvent{};
+  RunDueScheduledCallbacks(nowMs);
+  if (m_fatalError)
+  {
+    return;
+  }
   CallHandler("onRulesUpdate");
 }
 
@@ -458,6 +632,18 @@ bool LuaRulesEngine::NamedStateActive(const std::string& name, uint64_t nowMs) c
   return it != m_namedStates.end() && (it->second == 0 || it->second > nowMs);
 }
 
+bool LuaRulesEngine::StartOnceEvery(const std::string& name, uint32_t durationMs, uint64_t nowMs)
+{
+  PruneNamedStatesLocked(nowMs);
+  if (NamedStateActive(name, nowMs))
+  {
+    return false;
+  }
+
+  m_namedStates[name] = durationMs == 0 ? 0 : nowMs + durationMs;
+  return true;
+}
+
 uint64_t LuaRulesEngine::GetNowMs() const
 {
   return static_cast<uint64_t>(
@@ -544,42 +730,6 @@ int LuaRulesEngine::LuaAttractMode(lua_State* L)
   return 1;
 }
 
-int LuaRulesEngine::LuaSwitchClosing(lua_State* L)
-{
-  lua_pushboolean(L, FromLua(L)->IsRising(EventType::Switch, static_cast<int>(luaL_checkinteger(L, 1))));
-  return 1;
-}
-
-int LuaRulesEngine::LuaSwitchOpening(lua_State* L)
-{
-  lua_pushboolean(L, FromLua(L)->IsFalling(EventType::Switch, static_cast<int>(luaL_checkinteger(L, 1))));
-  return 1;
-}
-
-int LuaRulesEngine::LuaLampRising(lua_State* L)
-{
-  lua_pushboolean(L, FromLua(L)->IsRising(EventType::Lamp, static_cast<int>(luaL_checkinteger(L, 1))));
-  return 1;
-}
-
-int LuaRulesEngine::LuaLampFalling(lua_State* L)
-{
-  lua_pushboolean(L, FromLua(L)->IsFalling(EventType::Lamp, static_cast<int>(luaL_checkinteger(L, 1))));
-  return 1;
-}
-
-int LuaRulesEngine::LuaCoilRising(lua_State* L)
-{
-  lua_pushboolean(L, FromLua(L)->IsRising(EventType::Coil, static_cast<int>(luaL_checkinteger(L, 1))));
-  return 1;
-}
-
-int LuaRulesEngine::LuaCoilFalling(lua_State* L)
-{
-  lua_pushboolean(L, FromLua(L)->IsFalling(EventType::Coil, static_cast<int>(luaL_checkinteger(L, 1))));
-  return 1;
-}
-
 int LuaRulesEngine::LuaSwitchGroupState(lua_State* L)
 {
   lua_pushboolean(L, FromLua(L)->SwitchGroupStateActive(luaL_checkstring(L, 1)));
@@ -644,6 +794,28 @@ int LuaRulesEngine::LuaTriggerSequence(lua_State* L)
   return 1;
 }
 
+int LuaRulesEngine::LuaOnlyOnceEvery(lua_State* L)
+{
+  auto* engine = FromLua(L);
+  const std::string name = luaL_checkstring(L, 1);
+  const uint32_t durationMs = lua_gettop(L) >= 2 ? static_cast<uint32_t>(luaL_checkinteger(L, 2)) : 0;
+  lua_pushboolean(L, engine->StartOnceEvery(name, durationMs, engine->GetNowMs()));
+  return 1;
+}
+
+int LuaRulesEngine::LuaAfter(lua_State* L)
+{
+  auto* engine = FromLua(L);
+  const lua_Integer delayArg = luaL_checkinteger(L, 1);
+  luaL_checktype(L, 2, LUA_TFUNCTION);
+  const uint64_t delayMs = delayArg <= 0 ? 0 : static_cast<uint64_t>(delayArg);
+  lua_pushvalue(L, 2);
+  const int callbackRef = luaL_ref(L, LUA_REGISTRYINDEX);
+  engine->m_scheduledCallbacks.push_back(
+      ScheduledCallback{engine->GetNowMs() + delayMs, engine->m_nextScheduledSequence++, callbackRef});
+  return 0;
+}
+
 int LuaRulesEngine::LuaPupTrigger(lua_State* L)
 {
   auto* engine = FromLua(L);
@@ -672,7 +844,15 @@ int LuaRulesEngine::LuaSpeech(lua_State* L)
 int LuaRulesEngine::LuaEffectTrigger(lua_State* L)
 {
   auto* engine = FromLua(L);
-  const uint16_t id = static_cast<uint16_t>(luaL_checkinteger(L, 1));
+  uint16_t id = 0;
+  if (lua_type(L, 1) == LUA_TSTRING)
+  {
+    id = HashNamedTriggerId(lua_tostring(L, 1));
+  }
+  else
+  {
+    id = static_cast<uint16_t>(luaL_checkinteger(L, 1));
+  }
   const uint8_t value = lua_gettop(L) >= 2 ? static_cast<uint8_t>(luaL_checkinteger(L, 2)) : 1;
   if (engine->m_triggerCallback)
   {
@@ -694,6 +874,21 @@ int LuaRulesEngine::LuaSuppressSwitch(lua_State* L)
   return 0;
 }
 
+int LuaRulesEngine::LuaSendSwitchToCpu(lua_State* L)
+{
+  auto* engine = FromLua(L);
+  if (engine->m_actionCallback)
+  {
+    engine->m_actionCallback(RulesAction{RulesActionType::SendSwitchToCpu,
+                                         static_cast<int>(luaL_checkinteger(L, 1)),
+                                         luaL_checkinteger(L, 2) == 0 ? static_cast<uint8_t>(0) : static_cast<uint8_t>(1),
+                                         0,
+                                         0,
+                                         0});
+  }
+  return 0;
+}
+
 int LuaRulesEngine::LuaPulseCoil(lua_State* L)
 {
   auto* engine = FromLua(L);
@@ -701,6 +896,7 @@ int LuaRulesEngine::LuaPulseCoil(lua_State* L)
   {
     engine->m_actionCallback(RulesAction{RulesActionType::PulseCoil,
                                          static_cast<int>(luaL_checkinteger(L, 1)),
+                                         0,
                                          static_cast<uint32_t>(luaL_checkinteger(L, 2)),
                                          0,
                                          0});
@@ -716,6 +912,7 @@ int LuaRulesEngine::LuaBlinkLamp(lua_State* L)
     engine->m_actionCallback(RulesAction{RulesActionType::StartBlinkLamp,
                                          static_cast<int>(luaL_checkinteger(L, 1)),
                                          0,
+                                         0,
                                          static_cast<uint32_t>(luaL_checkinteger(L, 2)),
                                          static_cast<uint32_t>(luaL_checkinteger(L, 3))});
   }
@@ -727,7 +924,8 @@ int LuaRulesEngine::LuaStopBlinkLamp(lua_State* L)
   auto* engine = FromLua(L);
   if (engine->m_actionCallback)
   {
-    engine->m_actionCallback(RulesAction{RulesActionType::StopBlinkLamp, static_cast<int>(luaL_checkinteger(L, 1)), 0, 0, 0});
+    engine->m_actionCallback(
+        RulesAction{RulesActionType::StopBlinkLamp, static_cast<int>(luaL_checkinteger(L, 1)), 0, 0, 0, 0});
   }
   return 0;
 }
