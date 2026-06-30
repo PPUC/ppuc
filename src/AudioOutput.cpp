@@ -72,6 +72,7 @@ void AudioOutput::Shutdown()
 {
   std::lock_guard<std::mutex> lock(mutex_);
   gameQueue_.clear();
+  pluginQueue_.clear();
   speechQueue_.clear();
 #if defined(PPUC_HAS_SDL3_MIXER)
   DestroyMusicTracksLocked();
@@ -219,6 +220,18 @@ void AudioOutput::QueueGameFrames(const int16_t* samples, size_t frameCount)
                      gameFrequency_, gameChannels_);
 }
 
+void AudioOutput::QueuePluginSamples(const int16_t* samples, size_t sampleCount,
+                                     int frequency, int channels)
+{
+  if (samples == nullptr || sampleCount == 0 || frequency <= 0 || channels <= 0)
+  {
+    return;
+  }
+
+  std::lock_guard<std::mutex> lock(mutex_);
+  QueueSamplesLocked(pluginQueue_, samples, sampleCount, frequency, channels);
+}
+
 void AudioOutput::QueueSpeechSamples(const int16_t* samples, size_t sampleCount,
                                      int frequency, int channels)
 {
@@ -248,8 +261,9 @@ void SDLCALL AudioOutput::OnDeviceNeedsAudio(void* userdata,
   {
     std::lock_guard<std::mutex> lock(self->mutex_);
     const bool gameActive = self->MixQueueLocked(self->gameQueue_, mixBuffer.data(), sampleCount);
+    const bool pluginActive = self->MixQueueLocked(self->pluginQueue_, mixBuffer.data(), sampleCount);
     const bool speechActive = self->MixQueueLocked(self->speechQueue_, mixBuffer.data(), sampleCount);
-    self->MixMusicLocked(mixBuffer.data(), sampleCount, gameActive || speechActive);
+    self->MixMusicLocked(mixBuffer.data(), sampleCount, gameActive || pluginActive || speechActive);
   }
 
   SDL_PutAudioStreamData(stream, mixBuffer.data(), additionalAmount);

@@ -14,6 +14,22 @@ message(STATUS "PPUC_USE_KMSDMD: ${PPUC_USE_KMSDMD}")
 message(STATUS "PPUC_BUILD_MENU: ${PPUC_BUILD_MENU}")
 message(STATUS "PPUC_BUILD_BACKBOX: ${PPUC_BUILD_BACKBOX}")
 
+if(PLATFORM STREQUAL "macos" AND NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET)
+   if(DEFINED ENV{MACOSX_DEPLOYMENT_TARGET} AND NOT "$ENV{MACOSX_DEPLOYMENT_TARGET}" STREQUAL "")
+      set(CMAKE_OSX_DEPLOYMENT_TARGET "$ENV{MACOSX_DEPLOYMENT_TARGET}")
+   else()
+      execute_process(
+         COMMAND xcrun --sdk macosx --show-sdk-version
+         OUTPUT_VARIABLE PPUC_MACOS_SDK_VERSION
+         OUTPUT_STRIP_TRAILING_WHITESPACE
+         ERROR_QUIET
+      )
+      if(PPUC_MACOS_SDK_VERSION)
+         set(CMAKE_OSX_DEPLOYMENT_TARGET "${PPUC_MACOS_SDK_VERSION}")
+      endif()
+   endif()
+endif()
+
 file(READ src/ppuc_version.h version)
 string(REGEX MATCH "PPUC_EXECUTABLE_VERSION_MAJOR[ ]+([0-9]+)" _tmp ${version})
 set(VERSION_MAJOR "${CMAKE_MATCH_1}")
@@ -90,6 +106,19 @@ else()
 endif()
 if(EXISTS "${PPUC_STAGED_INCLUDE_DIR}")
    list(APPEND PPUC_INCLUDE_DIRS "${PPUC_STAGED_INCLUDE_DIR}")
+endif()
+get_filename_component(PPUC_REAL_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}" REALPATH)
+set(PPUC_VPINBALL_DIR "${PPUC_REAL_SOURCE_DIR}/../vpinball")
+if(DEFINED ENV{PPUC_LOCAL_DEPS_ROOT} AND EXISTS "$ENV{PPUC_LOCAL_DEPS_ROOT}/vpinball")
+   set(PPUC_VPINBALL_DIR "$ENV{PPUC_LOCAL_DEPS_ROOT}/vpinball")
+elseif(EXISTS "${PPUC_REAL_SOURCE_DIR}/external/vpinball/vpinball")
+   set(PPUC_VPINBALL_DIR "${PPUC_REAL_SOURCE_DIR}/external/vpinball/vpinball")
+endif()
+if(EXISTS "${PPUC_VPINBALL_DIR}/plugins/plugins/MsgPlugin.h")
+   list(APPEND PPUC_INCLUDE_DIRS
+      "${PPUC_VPINBALL_DIR}/plugins"
+      "${PPUC_VPINBALL_DIR}/third-party/include"
+   )
 endif()
 
 set(PPUC_LUA_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third-party/lua-src")
@@ -203,6 +232,8 @@ endif()
 add_executable(ppuc-pinmame
    src/AudioOutput.cpp
    src/LuaRulesEngine.cpp
+   src/MediaPluginHost.cpp
+   "${PPUC_VPINBALL_DIR}/plugins/plugins/MsgPluginManager.cpp"
    ${PPUC_LUA_SOURCES}
    src/SpeechCliSupport.cpp
    src/SpeechService.cpp

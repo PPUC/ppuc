@@ -18,6 +18,8 @@ echo "  LIBPPUC_SHA: ${LIBPPUC_SHA}"
 ppuc_print_dependency_source LIBPPUC libppuc "${LIBPPUC_SHA}"
 echo "  LIBSDLDMD_SHA: ${LIBSDLDMD_SHA}"
 ppuc_print_dependency_source LIBSDLDMD libsdldmd "${LIBSDLDMD_SHA}"
+echo "  VPINBALL_SHA: ${VPINBALL_SHA}"
+ppuc_print_dependency_source VPINBALL vpinball "${VPINBALL_SHA}"
 echo ""
 
 if [ -z "${CACHE_DIR}" ]; then
@@ -364,3 +366,5 @@ cp -r libppuc/libppuc/third-party/include/yaml-cpp ../third-party/include/
 cp -r libppuc/libppuc/third-party/include/io-boards ../third-party/include/
 cp -a libppuc/libppuc/build/libppuc.{so,so.*} ../third-party/runtime-libs/linux-x64/
 cp -a libppuc/libppuc/third-party/runtime-libs/linux/x64/libyaml-cpp.so* ../third-party/runtime-libs/linux-x64/
+
+ppuc_prepare_vpinball_media_plugins linux x64

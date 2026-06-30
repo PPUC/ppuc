@@ -4,6 +4,7 @@ set -e
 
 source ./platforms/config.sh
 
+export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-$(ppuc_macos_deployment_target)}"
 NUM_PROCS=$(sysctl -n hw.ncpu)
 
 echo "Building libraries..."
@@ -17,6 +18,8 @@ echo "  LIBPPUC_SHA: ${LIBPPUC_SHA}"
 ppuc_print_dependency_source LIBPPUC libppuc "${LIBPPUC_SHA}"
 echo "  LIBSDLDMD_SHA: ${LIBSDLDMD_SHA}"
 ppuc_print_dependency_source LIBSDLDMD libsdldmd "${LIBSDLDMD_SHA}"
+echo "  VPINBALL_SHA: ${VPINBALL_SHA}"
+ppuc_print_dependency_source VPINBALL vpinball "${VPINBALL_SHA}"
 echo ""
 
 if [ -z "${CACHE_DIR}" ]; then
@@ -37,7 +40,7 @@ ppuc_stage_lua_source
 # build libsdldmd, SDL3_image, SDL3_mixer
 #
 
-LIBSDLDMD_EXPECTED_SHA="$(ppuc_dependency_cache_key libsdldmd "${LIBSDLDMD_SHA}")"
+LIBSDLDMD_EXPECTED_SHA="$(ppuc_dependency_cache_key libsdldmd "${LIBSDLDMD_SHA}")-macos${MACOSX_DEPLOYMENT_TARGET}"
 LIBSDLDMD_FOUND_SHA="$([ -f libsdldmd/cache.txt ] && cat libsdldmd/cache.txt || echo "")"
 
 if [ -n "${LIBSDLDMD_SHA}" ] && [ "${LIBSDLDMD_EXPECTED_SHA}" != "${LIBSDLDMD_FOUND_SHA}" ]; then
@@ -323,3 +326,5 @@ cp -r libppuc/libppuc/third-party/include/yaml-cpp ../third-party/include/
 cp -r libppuc/libppuc/third-party/include/io-boards ../third-party/include/
 cp -a libppuc/libppuc/build/libppuc.{dylib,*.dylib} ../third-party/runtime-libs/macos-x64/
 cp -a libppuc/libppuc/third-party/runtime-libs/macos/x64/libyaml-cpp.{dylib,*.dylib} ../third-party/runtime-libs/macos-x64/
+
+ppuc_prepare_vpinball_media_plugins macos x64

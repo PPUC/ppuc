@@ -45,6 +45,7 @@
 #endif
 #include "AudioOutput.h"
 #include "LuaRulesEngine.h"
+#include "MediaPluginHost.h"
 #include "SDL3/SDL.h"
 #include "SDL3/SDL_filesystem.h"
 #include "SDL3_image/SDL_image.h"
@@ -75,6 +76,7 @@ DMDUtil::DMD* pDmd;
 PPUC* ppuc;
 std::unique_ptr<LuaRulesEngine> pLuaRulesEngine;
 std::unique_ptr<AudioOutput> pAudioOutput;
+std::unique_ptr<MediaPluginHost> pMediaPluginHost;
 std::unique_ptr<SpeechService> pSpeechService;
 
 constexpr char kBoardEffectTriggerSource = 'F';
@@ -313,6 +315,10 @@ const char* opt_speech_pitch_arg = NULL;
 bool opt_interactive = false;
 bool opt_serum = false;
 bool opt_pup = false;
+bool opt_altsound = false;
+const char* opt_plugin_dir = NULL;
+const char* opt_pup_folder = NULL;
+const char* opt_altsound_folder = NULL;
 bool opt_console_display = false;
 bool opt_hard_reset = false;
 const char* opt_virtual_dmd_renderer = "dots";
@@ -1249,6 +1255,38 @@ static bool ParseIniBool(const std::string& value, bool defaultValue = false)
 }
 
 static bool HasOptionValue(const char* value) { return value != nullptr && value[0] != '\0'; }
+
+static std::string ResolvePupVideosPathForDmd(const char* pupFolder,
+                                              const char* romName)
+{
+  const char* fallbackHome = getenv("HOME");
+  const std::filesystem::path base =
+      HasOptionValue(pupFolder)
+          ? std::filesystem::path(pupFolder)
+          : std::filesystem::path(fallbackHome ? fallbackHome : "");
+  if (base.empty())
+  {
+    return {};
+  }
+
+  std::error_code ec;
+  const std::filesystem::path pupvideos = base / "pupvideos";
+  if (std::filesystem::is_directory(pupvideos, ec))
+  {
+    if (!HasOptionValue(romName))
+    {
+      return pupvideos.string();
+    }
+
+    const std::filesystem::path romPath = pupvideos / romName;
+    if (std::filesystem::is_directory(romPath, ec))
+    {
+      return pupvideos.string();
+    }
+  }
+
+  return base.string();
+}
 
 static const char* DuplicateIniString(const std::string& value)
 {
@@ -2403,8 +2441,24 @@ static struct cag_option options[] = {
     {.identifier = 'p',
      .access_letters = "p",
      .access_name = "pup",
+     .value_name = NULL,
+     .description = "Enable PUP backglass videos through the plugin host (optional)"},
+    {.identifier = '9',
+     .access_name = "altsound",
+     .value_name = NULL,
+     .description = "Enable AltSound through the plugin host (optional)"},
+    {.identifier = '^',
+     .access_name = "plugin-dir",
      .value_name = "VALUE",
-     .description = "Enable PUP videos (optional)"},
+     .description = "VPX plugin directory (optional, default ../vpinball/plugins)"},
+    {.identifier = '&',
+     .access_name = "pup-folder",
+     .value_name = "VALUE",
+     .description = "PinUp Player base folder containing pupvideos (optional)"},
+    {.identifier = '*',
+     .access_name = "altsound-folder",
+     .value_name = "VALUE",
+     .description = "AltSound folder or base folder (optional)"},
     {.identifier = 'y',
      .access_name = "rules",
      .value_name = "VALUE",
@@ -2661,6 +2715,15 @@ void DMDUTILCALLBACK DMDUtilLogCallback(DMDUtil_LogLevel logLevel, const char* f
   }
 }
 
+void DMDUTILCALLBACK OnDmdPupTrigger(uint16_t id, void* userData)
+{
+  auto* mediaHost = static_cast<MediaPluginHost*>(userData);
+  if (mediaHost != nullptr)
+  {
+    mediaHost->QueueDmdTrigger(id);
+  }
+}
+
 void PINMAMECALLBACK OnDisplayAvailable(int index, int displayCount, PinmameDisplayLayout* p_displayLayout,
                                         const void* p_userData)
 {
@@ -2804,6 +2867,11 @@ void PINMAMECALLBACK OnSolenoidUpdated(PinmameSolenoidState* p_solenoidState, co
     printf("OnSolenoidUpdated: solenoid=%d, state=%d\n", p_solenoidState->solNo, coilState);
   }
 
+  if (pMediaPluginHost != nullptr)
+  {
+    pMediaPluginHost->QueueEvent('S', p_solenoidState->solNo, coilState);
+  }
+
   g_interceptorOutputs.ApplyPinmameCoil(ppuc, p_solenoidState->solNo, coilState);
 
   for (const PPUCCoilGiMapping& mapping : ppuc->GetCoilGiMappings())
@@ -2889,6 +2957,14 @@ void PINMAMECALLBACK OnConsoleDataUpdated(void* p_data, int size, const void* p_
   if (opt_debug)
   {
     printf("OnConsoleDataUpdated: size=%d\n", size);
+  }
+}
+
+void PINMAMECALLBACK OnSoundCommand(int boardNo, int cmd, const void* p_userData)
+{
+  if (pMediaPluginHost != nullptr)
+  {
+    pMediaPluginHost->OnSoundCommand(boardNo, cmd);
   }
 }
 
@@ -3079,6 +3155,14 @@ int main(int argc, char** argv)
           opt_serum_skip_frames = static_cast<uint8_t>(atoi(value.c_str()));
         else if (key == "PUP")
           opt_pup = ParseIniBool(value);
+        else if (key == "AltSound")
+          opt_altsound = ParseIniBool(value);
+        else if (key == "PluginDir")
+          opt_plugin_dir = DuplicateOptionalIniString(value);
+        else if (key == "PUPFolder")
+          opt_pup_folder = DuplicateOptionalIniString(value);
+        else if (key == "AltSoundFolder")
+          opt_altsound_folder = DuplicateOptionalIniString(value);
         else if (key == "ConsoleDisplay")
           opt_console_display = ParseIniBool(value);
         else if (key == "DumpDisplay" || key == "DumpDmdTxt")
@@ -3252,6 +3336,18 @@ int main(int argc, char** argv)
         break;
       case 'p':
         opt_pup = true;
+        break;
+      case '9':
+        opt_altsound = true;
+        break;
+      case '^':
+        opt_plugin_dir = cag_option_get_value(&cag_context);
+        break;
+      case '&':
+        opt_pup_folder = cag_option_get_value(&cag_context);
+        break;
+      case '*':
+        opt_altsound_folder = cag_option_get_value(&cag_context);
         break;
       case 'y':
         opt_rules = cag_option_get_value(&cag_context);
@@ -3539,6 +3635,30 @@ int main(int argc, char** argv)
         return 1;
       }
       pAudioOutput->SetMusicEnabled(false);
+    }
+  }
+
+  if (opt_pup || opt_altsound)
+  {
+    pMediaPluginHost = std::make_unique<MediaPluginHost>(pAudioOutput.get());
+    MediaPluginHost::Options mediaOptions;
+    mediaOptions.enablePup = opt_pup;
+    mediaOptions.enableAltSound = opt_altsound;
+    mediaOptions.debug = opt_debug;
+    mediaOptions.pluginDir = opt_plugin_dir;
+    mediaOptions.pupFolder = opt_pup_folder;
+    mediaOptions.altSoundFolder = opt_altsound_folder;
+    mediaOptions.tablePath = config_file;
+    mediaOptions.prefPath = getenv("HOME");
+    mediaOptions.gameId = opt_rom;
+    mediaOptions.backglassWidth = opt_translite_width > 0 ? opt_translite_width : 1920;
+    mediaOptions.backglassHeight = opt_translite_height > 0 ? opt_translite_height : 1080;
+    mediaOptions.backglassScreen = opt_translite_screen;
+    std::string mediaError;
+    if (!pMediaPluginHost->Initialize(mediaOptions, &mediaError))
+    {
+      fprintf(stderr, "Media plugin init failed: %s\n", mediaError.c_str());
+      pMediaPluginHost.reset();
     }
   }
 
@@ -3849,7 +3969,11 @@ int main(int argc, char** argv)
             return;
           }
 
-          if (pDmd)
+          if (pMediaPluginHost)
+          {
+            pMediaPluginHost->QueueEvent(source, id, value);
+          }
+          else if (pDmd)
           {
             pDmd->SetPUPTrigger(source, id, value);
           }
@@ -3890,7 +4014,7 @@ int main(int argc, char** argv)
       PINMAME_CALLBACK_CAST(PinmameOnConsoleDataUpdatedCallback, &OnConsoleDataUpdated),
       PINMAME_CALLBACK_CAST(PinmameIsKeyPressedFunction, &IsKeyPressed),
       PINMAME_CALLBACK_CAST(PinmameOnLogMessageCallback, &OnLogMessage),
-      NULL,
+      PINMAME_CALLBACK_CAST(PinmameOnSoundCommandCallback, &OnSoundCommand),
   };
 
 #if defined(_WIN32) || defined(_WIN64)
@@ -3955,8 +4079,11 @@ int main(int argc, char** argv)
 
   if (opt_pup)
   {
-    dmdConfig->SetPUPVideosPath(getenv("HOME"));
+    const std::string dmdPupVideosPath =
+        ResolvePupVideosPathForDmd(opt_pup_folder, opt_rom);
+    dmdConfig->SetPUPVideosPath(dmdPupVideosPath.c_str());
     dmdConfig->SetPUPCapture(true);
+    dmdConfig->SetPUPTriggerCallback(OnDmdPupTrigger, pMediaPluginHost.get());
   }
 
   if (opt_debug)
@@ -4070,7 +4197,10 @@ int main(int argc, char** argv)
   // For now, keep using RAW so monochrome DMD ROMs render correctly on ZeDMD and SDLDMD.
   const PINMAME_DMD_MODE dmdMode = PINMAME_DMD_MODE_RAW;
   PinmameSetDmdMode(dmdMode);
-  // PinmameSetSoundMode(PINMAME_SOUND_MODE_ALTSOUND);
+  if (opt_altsound)
+  {
+    PinmameSetSoundMode(PINMAME_SOUND_MODE_ALTSOUND);
+  }
   PinmameSetHandleKeyboard(0);
   PinmameSetHandleMechanics(0);
 
@@ -4121,6 +4251,11 @@ int main(int argc, char** argv)
         {
           printf("PinMAME started: ROM=%s hardware=%s\n", opt_rom ? opt_rom : "(null)",
                  DescribeHardwareGen(hardwareGen).c_str());
+          if (pMediaPluginHost != nullptr)
+          {
+            pMediaPluginHost->SetGameInfo(opt_rom, static_cast<uint64_t>(hardwareGen));
+            pMediaPluginHost->OnGameStart();
+          }
           loggedPinmameIdentity = true;
         }
       }
@@ -4161,6 +4296,10 @@ int main(int argc, char** argv)
           }
         }
         g_interceptorOutputs.Service(ppuc);
+        if (pMediaPluginHost != nullptr)
+        {
+          pMediaPluginHost->Process();
+        }
         continue;
       }
 
@@ -4228,6 +4367,11 @@ int main(int argc, char** argv)
           printf("Switch updated: #%d, %d\n", switchState->number, newSwitchState);
         }
 
+        if (pMediaPluginHost != nullptr)
+        {
+          pMediaPluginHost->QueueEvent('W', switchState->number, newSwitchState);
+        }
+
         delete switchState;
       }
 
@@ -4244,6 +4388,11 @@ int main(int argc, char** argv)
         if (opt_debug || opt_debug_lamps)
         {
           printf("Lamp updated: #%d, %d\n", lampNo, lampState);
+        }
+
+        if (pMediaPluginHost != nullptr)
+        {
+          pMediaPluginHost->QueueEvent('L', lampNo, lampState);
         }
 
         g_interceptorOutputs.ApplyPinmameLamp(ppuc, static_cast<int>(lampNo), lampState);
@@ -4272,6 +4421,11 @@ int main(int argc, char** argv)
             printf("GI updated: #%d, %d\n", giNo, giState);
           }
 
+          if (pMediaPluginHost != nullptr)
+          {
+            pMediaPluginHost->QueueEvent('G', giNo, giState);
+          }
+
           ppuc->SetGIState(giNo, giState);
         }
       }
@@ -4286,6 +4440,11 @@ int main(int argc, char** argv)
         }
       }
       g_interceptorOutputs.Service(ppuc);
+
+      if (pMediaPluginHost != nullptr)
+      {
+        pMediaPluginHost->Process();
+      }
 
       {  // Needs to be a separate scope for the lock_guard
         // Process any pending render requests
@@ -4394,6 +4553,13 @@ int main(int argc, char** argv)
 
   bool quitSDL = false;
 
+  if (pMediaPluginHost)
+  {
+    pMediaPluginHost->Shutdown();
+    pMediaPluginHost.reset();
+    quitSDL = true;
+  }
+
   if (pAudioOutput)
   {
     pSpeechService.reset();
@@ -4451,7 +4617,7 @@ int main(int argc, char** argv)
 
   if (quitSDL)
   {
-    SDL_Quit();
+    SDL_QuitSubSystem(SDL_INIT_AUDIO | SDL_INIT_VIDEO);
   }
 
   return 0;

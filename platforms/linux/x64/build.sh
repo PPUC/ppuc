@@ -2,9 +2,7 @@
 
 set -e
 
-if [ -z "${BUILD_TYPE}" ]; then
-   BUILD_TYPE="Release"
-fi
+source ./platforms/config.sh
 
 BUILD_TYPE=${BUILD_TYPE} ./platforms/linux/x64/external.sh
 
@@ -19,3 +17,5 @@ cp build/ppuc-menu ppuc/
 cp build/ppuc-backbox ppuc/
 cp -P third-party/runtime-libs/linux-x64/*.so* ppuc/
 cp -R third-party/pinmame-nvram-maps ppuc/
+
+ppuc_build_vpinball_media_plugins linux x64
