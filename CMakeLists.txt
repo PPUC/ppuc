@@ -92,6 +92,85 @@ if(EXISTS "${PPUC_STAGED_INCLUDE_DIR}")
    list(APPEND PPUC_INCLUDE_DIRS "${PPUC_STAGED_INCLUDE_DIR}")
 endif()
 
+set(PPUC_LUA_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third-party/lua-src")
+set(PPUC_LUA_INCLUDE_DIR "")
+set(PPUC_LUA_LIBRARY "")
+set(PPUC_LUA_SOURCES "")
+if(EXISTS "${PPUC_LUA_SOURCE_DIR}/lua.h")
+   set(PPUC_LUA_INCLUDE_DIR "${PPUC_LUA_SOURCE_DIR}")
+   set(PPUC_LUA_SOURCES
+      "${PPUC_LUA_SOURCE_DIR}/lapi.c"
+      "${PPUC_LUA_SOURCE_DIR}/lauxlib.c"
+      "${PPUC_LUA_SOURCE_DIR}/lbaselib.c"
+      "${PPUC_LUA_SOURCE_DIR}/lcode.c"
+      "${PPUC_LUA_SOURCE_DIR}/lcorolib.c"
+      "${PPUC_LUA_SOURCE_DIR}/lctype.c"
+      "${PPUC_LUA_SOURCE_DIR}/ldblib.c"
+      "${PPUC_LUA_SOURCE_DIR}/ldebug.c"
+      "${PPUC_LUA_SOURCE_DIR}/ldo.c"
+      "${PPUC_LUA_SOURCE_DIR}/ldump.c"
+      "${PPUC_LUA_SOURCE_DIR}/lfunc.c"
+      "${PPUC_LUA_SOURCE_DIR}/lgc.c"
+      "${PPUC_LUA_SOURCE_DIR}/linit.c"
+      "${PPUC_LUA_SOURCE_DIR}/liolib.c"
+      "${PPUC_LUA_SOURCE_DIR}/llex.c"
+      "${PPUC_LUA_SOURCE_DIR}/lmathlib.c"
+      "${PPUC_LUA_SOURCE_DIR}/lmem.c"
+      "${PPUC_LUA_SOURCE_DIR}/loadlib.c"
+      "${PPUC_LUA_SOURCE_DIR}/lobject.c"
+      "${PPUC_LUA_SOURCE_DIR}/lopcodes.c"
+      "${PPUC_LUA_SOURCE_DIR}/loslib.c"
+      "${PPUC_LUA_SOURCE_DIR}/lparser.c"
+      "${PPUC_LUA_SOURCE_DIR}/lstate.c"
+      "${PPUC_LUA_SOURCE_DIR}/lstring.c"
+      "${PPUC_LUA_SOURCE_DIR}/lstrlib.c"
+      "${PPUC_LUA_SOURCE_DIR}/ltable.c"
+      "${PPUC_LUA_SOURCE_DIR}/ltablib.c"
+      "${PPUC_LUA_SOURCE_DIR}/ltm.c"
+      "${PPUC_LUA_SOURCE_DIR}/lundump.c"
+      "${PPUC_LUA_SOURCE_DIR}/lutf8lib.c"
+      "${PPUC_LUA_SOURCE_DIR}/lvm.c"
+      "${PPUC_LUA_SOURCE_DIR}/lzio.c"
+   )
+   message(STATUS "Lua source dir: ${PPUC_LUA_SOURCE_DIR}")
+else()
+   find_path(PPUC_LUA_INCLUDE_DIR
+      NAMES lua.h
+      PATHS
+         "${PPUC_STAGED_INCLUDE_DIR}"
+         "${PPUC_STAGED_INCLUDE_DIR}/lua"
+         "${PPUC_STAGED_INCLUDE_DIR}/lua5.4"
+         "${PPUC_STAGED_INCLUDE_DIR}/lua54"
+   )
+   if(NOT PPUC_LUA_INCLUDE_DIR)
+      find_path(PPUC_LUA_INCLUDE_DIR
+         NAMES lua.h
+         PATH_SUFFIXES lua5.4 lua54 lua
+      )
+   endif()
+
+   find_library(PPUC_LUA_LIBRARY
+      NAMES lua54 lua5.4 lua
+      PATHS
+         "${PPUC_STAGED_BUILD_LIB_DIR}"
+         "${PPUC_STAGED_RUNTIME_LIB_DIR}"
+   )
+   if(NOT PPUC_LUA_LIBRARY)
+      find_library(PPUC_LUA_LIBRARY
+         NAMES lua54 lua5.4 lua
+      )
+   endif()
+
+   if(NOT PPUC_LUA_INCLUDE_DIR OR NOT PPUC_LUA_LIBRARY)
+      message(FATAL_ERROR "Could not find Lua source, headers, or library. Run the platform external.sh script first.")
+   endif()
+
+   message(STATUS "Lua include dir: ${PPUC_LUA_INCLUDE_DIR}")
+   message(STATUS "Lua library: ${PPUC_LUA_LIBRARY}")
+endif()
+
+list(APPEND PPUC_INCLUDE_DIRS "${PPUC_LUA_INCLUDE_DIR}")
+
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
    if(ENABLE_SANITIZERS AND (PLATFORM STREQUAL "macos" OR PLATFORM STREQUAL "linux"))
       set(SANITIZER_FLAGS -fsanitize=address,undefined)
@@ -123,9 +202,9 @@ endif()
 
 add_executable(ppuc-pinmame
    src/AudioOutput.cpp
-   src/PUPTriggerEngine.cpp
+   src/LuaRulesEngine.cpp
+   ${PPUC_LUA_SOURCES}
    src/SpeechCliSupport.cpp
-   src/SpeechTriggerMap.cpp
    src/SpeechService.cpp
    src/ppuc.cpp
 )
@@ -280,6 +359,7 @@ if(PLATFORM STREQUAL "win" OR PLATFORM STREQUAL "win-mingw")
          SDL364
          SDL3_image64
          yaml-cpp
+         ${PPUC_LUA_LIBRARY}
          ws2_32
       )
    else()
@@ -292,6 +372,7 @@ if(PLATFORM STREQUAL "win" OR PLATFORM STREQUAL "win-mingw")
          SDL3
          SDL3_image
          yaml-cpp
+         ${PPUC_LUA_LIBRARY}
          ws2_32
       )
    endif()
@@ -322,6 +403,7 @@ else()
          SDL3
          SDL3_image
          ${PPUC_YAML_CPP_LINK_LIBRARY}
+         ${PPUC_LUA_LIBRARY}
       )
    else()
       target_link_libraries(ppuc-pinmame LINK_PUBLIC
@@ -333,6 +415,7 @@ else()
          SDL3
          SDL3_image
          ${PPUC_YAML_CPP_LINK_LIBRARY}
+         ${PPUC_LUA_LIBRARY}
       )
    endif()
 

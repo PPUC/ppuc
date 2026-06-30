@@ -44,13 +44,12 @@
 #include "SDLDMD/SDLDMD.h"
 #endif
 #include "AudioOutput.h"
-#include "PUPTriggerEngine.h"
+#include "LuaRulesEngine.h"
 #include "SDL3/SDL.h"
 #include "SDL3/SDL_filesystem.h"
 #include "SDL3_image/SDL_image.h"
 #include "SpeechCliSupport.h"
 #include "SpeechService.h"
-#include "SpeechTriggerMap.h"
 #include "cargs.h"
 #include "io-boards/Event.h"
 #include "io-boards/PPUCPlatforms.h"
@@ -74,12 +73,10 @@ constexpr uint32_t kBallSearchCoilPulseMs = 200;
 
 DMDUtil::DMD* pDmd;
 PPUC* ppuc;
-std::unique_ptr<PUPTriggerEngine> pPUPTriggerEngine;
-std::unique_ptr<SpeechTriggerMap> pSpeechTriggerMap;
+std::unique_ptr<LuaRulesEngine> pLuaRulesEngine;
 std::unique_ptr<AudioOutput> pAudioOutput;
 std::unique_ptr<SpeechService> pSpeechService;
 
-constexpr char kSpeechTriggerSource = 'O';
 constexpr char kBoardEffectTriggerSource = 'F';
 
 enum class PinmameMapEncoding
@@ -307,7 +304,6 @@ bool opt_no_serial = false;
 bool opt_no_sound = false;
 bool opt_speech = false;
 bool opt_greeting = false;
-const char* opt_speech_file = NULL;
 const char* opt_music_files = NULL;
 uint32_t opt_music_gap_ms = 2000;
 const char* opt_speech_backend = "auto";
@@ -383,6 +379,150 @@ static void PrintFlushedLogLine(const char* prefix, const char* message)
   }
   fflush(stdout);
 }
+
+static void SendSwitchToCpu(int number, uint8_t state)
+{
+  const int switchNumber = (number < 241) ? number : 240 - number;
+  PinmameSetSwitch(switchNumber, state == 0 ? 0 : 1);
+}
+
+struct InterceptorOutputOverrides
+{
+  struct CoilPulse
+  {
+    std::chrono::steady_clock::time_point until{};
+  };
+
+  struct LampBlink
+  {
+    uint32_t onMs = 250;
+    uint32_t offMs = 250;
+    bool outputOn = false;
+    std::chrono::steady_clock::time_point nextToggle{};
+  };
+
+  std::unordered_map<int, uint8_t> pinmameCoils;
+  std::unordered_map<int, uint8_t> pinmameLamps;
+  std::unordered_map<int, CoilPulse> coilPulses;
+  std::unordered_map<int, LampBlink> lampBlinks;
+
+  void ApplyPinmameCoil(PPUC* controller, int number, uint8_t state)
+  {
+    pinmameCoils[number] = state == 0 ? 0 : 1;
+    const auto now = std::chrono::steady_clock::now();
+    const auto pulseIt = coilPulses.find(number);
+    if (pulseIt != coilPulses.end() && now < pulseIt->second.until)
+    {
+      controller->SetSolenoidState(number, 1);
+      return;
+    }
+    controller->SetSolenoidState(number, state == 0 ? 0 : 1);
+  }
+
+  void ApplyPinmameLamp(PPUC* controller, int number, uint8_t state)
+  {
+    pinmameLamps[number] = state == 0 ? 0 : 1;
+    if (lampBlinks.find(number) != lampBlinks.end())
+    {
+      return;
+    }
+    controller->SetLampState(number, state == 0 ? 0 : 1);
+  }
+
+  void PulseCoil(PPUC* controller, int number, uint32_t durationMs)
+  {
+    const auto now = std::chrono::steady_clock::now();
+    auto& pulse = coilPulses[number];
+    const auto until = now + std::chrono::milliseconds(durationMs == 0 ? 1 : durationMs);
+    if (until > pulse.until)
+    {
+      pulse.until = until;
+    }
+    controller->SetSolenoidState(number, 1);
+  }
+
+  void StartBlinkLamp(PPUC* controller, int number, uint32_t onMs, uint32_t offMs)
+  {
+    const uint32_t normalizedOnMs = onMs == 0 ? 250 : onMs;
+    const uint32_t normalizedOffMs = offMs == 0 ? 250 : offMs;
+    const auto existing = lampBlinks.find(number);
+    if (existing != lampBlinks.end())
+    {
+      existing->second.onMs = normalizedOnMs;
+      existing->second.offMs = normalizedOffMs;
+      return;
+    }
+
+    auto& blink = lampBlinks[number];
+    blink.onMs = normalizedOnMs;
+    blink.offMs = normalizedOffMs;
+    blink.outputOn = true;
+    blink.nextToggle = std::chrono::steady_clock::now() + std::chrono::milliseconds(blink.onMs);
+    controller->SetLampState(number, 1);
+  }
+
+  void StopBlinkLamp(PPUC* controller, int number)
+  {
+    lampBlinks.erase(number);
+    const uint8_t restore = pinmameLamps.count(number) == 0 ? 0 : pinmameLamps[number];
+    controller->SetLampState(number, restore);
+  }
+
+  void Service(PPUC* controller)
+  {
+    const auto now = std::chrono::steady_clock::now();
+
+    auto coilIt = coilPulses.begin();
+    while (coilIt != coilPulses.end())
+    {
+      if (now >= coilIt->second.until)
+      {
+        const int number = coilIt->first;
+        coilIt = coilPulses.erase(coilIt);
+        const uint8_t restore = pinmameCoils.count(number) == 0 ? 0 : pinmameCoils[number];
+        controller->SetSolenoidState(number, restore);
+      }
+      else
+      {
+        ++coilIt;
+      }
+    }
+
+    for (auto& entry : lampBlinks)
+    {
+      LampBlink& blink = entry.second;
+      if (now < blink.nextToggle)
+      {
+        continue;
+      }
+
+      blink.outputOn = !blink.outputOn;
+      blink.nextToggle = now + std::chrono::milliseconds(blink.outputOn ? blink.onMs : blink.offMs);
+      controller->SetLampState(entry.first, blink.outputOn ? 1 : 0);
+    }
+  }
+
+  void HandleAction(PPUC* controller, const RulesAction& action)
+  {
+    switch (action.type)
+    {
+      case RulesActionType::SendSwitchToCpu:
+        SendSwitchToCpu(action.number, action.state);
+        break;
+      case RulesActionType::PulseCoil:
+        PulseCoil(controller, action.number, action.durationMs);
+        break;
+      case RulesActionType::StartBlinkLamp:
+        StartBlinkLamp(controller, action.number, action.onMs, action.offMs);
+        break;
+      case RulesActionType::StopBlinkLamp:
+        StopBlinkLamp(controller, action.number);
+        break;
+    }
+  }
+};
+
+InterceptorOutputOverrides g_interceptorOutputs;
 
 static uint64_t CurrentUnixMs()
 {
@@ -1128,6 +1268,59 @@ static const char* DuplicateOptionalIniString(const std::string& value)
     return nullptr;
   }
   return DuplicateIniString(value);
+}
+
+static bool CollectRulesScripts(const char* pathArg, std::vector<std::string>& scripts, std::string& error)
+{
+  scripts.clear();
+  error.clear();
+
+  if (!HasOptionValue(pathArg))
+  {
+    error = "Rules path is empty";
+    return false;
+  }
+
+  std::error_code ec;
+  const std::filesystem::path rulesPath(pathArg);
+  if (std::filesystem::is_regular_file(rulesPath, ec))
+  {
+    scripts.push_back(rulesPath.string());
+    return true;
+  }
+
+  if (std::filesystem::is_directory(rulesPath, ec))
+  {
+    for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(rulesPath, ec))
+    {
+      if (ec)
+      {
+        error = "Unable to read Lua rules directory";
+        return false;
+      }
+      if (!entry.is_regular_file(ec))
+      {
+        ec.clear();
+        continue;
+      }
+      const std::filesystem::path filePath = entry.path();
+      if (filePath.extension() == ".lua")
+      {
+        scripts.push_back(filePath.string());
+      }
+    }
+
+    std::sort(scripts.begin(), scripts.end());
+    if (scripts.empty())
+    {
+      error = "Lua rules directory contains no .lua files";
+      return false;
+    }
+    return true;
+  }
+
+  error = "Rules path is not a file or directory";
+  return false;
 }
 
 static const char* kAnsiStrikeOn = "\033[9m";
@@ -2170,10 +2363,6 @@ static struct cag_option options[] = {
      .access_name = "greeting",
      .value_name = NULL,
      .description = "Speak a startup greeting for speech debugging (optional)"},
-    {.identifier = '9',
-     .access_name = "speech-file",
-     .value_name = "VALUE",
-     .description = "Path to speech trigger text file (optional)"},
     {.identifier = 'o',
      .access_name = "music-files",
      .value_name = "VALUE",
@@ -2217,9 +2406,9 @@ static struct cag_option options[] = {
      .value_name = "VALUE",
      .description = "Enable PUP videos (optional)"},
     {.identifier = 'y',
-     .access_name = "pup-triggers",
+     .access_name = "rules",
      .value_name = "VALUE",
-     .description = "Path to PUP trigger rules file (optional)"},
+     .description = "Path to Lua rules file (optional)"},
     {.identifier = 'i',
      .access_letters = "i",
      .access_name = "console-display",
@@ -2615,7 +2804,22 @@ void PINMAMECALLBACK OnSolenoidUpdated(PinmameSolenoidState* p_solenoidState, co
     printf("OnSolenoidUpdated: solenoid=%d, state=%d\n", p_solenoidState->solNo, coilState);
   }
 
-  ppuc->SetSolenoidState(p_solenoidState->solNo, coilState);
+  g_interceptorOutputs.ApplyPinmameCoil(ppuc, p_solenoidState->solNo, coilState);
+
+  for (const PPUCCoilGiMapping& mapping : ppuc->GetCoilGiMappings())
+  {
+    if (mapping.coil != p_solenoidState->solNo)
+    {
+      continue;
+    }
+    const uint8_t brightness = coilState != 0 ? mapping.onBrightness : mapping.offBrightness;
+    if (opt_debug || opt_debug_coils)
+    {
+      printf("Coil GI mapping: solenoid=%d, state=%d, gi=%u, brightness=%u\n", p_solenoidState->solNo, coilState,
+             mapping.gi, brightness);
+    }
+    ppuc->SetGIState(mapping.gi, brightness);
+  }
 
   if (isGameOnCoil)
   {
@@ -2643,18 +2847,18 @@ void PINMAMECALLBACK OnSolenoidUpdated(PinmameSolenoidState* p_solenoidState, co
     }
   }
 
-  if (pPUPTriggerEngine)
+  if (pLuaRulesEngine)
   {
     if (isGameOnCoil)
     {
-      pPUPTriggerEngine->SetAttractMode(coilState == 0);
+      pLuaRulesEngine->SetAttractMode(coilState == 0);
       if (coilState == 0)
       {
-        pPUPTriggerEngine->SetCurrentBall(0);
-        pPUPTriggerEngine->SetCurrentPlayer(0);
+        pLuaRulesEngine->SetCurrentBall(0);
+        pLuaRulesEngine->SetCurrentPlayer(0);
       }
     }
-    pPUPTriggerEngine->OnCoilState(p_solenoidState->solNo, coilState);
+    pLuaRulesEngine->OnCoilState(p_solenoidState->solNo, coilState);
   }
 }
 
@@ -2713,7 +2917,7 @@ int main(int argc, char** argv)
   cag_option_context cag_context;
   const char* config_file = NULL;
   const char* opt_ini_file = NULL;
-  const char* opt_pup_triggers = NULL;
+  const char* opt_rules = NULL;
   const char* opt_backbox_address = NULL;
   uint16_t opt_backbox_port = 6789;
   const char* opt_serial = NULL;
@@ -2831,10 +3035,8 @@ int main(int argc, char** argv)
           opt_serial = DuplicateOptionalIniString(value);
         else if (key == "PinmamePath")
           opt_pinmame_path = DuplicateOptionalIniString(value);
-        else if (key == "PUPTriggers")
-          opt_pup_triggers = DuplicateOptionalIniString(value);
-        else if (key == "SpeechFile")
-          opt_speech_file = DuplicateOptionalIniString(value);
+        else if (key == "Rules")
+          opt_rules = DuplicateOptionalIniString(value);
         else if (key == "MusicFiles")
           opt_music_files = DuplicateOptionalIniString(value);
         else if (key == "MusicGapMs")
@@ -3018,9 +3220,6 @@ int main(int argc, char** argv)
       case 'Y':
         opt_greeting = true;
         break;
-      case '9':
-        opt_speech_file = cag_option_get_value(&cag_context);
-        break;
       case 'o':
         opt_music_files = cag_option_get_value(&cag_context);
         break;
@@ -3055,7 +3254,7 @@ int main(int argc, char** argv)
         opt_pup = true;
         break;
       case 'y':
-        opt_pup_triggers = cag_option_get_value(&cag_context);
+        opt_rules = cag_option_get_value(&cag_context);
         break;
       case 'i':
         opt_console_display = true;
@@ -3302,7 +3501,7 @@ int main(int argc, char** argv)
   if (!ValidateSpeechAudioUsage(opt_no_sound,
                                 (opt_speech || HasOptionValue(opt_speech_voice) ||
                                  HasOptionValue(opt_speech_rate_arg) || HasOptionValue(opt_speech_pitch_arg)),
-                                opt_greeting, opt_speech_file, &speechValidationError))
+                                opt_greeting, &speechValidationError))
   {
     fprintf(stderr, "%s\n", speechValidationError.c_str());
     return 1;
@@ -3345,7 +3544,7 @@ int main(int argc, char** argv)
 
   const auto initializeSpeechIfNeeded = [&]() -> bool
   {
-    if (pSpeechService != nullptr || !(opt_speech || opt_greeting || opt_speech_file))
+    if (pSpeechService != nullptr || !(opt_speech || opt_greeting))
     {
       return true;
     }
@@ -3613,11 +3812,28 @@ int main(int argc, char** argv)
   }
   dmdConfig->SetRoundedCorners(opt_rounded_corners);
 
-  if (opt_pup_triggers)
+  if (opt_rules)
   {
-    pPUPTriggerEngine = std::make_unique<PUPTriggerEngine>();
-    pPUPTriggerEngine->SetDebug(opt_debug || opt_debug_effects);
-    pPUPTriggerEngine->SetTriggerCallback(
+    pLuaRulesEngine = std::make_unique<LuaRulesEngine>();
+    pLuaRulesEngine->SetDebug(opt_debug || opt_debug_effects);
+    pLuaRulesEngine->SetSwitchGroups(ppuc->GetSwitchGroups());
+    pLuaRulesEngine->SetActionCallback(
+        [](const RulesAction& action)
+        {
+          if (ppuc != nullptr)
+          {
+            g_interceptorOutputs.HandleAction(ppuc, action);
+          }
+        });
+    pLuaRulesEngine->SetSpeechCallback(
+        [](const std::string& text)
+        {
+          if (pSpeechService != nullptr)
+          {
+            pSpeechService->SpeakText(text);
+          }
+        });
+    pLuaRulesEngine->SetTriggerCallback(
         [](const char source, const uint16_t id, const uint8_t value)
         {
           if (source == kBoardEffectTriggerSource)
@@ -3633,45 +3849,30 @@ int main(int argc, char** argv)
             return;
           }
 
-          if (source == kSpeechTriggerSource)
-          {
-            if (pSpeechService && pSpeechTriggerMap)
-            {
-              const std::string* text = pSpeechTriggerMap->Find(id);
-              if (text)
-              {
-                pSpeechService->SpeakText(*text);
-              }
-            }
-            return;
-          }
-
           if (pDmd)
           {
             pDmd->SetPUPTrigger(source, id, value);
           }
         });
 
+    std::vector<std::string> ruleScripts;
     std::string error;
-    if (!pPUPTriggerEngine->LoadRules(opt_pup_triggers, error))
+    if (!CollectRulesScripts(opt_rules, ruleScripts, error))
     {
-      printf("%s: %s\n", error.c_str(), opt_pup_triggers);
+      printf("%s: %s\n", error.c_str(), opt_rules);
       return 1;
     }
-    printf("Loaded %zu PUP trigger rule(s) from %s\n", pPUPTriggerEngine->GetRuleCount(), opt_pup_triggers);
-  }
 
-  if (opt_speech_file)
-  {
-    pSpeechTriggerMap = std::make_unique<SpeechTriggerMap>();
-    std::string error;
-    if (!pSpeechTriggerMap->Load(opt_speech_file, error))
+    if (!pLuaRulesEngine->LoadScripts(ruleScripts, error))
     {
-      printf("%s: %s\n", error.c_str(), opt_speech_file);
+      printf("%s: %s\n", error.c_str(), opt_rules);
       return 1;
     }
-    printf("Loaded %zu speech trigger text entr%s from %s\n", pSpeechTriggerMap->GetEntryCount(),
-           pSpeechTriggerMap->GetEntryCount() == 1 ? "y" : "ies", opt_speech_file);
+
+    for (const std::string& ruleScript : ruleScripts)
+    {
+      printf("Loaded Lua rules from %s\n", ruleScript.c_str());
+    }
   }
 
   PinmameConfig config = {
@@ -3937,8 +4138,8 @@ int main(int argc, char** argv)
           }
         }
 
-        trackCurrentBall = pPUPTriggerEngine != nullptr && trackingConfig.currentBall.available;
-        trackCurrentPlayer = pPUPTriggerEngine != nullptr && trackingConfig.currentPlayer.available;
+        trackCurrentBall = pLuaRulesEngine != nullptr && trackingConfig.currentBall.available;
+        trackCurrentPlayer = pLuaRulesEngine != nullptr && trackingConfig.currentPlayer.available;
         nextTrackedStatePollAt = std::chrono::steady_clock::now();
       }
 
@@ -3950,10 +4151,16 @@ int main(int argc, char** argv)
 
       if (game_state.load(std::memory_order_acquire) == 0)
       {
-        if (pPUPTriggerEngine)
+        if (pLuaRulesEngine)
         {
-          pPUPTriggerEngine->Update();
+          pLuaRulesEngine->Update();
+          if (pLuaRulesEngine->HasFatalError())
+          {
+            printf("Lua rules error: %s\n", pLuaRulesEngine->GetFatalError().c_str());
+            running = false;
+          }
         }
+        g_interceptorOutputs.Service(ppuc);
         continue;
       }
 
@@ -3967,7 +4174,7 @@ int main(int argc, char** argv)
           uint8_t currentBall = 0;
           if (TryDecodeTrackedPinmameValue(trackingConfig.currentBall, &currentBall))
           {
-            pPUPTriggerEngine->SetCurrentBall(currentBall);
+            pLuaRulesEngine->SetCurrentBall(currentBall);
           }
           else if (!loggedMissingCurrentBallApi && (opt_debug || opt_debug_errors))
           {
@@ -3981,7 +4188,7 @@ int main(int argc, char** argv)
           uint8_t currentPlayer = 0;
           if (TryDecodeTrackedPinmameValue(trackingConfig.currentPlayer, &currentPlayer))
           {
-            pPUPTriggerEngine->SetCurrentPlayer(currentPlayer);
+            pLuaRulesEngine->SetCurrentPlayer(currentPlayer);
           }
           else if (!loggedMissingCurrentPlayerApi && (opt_debug || opt_debug_errors))
           {
@@ -3998,12 +4205,22 @@ int main(int argc, char** argv)
         NoteBallSearchSwitchUpdate(ppuc, ballSearchRunner, switchState->number, newSwitchState,
                                    opt_ball_search_delay_ms);
 
+        LuaRulesEngine::SwitchProcessResult switchProcess;
+        if (pLuaRulesEngine)
+        {
+          switchProcess = pLuaRulesEngine->ProcessSwitchState(switchState->number, newSwitchState);
+          if (pLuaRulesEngine->HasFatalError())
+          {
+            printf("Lua rules error: %s\n", pLuaRulesEngine->GetFatalError().c_str());
+            running = false;
+          }
+        }
+
         // Switches between 200 and 240 are custom switches within the io-boards which should not be sent to
         // pinmame. Switches above 240 will become negative values, for example 243 => -3.
-        if (switchState->number < 200 || switchState->number > 241)
+        if (switchProcess.forwardToCpu && (switchState->number < 200 || switchState->number > 241))
         {
-          const int switchNumber = (switchState->number < 241) ? switchState->number : 240 - switchState->number;
-          PinmameSetSwitch(switchNumber, newSwitchState);
+          SendSwitchToCpu(switchState->number, newSwitchState);
         }
 
         if (opt_debug || opt_debug_switches)
@@ -4011,10 +4228,7 @@ int main(int argc, char** argv)
           printf("Switch updated: #%d, %d\n", switchState->number, newSwitchState);
         }
 
-        if (pPUPTriggerEngine)
-        {
-          pPUPTriggerEngine->OnSwitchState(switchState->number, newSwitchState);
-        }
+        delete switchState;
       }
 
       ServiceBallSearchRunner(ppuc, ballSearchRunner,
@@ -4032,11 +4246,16 @@ int main(int argc, char** argv)
           printf("Lamp updated: #%d, %d\n", lampNo, lampState);
         }
 
-        ppuc->SetLampState(lampNo, lampState);
+        g_interceptorOutputs.ApplyPinmameLamp(ppuc, static_cast<int>(lampNo), lampState);
 
-        if (pPUPTriggerEngine)
+        if (pLuaRulesEngine)
         {
-          pPUPTriggerEngine->OnLampState(static_cast<int>(lampNo), lampState);
+          pLuaRulesEngine->OnLampState(static_cast<int>(lampNo), lampState);
+          if (pLuaRulesEngine->HasFatalError())
+          {
+            printf("Lua rules error: %s\n", pLuaRulesEngine->GetFatalError().c_str());
+            running = false;
+          }
         }
       }
 
@@ -4057,10 +4276,16 @@ int main(int argc, char** argv)
         }
       }
 
-      if (pPUPTriggerEngine)
+      if (pLuaRulesEngine)
       {
-        pPUPTriggerEngine->Update();
+        pLuaRulesEngine->Update();
+        if (pLuaRulesEngine->HasFatalError())
+        {
+          printf("Lua rules error: %s\n", pLuaRulesEngine->GetFatalError().c_str());
+          running = false;
+        }
       }
+      g_interceptorOutputs.Service(ppuc);
 
       {  // Needs to be a separate scope for the lock_guard
         // Process any pending render requests

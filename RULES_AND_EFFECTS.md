@@ -1,348 +1,205 @@
-# Flash Rules And Effects
+# Rules And Effects
 
-This document describes the behavior added by the PPUC layer on top of the original ROM when the game is run through PinMAME.
-
-The original ROM still owns the game rules, scoring, lamp logic, solenoid timing, switch matrix behavior, ball flow, and attract/game modes.
-PPUC adds extra outputs and trigger-driven presentation around that baseline.
-
-## What PPUC Adds
-
-PPUC currently adds four kinds of enhancements:
-
-1. Extra addressable LEDs that do not exist in the original machine.
-2. A shaker motor effect layer.
-3. Trigger rules that emit DMD or PUP-style events from ROM state changes.
-4. Optional speech callouts driven by those trigger rules.
-
-PPUC does not replace the ROM logic here.
-It observes ROM-driven switch, lamp, and coil activity and uses that activity to drive modern extras.
-
-## Flash Example
-### Cabinet LED String
-
-The Flash game config defines an addressable LED string named `Cabinet` on IO board `1`, port `29`.
-
-Source:
-[Flash_877888bc-06a9-428a-91ab-6d821e104107.yml](../ppuc_games/flash/Flash_877888bc-06a9-428a-91ab-6d821e104107.yml)
-
-#### Physical Layout
-
-- LEDs `0-7` are assigned individually.
-- LEDs `8-93` are grouped into segment `1`.
-
-#### LEDs 0-7
-
-These are configured as GI-linked cabinet/button/status lights:
-
-- LED `0`: left flipper button bottom, `FF00FF`
-- LED `1`: left flipper button bottom, `004AFF`
-- LED `2`: start button, `FF7F00`
-- LED `3`: right flipper button top, `FF00FF`
-- LED `4`: right flipper button bottom, `004AFF`
-- LED `5`: coin 1, `FFFFFF`
-- LED `6`: coin 2, `FFFFFF`
-- LED `7`: coin 3, `FFFFFF`
-
-All of these map to GI string `1`, so they follow ROM-driven GI state rather than acting as independent PinMAME lamps.
-
-#### LEDs 8-93
-
-This range is configured as `segment 1`.
-The intent of this segment is effect playback, not direct PinMAME lamp ownership.
-
-Current configured effect:
-
-- Description: `Exprerssion Lights`
-- Segment: `1`
-- Color: `0000FF`
-- WS2812FX effect: `22`
-- Duration: `0` (unlimited)
-- Speed: `0`
-- Priority: `1`
-- Repeat: `-1`
-
-Under the new model, this segment should be defined in YAML only as an effect target.
-The logic deciding when it starts should live only in the rule file.
-
-### Shaker Motor
-
-The Flash game config also defines a shaker on IO board `1`, port `19`.
-
-It is declared as:
-
-- Type: `shaker`
-- Number: `100`
-- Power limit: `128`
-
-This is not ROM-native hardware.
-PPUC adds it as a modern feedback device.
-
-### Configured Shaker Effects
-
-Two PWM effects should be defined in the Flash YAML.
-
-#### Jet Bumper Shaker
-
-- Description: `Jet Bumper Shaker`
-- PWM effect: `3`
-- Frequency: `4`
-- Max intensity: `128`
-- Min intensity: `0`
-- Duration: `0`
-- Priority: `1`
-- Repeat: `0`
-
-Under the new model, this effect remains defined in YAML, but its trigger logic belongs only in the rule file.
-
-#### Flash Shaker
-
-- Description: `Flash Shaker`
-- PWM effect: `1`
-- Frequency: `4`
-- Max intensity: `192`
-- Min intensity: `0`
-- Duration: `1000 ms`
-- Priority: `2`
-- Repeat: `0`
-
-This is a second shaker pattern that should be triggered from the rule file instead of from YAML-generated trigger entries.
-
-## Trigger Rules From `flash.rules`
-
-Rules file:
-[flash.rules](/Volumes/data/workspace/PPUC/ppuc_combined/ppuc/examples/flash.rules)
-
-These rules watch ROM-visible switch, lamp, and coil changes and emit additional actions.
-
-### Terminology
-
-The word `source` comes from the older effect-trigger vocabulary inherited from DOF, the Direct Output Framework.
-
-That old name is still visible in some code and protocol constants, but in the first field of a rule line it is better understood as a target channel, not as the source of the condition.
-
-Example:
+PPUC rules are Lua scripts loaded by `ppuc-pinmame` with:
 
 ```text
-F cabinet-flash-attract 1 : lamp_rising(5) && attract
+--rules <path>
 ```
 
-Here:
+The path can be one `.lua` file or a directory containing `.lua` files. When a
+directory is used, `ppuc-pinmame` loads top-level `.lua` files in filename order.
 
-- `F` is the target channel for the effect event that will be emitted. It means effect.
-- `cabinet-flash-attract` is the effect trigger ID or name
-- `lamp_rising(5) && attract` is the condition
+The old trigger-rule file format and separate speech text file are no longer
+supported. Speech callouts are written directly in Lua with `ppuc.speech(...)`.
 
-There is also a silent channel:
+## What Rules Can Do
 
-- `S` means evaluate the rule and apply state/history side effects, but emit no external trigger.
+Lua rules observe PinMAME and physical-machine state, then trigger extra PPUC
+behavior:
 
-Inside the rule expression itself we no longer use those old single-character codes.
-The conditions are written with readable words:
+- send DMD/PUP triggers with `ppuc.pupTrigger(...)`
+- trigger board-local effects with `ppuc.effectTrigger(...)`
+- speak text with `ppuc.speech(...)`
+- delay work without blocking with `ppuc.after(...)`
+- suppress or later send physical switches to PinMAME
+- pulse coils and blink lamps as host-side interceptor output overrides
 
-- `ball(...)`
-- `player(...)`
-- `history(...)`
-- `sequence(...)`
-- `switch(...)`
-- `lamp(...)`
-- `coil(...)`
-- `switch_rising(...)`
-- `lamp_rising(...)`
-- `coil_rising(...)`
-- `attract`
+The original ROM still owns scoring, original lamp logic, solenoid timing,
+switch matrix behavior, ball flow, and attract/game mode. PPUC adds extra output
+and presentation behavior around that baseline.
 
-Current limitation:
-`ball(...)` is currently populated from PinMAME CPU RAM only for Williams System 3, System 4, and System 6 style games.
-`player(...)` can now be supplied either by runtime state updates or by rules that use `set_player=<n>`.
-Trigger history is retained per player for a rolling time window and is cleared when the table returns to attract mode.
-Rules can also use `clear_player_history=<n>` to drop stored history for a specific player before the new trigger is recorded.
+## Lua API
 
-So the intended reading is:
+Common state helpers:
 
-- rule header: target/output channel plus trigger ID
-- rule body: readable boolean logic over ball, switch, lamp, coil, and attract state
-
-### DMD / PUP Trigger Rules
-
-Target channel `D` emits extra trigger IDs for display/video/DMD-side integrations.
-
-Current `D` triggers:
-
-- `60001`: Ball 1
-- `60002`: Ball 2
-- `60003`: Ball 3
-- `60005`: Bonus x2
-- `60006`: Bonus x3
-- `60007`: Extra Ball
-- `60008`: Flash attract event
-- `60009`: Game Over
-- `60010`: Highscore
-- `60012`: progress-1.mp4 trigger
-- `60013`: progress-1.mp4 trigger
-- `60014`: progress-1.mp4 trigger
-- `60015`: progress-1.mp4 trigger
-- `60016`: Shoot Again off
-- `60017`: Special
-- `60018`: Tilt
-
-These are not original ROM outputs.
-They are interpretation layers built from ROM state transitions.
-
-### Speech Trigger Rules
-
-Target channel `O` is used for speech.
-
-Current speech-triggered rule:
-
-- `60010`: Highscore
-
-The speech text is defined in:
-[flash.speech](/Volumes/data/workspace/PPUC/ppuc_combined/ppuc/examples/flash.speech)
-
-Current speech lines:
-
-- `60010`: `New highscore!`
-- `60009`: `Game over.`
-- `60007`: `Extra ball!`
-
-Only IDs emitted by an `O` rule are spoken.
-Right now the rules file explicitly emits `O 60010`, so `New highscore!` is the currently wired speech callout from the sample rule set.
-
-## New Rule-Driven Board Effects
-
-PPUC now also supports board-local effect triggering directly from the trigger-rule engine.
-
-This is the new path intended for:
-
-- named WS2812FX segment effects
-- named shaker / WavePWM effects
-- any effect that should run on the IO board and not be treated like a normal PinMAME lamp or coil
-
-### Rule Source
-
-Target channel `F` in a rules file means:
-
-- evaluate the rule in `ppuc`
-- send a runtime `EVENT_SOURCE_EFFECT`
-- let the firmware match that event against configured LED or PWM effects
-
-### Named Trigger IDs
-
-Rules and named YAML effect definitions can now use names instead of only numeric IDs.
-
-Example rule:
-
-```text
-F cabinet-flash-attract 1 : lamp_rising(5) && attract
+```lua
+ppuc.switchState(number)
+ppuc.lampState(number)
+ppuc.coilState(number)
+ppuc.currentBall()
+ppuc.currentPlayer()
+ppuc.attractMode()
 ```
 
-Matching YAML effect definition:
+Named states, timing, and switch groups:
+
+```lua
+ppuc.setState(name)
+ppuc.setState(name, durationMs)
+ppuc.clearState(name)
+ppuc.stateActive(name)
+ppuc.onlyOnceEvery(name, durationMs)
+ppuc.switchGroupState(name)
+ppuc.switchGroupClosing(name)
+ppuc.switchGroupOpening(name)
+```
+
+Outputs and integrations:
+
+```lua
+ppuc.after(delayMs, function() ... end)
+ppuc.pupTrigger(source, id, value)
+ppuc.speech(text)
+ppuc.effectTrigger(id, value)
+ppuc.effectTrigger(name, value)
+ppuc.suppressSwitch(number)
+ppuc.sendSwitchToCpu(number, state)
+ppuc.pulseCoil(number, durationMs)
+ppuc.blinkLamp(number, onMs, offMs)
+ppuc.stopBlinkLamp(number)
+```
+
+Handlers:
+
+```lua
+function ppuc.onSwitchChanged(number, state)
+end
+
+function ppuc.onLampChanged(number, state)
+end
+
+function ppuc.onCoilChanged(number, state)
+end
+
+function ppuc.onBallChanged(ball)
+end
+
+function ppuc.onPlayerChanged(player)
+end
+
+function ppuc.onRulesUpdate()
+end
+```
+
+## Interceptor Rules
+
+Interceptor behavior is part of the Lua rules engine. It lets `ppuc-pinmame`
+react to physical machine events before they are forwarded to PinMAME.
+
+```lua
+function ppuc.onSwitchChanged(number, state)
+  if ppuc.stateActive("ballSave") and number == 9 and state == 1 then
+    ppuc.suppressSwitch(9)
+    ppuc.pulseCoil(7, 120)
+  end
+end
+```
+
+Suppressed switches can be sent to PinMAME later:
+
+```lua
+function ppuc.onSwitchChanged(number, state)
+  if number == 16 and state == 1 then
+    ppuc.suppressSwitch(16)
+    ppuc.after(500, function()
+      ppuc.sendSwitchToCpu(16, 1)
+    end)
+    ppuc.after(650, function()
+      ppuc.sendSwitchToCpu(16, 0)
+    end)
+  end
+end
+```
+
+`ppuc.after(...)` schedules work on the rules update tick. It does not sleep and
+does not block `ppuc-pinmame`.
+
+See `INTERCEPTOR.md` for a focused interceptor reference.
+
+## Switch Groups
+
+Switch groups are declared in game YAML and loaded by `libppuc`:
 
 ```yaml
-- name: cabinet-flash-attract
-  effect: running_random
-  segment: 1
-  color: 0000FF
-  speed: 0
-  duration: 0
-  mode: 0
-  priority: 1
-  repeat: -1
+switchGroups:
+  playfield:
+    switches: [10, 11, 12, 13]
 ```
 
-The name is hashed deterministically on both sides, so the rule file and YAML can refer to the same effect without a hand-maintained numeric ID table.
-No YAML `trigger:` block is required for named effects anymore.
+The `buttons` group name is reserved. It is built automatically from switches
+marked with `button: true` in `switches` or `switchMatrix.switches`.
 
-### Sample `F` Rules Added In The Repo
+In the config-tool, switch group names are entered on the game node as one name
+per line:
 
-The sample `flash.rules` now also contains:
+```text
+playfield
+standups
+```
 
-- `F cabinet-flash-attract 1 cooldown=20000 : lamp_rising(5) && attract`
-- `F shaker-flash-hit 1 : coil_rising(6) && !attract`
+Switches are added to those groups with the checkboxes on each switch edit page.
 
-Rules can also use `delay=<milliseconds>` when an effect should fire after a hold time instead of immediately.
+## SYS11 Coil-To-GI Mapping
 
-These demonstrate the intended future direction:
+Some Williams System 11 games use one or more coils to control GI strings or
+parts of GI. PPUC supports this with `coilGiMappings` in game YAML:
 
-- cabinet segment effects triggered by game state
-- shaker effects triggered by ROM activity
+```yaml
+coilGiMappings:
+  - coil: 12
+    gi: 1
+    onBrightness: 8
+    offBrightness: 0
+  - coil: 12
+    gi: 2
+    onBrightness: 8
+    offBrightness: 0
+```
 
-Important current status:
+When PinMAME reports the mapped coil as active, `ppuc-pinmame` sets the mapped
+GI string to `onBrightness`. When the coil becomes inactive, it sets the GI
+string to `offBrightness`.
 
-- the runtime `F` transport path is implemented
-- the sample `F` rules exist
-- named YAML effects can now auto-register themselves as `F` targets
+In the config-tool, coil/GI mappings are entered on the game node as one mapping
+per line:
 
-So the intended setup is now:
+```text
+12: 1,2 = 8/0
+13: 3 = 0/8
+```
 
-- YAML defines effect targets and parameters
-- `flash.rules` defines all boolean logic and trigger conditions
-- YAML effect `trigger:` blocks are no longer needed for named effects
+The format is:
 
-## Config Tool Status
+```text
+coil: gi[,gi...] = onBrightness/offBrightness
+```
 
-`../config-tool` now needs one explicit machine effect name per LED or PWM effect.
+Brightness values are clamped to the PPUC GI range `0..8`.
 
-- That field is exported as YAML `name:`.
-- The old effect-level `trigger:` field has been removed from LED and PWM effect content types.
-- Generated YAML now emits only static effect definitions plus the machine effect name.
-- All trigger logic now belongs exclusively in the `*.rules` file.
+## Board Effect Triggers
 
-## Effect Names
+Board-local PWM and LED effects are defined in YAML as effect targets. Lua rules
+start those effects with `ppuc.effectTrigger(...)`.
 
-PPUC now accepts named effect values in addition to numeric IDs.
+```lua
+function ppuc.onSwitchChanged(number, state)
+  if number == 18 and state == 1 then
+    ppuc.effectTrigger("jet-bumper", 1)
+  end
+end
+```
 
-### WS2812FX Names
-
-Examples of accepted LED effect names:
-
-- `static`
-- `blink`
-- `breath`
-- `color_wipe`
-- `scan`
-- `running_lights`
-- `sparkle`
-- `strobe`
-- `chase_rainbow`
-- `running_color`
-- `running_random`
-- `larson_scanner`
-- `comet`
-- `fireworks`
-- `fire_flicker`
-- `tricolor_chase`
-- `twinklefox`
-- `rain`
-- `heartbeat`
-- `multi_comet`
-- `popcorn`
-- `oscillator`
-
-### PWM / WavePWM Names
-
-Accepted PWM effect names:
-
-- `sine`
-- `ramp_down_stop`
-- `impulse`
-
-These names make the Flash YAML easier to read than raw numeric effect IDs.
-
-## Summary
-
-For Flash, the PPUC layer currently adds:
-
-- cabinet button/coin/start lighting on an external addressable LED string
-- one large cabinet LED segment reserved for effect playback
-- shaker motor feedback effects
-- extra DMD/PUP trigger events derived from ROM activity
-- optional speech callouts
-
-And it now supports a cleaner next step:
-
-- rule-driven named board effects via target channel `F`
-- named trigger IDs
-- named LED and PWM effect modes
-
-That combination is the intended mechanism for cabinet animations and shaker patterns that should exist beside the original ROM rather than inside it.
+The board effect trigger source is `F` internally. In YAML effect definitions,
+use matching `trigger.source: F` plus `trigger.name` or `trigger.number` when a
+simple board-side trigger is needed. For new rule-driven behavior, prefer Lua
+logic and named effects.

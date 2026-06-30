@@ -9,10 +9,13 @@ NUM_PROCS=$(nproc)
 echo "Building libraries..."
 echo "  SDL_IMAGE_SHA: ${SDL_IMAGE_SHA}"
 echo "  SDL_MIXER_SHA: ${SDL_MIXER_SHA}"
+echo "  LUA_VERSION: ${LUA_VERSION}"
 echo "  PINMAME_SHA: ${PINMAME_SHA}"
 echo "  PINMAME_NVRAM_MAPS_SHA: ${PINMAME_NVRAM_MAPS_SHA}"
 echo "  LIBPPUC_SHA: ${LIBPPUC_SHA}"
+ppuc_print_dependency_source LIBPPUC libppuc "${LIBPPUC_SHA}"
 echo "  LIBSDLDMD_SHA: ${LIBSDLDMD_SHA}"
+ppuc_print_dependency_source LIBSDLDMD libsdldmd "${LIBSDLDMD_SHA}"
 echo ""
 
 if [ -z "${CACHE_DIR}" ]; then
@@ -32,7 +35,9 @@ mkdir -p \
    third-party/runtime-libs/win-mingw-x64
 cd external
 
-LIBSDLDMD_EXPECTED_SHA="${LIBSDLDMD_SHA}"
+ppuc_stage_lua_source
+
+LIBSDLDMD_EXPECTED_SHA="$(ppuc_dependency_cache_key libsdldmd "${LIBSDLDMD_SHA}")"
 LIBSDLDMD_FOUND_SHA="$([ -f libsdldmd/cache.txt ] && cat libsdldmd/cache.txt || echo "")"
 
 if [ -n "${LIBSDLDMD_SHA}" ] && [ "${LIBSDLDMD_EXPECTED_SHA}" != "${LIBSDLDMD_FOUND_SHA}" ]; then
@@ -42,9 +47,7 @@ if [ -n "${LIBSDLDMD_SHA}" ] && [ "${LIBSDLDMD_EXPECTED_SHA}" != "${LIBSDLDMD_FO
    mkdir libsdldmd
    cd libsdldmd
 
-   curl -sL https://github.com/PPUC/libsdldmd/archive/${LIBSDLDMD_SHA}.tar.gz -o libsdldmd-${LIBSDLDMD_SHA}.tar.gz
-   tar xzf libsdldmd-${LIBSDLDMD_SHA}.tar.gz
-   mv libsdldmd-${LIBSDLDMD_SHA} libsdldmd
+   ppuc_prepare_dependency_source libsdldmd "${LIBSDLDMD_SHA}" "https://github.com/PPUC/libsdldmd/archive/${LIBSDLDMD_SHA}.tar.gz"
    cd libsdldmd
 
    BUILD_TYPE=${BUILD_TYPE} platforms/win-mingw/x64/external.sh
@@ -187,7 +190,7 @@ if [ "${PINMAME_NVRAM_MAPS_EXPECTED_SHA}" != "${PINMAME_NVRAM_MAPS_FOUND_SHA}" ]
    cd ..
 fi
 
-LIBPPUC_EXPECTED_SHA="${LIBPPUC_SHA}"
+LIBPPUC_EXPECTED_SHA="$(ppuc_dependency_cache_key libppuc "${LIBPPUC_SHA}")"
 LIBPPUC_FOUND_SHA="$([ -f libppuc/cache.txt ] && cat libppuc/cache.txt || echo "")"
 
 if [ "${LIBPPUC_EXPECTED_SHA}" != "${LIBPPUC_FOUND_SHA}" ]; then
@@ -197,9 +200,7 @@ if [ "${LIBPPUC_EXPECTED_SHA}" != "${LIBPPUC_FOUND_SHA}" ]; then
    mkdir libppuc
    cd libppuc
 
-   curl -sL https://github.com/PPUC/libppuc/archive/${LIBPPUC_SHA}.tar.gz -o libppuc-${LIBPPUC_SHA}.tar.gz
-   tar xzf libppuc-${LIBPPUC_SHA}.tar.gz
-   mv libppuc-${LIBPPUC_SHA} libppuc
+   ppuc_prepare_dependency_source libppuc "${LIBPPUC_SHA}" "https://github.com/PPUC/libppuc/archive/${LIBPPUC_SHA}.tar.gz"
    cd libppuc
 
    BUILD_TYPE=${BUILD_TYPE} platforms/win-mingw/x64/external.sh

@@ -61,11 +61,8 @@ These components are still in an early development stage and the documentation w
 * -p VALUE
     * Serum ignore number of unknown frames
     * optional
-* --pup-triggers path
-    * path to a lightweight PUP trigger rules file
-    * optional
-* --speech-file path
-    * path to a speech trigger text file used with speech trigger rules
+* --rules path
+    * path to one Lua rules file or a directory containing Lua rule files
     * optional
 * --music-files csv
     * comma-separated MP3 playlist for gameplay background music
@@ -161,81 +158,108 @@ pwmOutput:
     ballSearch: true
 ```
 
-### PUP Trigger Rules
+### Lua Rules
 
-Use `--pup-triggers <file>` to map switch/lamp/coil conditions to calls of `SetPUPTrigger(source, id, value)`.
-This trigger feature is independent from `--pup`, and can also drive speech callouts and board-local PPUC effects.
+Use `--rules <path>` to run Lua rules. The path can point to one `.lua` file or
+to a directory. Directory loading is non-recursive, loads top-level `*.lua`
+files in filename order, and fails on the first load or runtime error. Rules
+are independent from `--pup`, and can also drive speech callouts, board-local
+PPUC effects, and host-side interceptor behavior.
 
-Rule syntax:
+Rules define handlers on the `ppuc` namespace:
 
-```text
-<source> <id-or-name> [value] [cooldown=<milliseconds>] [delay=<milliseconds>] : <expression>
+```lua
+function ppuc.onSwitchChanged(number, state)
+  if number == 13 and state == 1 and ppuc.lampState(42) then
+    ppuc.pupTrigger("P", 100, 1)
+  end
+
+  if ppuc.stateActive("ballSave") and number == 9 and state == 1 then
+    ppuc.suppressSwitch(9)
+    ppuc.pulseCoil(7, 120)
+  end
+end
+
+function ppuc.onLampChanged(number, state)
+  if number == 23 and state == 1 and not ppuc.attractMode() then
+    ppuc.speech("New highscore!")
+  end
+end
 ```
 
-Expression functions:
-* `switch(<number>)`
-* `lamp(<number>)`
-* `coil(<number>)`
-* `attract` or `attract()`
-* `switch_rising(<number>)`
-* `switch_falling(<number>)`
-* `lamp_rising(<number>)`
-* `lamp_falling(<number>)`
-* `coil_rising(<number>)`
-* `coil_falling(<number>)`
+When multiple rule files define the same handler, all handlers run in load
+order. Rule files share one Lua state, so use `local` helper functions and
+variables unless cross-file globals are intentional.
 
-Operators:
-* `!`
-* `&&`
-* `||`
-* parentheses `(...)`
+Supported handlers:
+* `ppuc.onSwitchChanged(number, state)`
+* `ppuc.onLampChanged(number, state)`
+* `ppuc.onCoilChanged(number, state)`
+* `ppuc.onBallChanged(ball)`
+* `ppuc.onPlayerChanged(player)`
+* `ppuc.onRulesUpdate()`
 
-Rule options:
-* `cooldown=<milliseconds>`
-  * suppress retriggering until the cooldown window has elapsed
-* `delay=<milliseconds>`
-  * wait before firing after the expression matches
-  * for state-based expressions, the condition must still be true when the delay expires
-  * for edge expressions like `switch_rising(...)`, the matching edge arms the delayed trigger once
+State helpers and handler values:
+* `ppuc.switchState(number)`, `ppuc.lampState(number)`, `ppuc.coilState(number)`
+* `ppuc.currentBall()`, `ppuc.currentPlayer()`, `ppuc.attractMode()`
+* Changed handlers receive `number` and `state`; use `state == 1` for active/closed/on and `state == 0` for inactive/open/off.
 
-Example:
+Named states, history, and switch groups:
+* `ppuc.setState(name)` and `ppuc.setState(name, durationMs)`
+* `ppuc.clearState(name)` and `ppuc.stateActive(name)`
+* `ppuc.triggerHistory(id)` and `ppuc.triggerHistory(id, windowMs)`
+* `ppuc.triggerSequence(windowMs, id1, id2, id3)`
+* `ppuc.onlyOnceEvery(name, durationMs)` returns true only once per named time window
+* `ppuc.switchGroupState(name)`, `ppuc.switchGroupClosing(name)`, `ppuc.switchGroupOpening(name)`
 
-```text
-P 100 1 : switch_rising(13) && lamp(42)
-P 101 1 cooldown=500 : switch_rising(13) && attract
-P 102 1 delay=750 : switch(13) && attract
-O 60010 1 : lamp_rising(23) && !attract
-F cabinet-attract 1 : lamp_rising(5) && attract
+Switch groups can be declared in the game YAML:
+
+```yaml
+switchGroups:
+  playfield:
+    switches: [10, 11, 12, 13]
 ```
 
-A ready-to-use sample file is available at `examples/pup-triggers.rules`.
+The group `buttons` is built in from switches marked `button: true` and cannot
+be overridden in YAML.
 
-Speech trigger source:
-* `O`
-  * spoken callout target
-  * the trigger `id` is looked up in a `--speech-file`
+Outputs and integrations:
+* `ppuc.after(delayMs, function() ... end)` schedules non-blocking delayed Lua work
+* `ppuc.pupTrigger(source, id, value)`
+* `ppuc.speech(text)`
+* `ppuc.effectTrigger(id, value)` or `ppuc.effectTrigger(name, value)`
+* `ppuc.suppressSwitch(number)`
+* `ppuc.sendSwitchToCpu(number, state)`
+* `ppuc.pulseCoil(number, durationMs)`
+* `ppuc.blinkLamp(number, onMs, offMs)` and `ppuc.stopBlinkLamp(number)`
+
+`ppuc.after(...)` does not sleep inside the PinMAME loop. It stores the callback
+and runs it from the normal rules update tick after the requested delay:
+
+```lua
+function ppuc.onSwitchChanged(number, state)
+  if number == 16 and state == 1 then
+    ppuc.after(500, function()
+      ppuc.speech("Test")
+    end)
+  end
+end
+```
+
+A ready-to-use sample file is available at `examples/rules.lua`.
+Interceptor-specific behavior is documented in `INTERCEPTOR.md`.
+
+Board effect trigger source:
 * `F`
   * board-local effect trigger
   * forwarded to `libppuc` as a runtime event with source `EVENT_SOURCE_EFFECT`
   * use matching `trigger.source: F` plus `trigger.name` or `trigger.number` in the game YAML effect block
 
-### Speech Trigger Text Files
+Speech callouts use the configured speech backend directly from Lua:
 
-Use `--speech-file <file>` together with `--speech` and `--pup-triggers` to map speech trigger IDs to spoken text.
-
-Syntax:
-
-```text
-<trigger-id> : <text to speak>
+```lua
+ppuc.speech("New highscore!")
 ```
-
-Example:
-
-```text
-60010: New highscore!
-```
-
-If a trigger rule emits source `O` with id `60010`, the speech backend will speak that text.
 
 Speech backends:
 * `auto`
@@ -252,11 +276,19 @@ Examples:
 * `--speech-backend flite --speech-voice kal`
 
 Ready-to-use samples are available at:
-* `examples/flash.rules`
-* `examples/flash.speech`
+* `examples/rules.lua`
 
 
 ### Compiling
+
+The platform build scripts stage pinned third-party dependencies into
+`third-party`. For local development, they automatically prefer sibling
+checkouts named `../libppuc` and `../libsdldmd` when those directories exist,
+then fall back to the pinned GitHub archives from `platforms/config.sh`.
+
+Set `PPUC_USE_LOCAL_DEPS=0` to force the pinned archive path, or set
+`PPUC_LOCAL_DEPS_ROOT=/path/to/workspace` to look for local dependency
+checkouts somewhere other than the parent directory.
 
 #### Windows (x64)
 
