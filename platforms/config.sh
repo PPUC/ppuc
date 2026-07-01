@@ -13,7 +13,7 @@ LIBPPUC_SHA=93afce7bfcef68a7766283fb129b0d85f6838229
 LIBSDLDMD_SHA=72a7e9777af59fe430c6f6ae77159e0b8c7301b4
 VPINBALL_SHA=9947367ced86164c7944236b62b3e24ce1161c58
 VPINBALL_SDL_SHA=8e37db5e797b6167f3a00d697d816a684bd259c7
-VPINBALL_SDL_IMAGE_SHA=96a73a551a857b7c8d0ca3cc553a266eabbab6a7
+VPINBALL_SDL_IMAGE_SHA="${VPINBALL_SDL_IMAGE_SHA:-${SDL_IMAGE_SHA}}"
 VPINBALL_SDL_TTF_SHA=a1ce3670aec736ecbf0936c43f2f0cc53aa61e5b
 VPINBALL_LIBALTSOUND_SHA=f4b790a19ae45a9f93ae0051df6933800c7a6446
 VPINBALL_FFMPEG_SHA=239f2c733de417201d7ad3b3b8b0d9b63285b2b1
@@ -172,6 +172,66 @@ ppuc_vpinball_media_glob_copy() {
    fi
 }
 
+ppuc_clean_runtime_lib_dir() {
+   local dir="$1"
+   local platform="$2"
+
+   mkdir -p "${dir}"
+   if [ "${platform}" = "macos" ]; then
+      find "${dir}" -maxdepth 1 \( -type f -o -type l \) -name "*.dylib" -delete
+   else
+      find "${dir}" -maxdepth 1 \( -type f -o -type l \) -name "*.so*" -delete
+   fi
+}
+
+ppuc_copy_dylib_link_chain() {
+   local source_dir="$1"
+   local dylib_name="$2"
+   local dest_dir="$3"
+   local current="${dylib_name}"
+   local target
+   local copied=0
+
+   mkdir -p "${dest_dir}"
+   while [ -n "${current}" ] && [ -e "${source_dir}/${current}" ]; do
+      cp -P "${source_dir}/${current}" "${dest_dir}/"
+      copied=1
+      if [ ! -L "${source_dir}/${current}" ]; then
+         break
+      fi
+
+      target="$(readlink "${source_dir}/${current}")"
+      if [[ "${target}" = /* ]]; then
+         current="$(basename "${target}")"
+         source_dir="$(dirname "${target}")"
+      else
+         current="${target}"
+      fi
+   done
+
+   if [ "${copied}" = "0" ]; then
+      echo "Missing dylib chain source: ${source_dir}/${dylib_name}" >&2
+      return 1
+   fi
+}
+
+ppuc_relink_macos_dylib_alias() {
+   local dir="$1"
+   local alias="$2"
+   local pattern="$3"
+   local matches
+   local target
+
+   matches=( "${dir}"/${pattern} )
+   if [ "${#matches[@]}" -eq 0 ] || [ ! -e "${matches[0]}" ]; then
+      return 0
+   fi
+
+   target="$(basename "${matches[0]}")"
+   rm -f "${dir}/${alias}"
+   ln -s "${target}" "${dir}/${alias}"
+}
+
 ppuc_vpinball_media_cmake_platform_args() {
    local platform="$1"
    local arch="$2"
@@ -197,6 +257,11 @@ ppuc_prepare_vpinball_media_dependencies() {
    local vpinball_root
    local runtime_dir
    local include_dir
+   local ppuc_runtime_dir
+   local ppuc_include_dir
+   local ppuc_sdl3_cmake_dir
+   local reuse_ppuc_sdl_stack
+   local sdl3_cmake_dir
    local num_procs
    local cmake_platform_args
 
@@ -204,6 +269,9 @@ ppuc_prepare_vpinball_media_dependencies() {
    deps_root="${PPUC_SOURCE_ROOT}/external/vpinball/media-deps/${platform_tag}/${BUILD_TYPE}"
    runtime_dir="${vpinball_root}/third-party/runtime-libs/${platform_tag}"
    include_dir="${vpinball_root}/third-party/include"
+   ppuc_runtime_dir="${PPUC_SOURCE_ROOT}/third-party/runtime-libs/${platform_tag}"
+   ppuc_include_dir="${PPUC_SOURCE_ROOT}/third-party/include"
+   ppuc_sdl3_cmake_dir="${PPUC_SOURCE_ROOT}/external/libsdldmd/libsdldmd/external/SDL/build"
    num_procs="$(ppuc_vpinball_media_num_procs)"
    cmake_platform_args="$(ppuc_vpinball_media_cmake_platform_args "${platform}" "${arch}")"
    if [ "${platform}" = "macos" ]; then
@@ -211,42 +279,69 @@ ppuc_prepare_vpinball_media_dependencies() {
    fi
 
    mkdir -p "${deps_root}" "${runtime_dir}" "${include_dir}"
+   ppuc_clean_runtime_lib_dir "${runtime_dir}" "${platform}"
 
-   expected="${VPINBALL_SDL_SHA}-${VPINBALL_SDL_IMAGE_SHA}-${VPINBALL_SDL_TTF_SHA}"
+   reuse_ppuc_sdl_stack=0
+   if [ -d "${ppuc_include_dir}/SDL3" ] && [ -d "${ppuc_include_dir}/SDL3_image" ] && \
+      [ -f "${ppuc_sdl3_cmake_dir}/SDL3Config.cmake" ]; then
+      if [ "${platform}" = "macos" ] && \
+         ls "${ppuc_runtime_dir}"/libSDL3*.dylib >/dev/null 2>&1 && \
+         ls "${ppuc_runtime_dir}"/libSDL3_image*.dylib >/dev/null 2>&1; then
+         reuse_ppuc_sdl_stack=1
+      elif [ "${platform}" != "macos" ] && \
+         ls "${ppuc_runtime_dir}"/libSDL3.so* >/dev/null 2>&1 && \
+         ls "${ppuc_runtime_dir}"/libSDL3_image.so* >/dev/null 2>&1; then
+         reuse_ppuc_sdl_stack=1
+      fi
+   fi
+
+   if [ "${reuse_ppuc_sdl_stack}" = "1" ]; then
+      expected="reuse-ppuc-sdl-${VPINBALL_SDL_SHA}-${VPINBALL_SDL_IMAGE_SHA}-${VPINBALL_SDL_TTF_SHA}"
+      sdl3_cmake_dir="${ppuc_sdl3_cmake_dir}"
+   else
+      expected="self-contained-sdl-${VPINBALL_SDL_SHA}-${VPINBALL_SDL_IMAGE_SHA}-${VPINBALL_SDL_TTF_SHA}"
+      sdl3_cmake_dir="${deps_root}/SDL3/SDL/build"
+   fi
    found="$([ -f "${deps_root}/SDL3/cache.txt" ] && cat "${deps_root}/SDL3/cache.txt" || echo "")"
    if [ "${expected}" != "${found}" ]; then
-      echo "Building VPX media SDL stack. Expected: ${expected}, Found: ${found}"
+      if [ "${reuse_ppuc_sdl_stack}" = "1" ]; then
+         echo "Building VPX media SDL_ttf and reusing PPUC SDL/SDL_image. Expected: ${expected}, Found: ${found}"
+      else
+         echo "Building VPX media SDL stack. Expected: ${expected}, Found: ${found}"
+      fi
       rm -rf "${deps_root}/SDL3"
       mkdir -p "${deps_root}/SDL3"
       (
          cd "${deps_root}/SDL3"
-         curl -sL "https://github.com/libsdl-org/SDL/archive/${VPINBALL_SDL_SHA}.tar.gz" -o "SDL-${VPINBALL_SDL_SHA}.tar.gz"
-         tar xzf "SDL-${VPINBALL_SDL_SHA}.tar.gz"
-         mv "SDL-${VPINBALL_SDL_SHA}" SDL
-         cmake -S SDL -B SDL/build \
-            -DSDL_SHARED=ON \
-            -DSDL_STATIC=OFF \
-            -DSDL_TEST_LIBRARY=OFF \
-            -DSDL_OPENGLES=OFF \
-            ${cmake_platform_args} \
-            -DCMAKE_BUILD_TYPE="${BUILD_TYPE}"
-         cmake --build SDL/build -- -j"${num_procs}"
+         if [ "${reuse_ppuc_sdl_stack}" != "1" ]; then
+            curl -sL "https://github.com/libsdl-org/SDL/archive/${VPINBALL_SDL_SHA}.tar.gz" -o "SDL-${VPINBALL_SDL_SHA}.tar.gz"
+            tar xzf "SDL-${VPINBALL_SDL_SHA}.tar.gz"
+            mv "SDL-${VPINBALL_SDL_SHA}" SDL
+            cmake -S SDL -B SDL/build \
+               -DSDL_SHARED=ON \
+               -DSDL_STATIC=OFF \
+               -DSDL_TEST_LIBRARY=OFF \
+               -DSDL_OPENGLES=OFF \
+               ${cmake_platform_args} \
+               -DCMAKE_BUILD_TYPE="${BUILD_TYPE}"
+            cmake --build SDL/build -- -j"${num_procs}"
 
-         curl -sL "https://github.com/libsdl-org/SDL_image/archive/${VPINBALL_SDL_IMAGE_SHA}.tar.gz" -o "SDL_image-${VPINBALL_SDL_IMAGE_SHA}.tar.gz"
-         tar xzf "SDL_image-${VPINBALL_SDL_IMAGE_SHA}.tar.gz"
-         mv "SDL_image-${VPINBALL_SDL_IMAGE_SHA}" SDL_image
-         ( cd SDL_image && ./external/download.sh )
-         cmake -S SDL_image -B SDL_image/build \
-            -DBUILD_SHARED_LIBS=ON \
-            -DSDLIMAGE_SAMPLES=OFF \
-            -DSDLIMAGE_DEPS_SHARED=ON \
-            -DSDLIMAGE_VENDORED=ON \
-            -DSDLIMAGE_AVIF=OFF \
-            -DSDLIMAGE_WEBP=OFF \
-            -DSDL3_DIR="${deps_root}/SDL3/SDL/build" \
-            ${cmake_platform_args} \
-            -DCMAKE_BUILD_TYPE="${BUILD_TYPE}"
-         cmake --build SDL_image/build -- -j"${num_procs}"
+            curl -sL "https://github.com/libsdl-org/SDL_image/archive/${VPINBALL_SDL_IMAGE_SHA}.tar.gz" -o "SDL_image-${VPINBALL_SDL_IMAGE_SHA}.tar.gz"
+            tar xzf "SDL_image-${VPINBALL_SDL_IMAGE_SHA}.tar.gz"
+            mv "SDL_image-${VPINBALL_SDL_IMAGE_SHA}" SDL_image
+            ( cd SDL_image && ./external/download.sh )
+            cmake -S SDL_image -B SDL_image/build \
+               -DBUILD_SHARED_LIBS=ON \
+               -DSDLIMAGE_SAMPLES=OFF \
+               -DSDLIMAGE_DEPS_SHARED=ON \
+               -DSDLIMAGE_VENDORED=ON \
+               -DSDLIMAGE_AVIF=OFF \
+               -DSDLIMAGE_WEBP=OFF \
+               -DSDL3_DIR="${deps_root}/SDL3/SDL/build" \
+               ${cmake_platform_args} \
+               -DCMAKE_BUILD_TYPE="${BUILD_TYPE}"
+            cmake --build SDL_image/build -- -j"${num_procs}"
+         fi
 
          curl -sL "https://github.com/libsdl-org/SDL_ttf/archive/${VPINBALL_SDL_TTF_SHA}.tar.gz" -o "SDL_ttf-${VPINBALL_SDL_TTF_SHA}.tar.gz"
          tar xzf "SDL_ttf-${VPINBALL_SDL_TTF_SHA}.tar.gz"
@@ -257,7 +352,7 @@ ppuc_prepare_vpinball_media_dependencies() {
             -DSDLTTF_SAMPLES=OFF \
             -DSDLTTF_VENDORED=ON \
             -DSDLTTF_HARFBUZZ=ON \
-            -DSDL3_DIR="${deps_root}/SDL3/SDL/build" \
+            -DSDL3_DIR="${sdl3_cmake_dir}" \
             ${cmake_platform_args} \
             -DCMAKE_BUILD_TYPE="${BUILD_TYPE}"
          cmake --build SDL_ttf/build -- -j"${num_procs}"
@@ -266,16 +361,31 @@ ppuc_prepare_vpinball_media_dependencies() {
    fi
 
    if [ "${platform}" = "macos" ]; then
-      ppuc_vpinball_media_glob_copy "${deps_root}/SDL3/SDL/build/libSDL3*.dylib" "${runtime_dir}"
-      ppuc_vpinball_media_glob_copy "${deps_root}/SDL3/SDL_image/build/libSDL3_image*.dylib" "${runtime_dir}"
-      ppuc_vpinball_media_glob_copy "${deps_root}/SDL3/SDL_ttf/build/libSDL3_ttf*.dylib" "${runtime_dir}"
+      if [ "${reuse_ppuc_sdl_stack}" = "1" ]; then
+         ppuc_copy_dylib_link_chain "${ppuc_runtime_dir}" "libSDL3.dylib" "${runtime_dir}"
+         ppuc_copy_dylib_link_chain "${ppuc_runtime_dir}" "libSDL3_image.dylib" "${runtime_dir}"
+      else
+         ppuc_copy_dylib_link_chain "${deps_root}/SDL3/SDL/build" "libSDL3.dylib" "${runtime_dir}"
+         ppuc_copy_dylib_link_chain "${deps_root}/SDL3/SDL_image/build" "libSDL3_image.dylib" "${runtime_dir}"
+      fi
+      ppuc_copy_dylib_link_chain "${deps_root}/SDL3/SDL_ttf/build" "libSDL3_ttf.dylib" "${runtime_dir}"
    else
-      ppuc_vpinball_media_glob_copy "${deps_root}/SDL3/SDL/build/libSDL3.so*" "${runtime_dir}"
-      ppuc_vpinball_media_glob_copy "${deps_root}/SDL3/SDL_image/build/libSDL3_image.so*" "${runtime_dir}"
+      if [ "${reuse_ppuc_sdl_stack}" = "1" ]; then
+         ppuc_vpinball_media_glob_copy "${ppuc_runtime_dir}/libSDL3.so*" "${runtime_dir}"
+         ppuc_vpinball_media_glob_copy "${ppuc_runtime_dir}/libSDL3_image.so*" "${runtime_dir}"
+      else
+         ppuc_vpinball_media_glob_copy "${deps_root}/SDL3/SDL/build/libSDL3.so*" "${runtime_dir}"
+         ppuc_vpinball_media_glob_copy "${deps_root}/SDL3/SDL_image/build/libSDL3_image.so*" "${runtime_dir}"
+      fi
       ppuc_vpinball_media_glob_copy "${deps_root}/SDL3/SDL_ttf/build/libSDL3_ttf.so*" "${runtime_dir}"
    fi
-   cp -r "${deps_root}/SDL3/SDL/include/SDL3" "${include_dir}/"
-   cp -r "${deps_root}/SDL3/SDL_image/include/SDL3_image" "${include_dir}/"
+   if [ "${reuse_ppuc_sdl_stack}" = "1" ]; then
+      cp -r "${ppuc_include_dir}/SDL3" "${include_dir}/"
+      cp -r "${ppuc_include_dir}/SDL3_image" "${include_dir}/"
+   else
+      cp -r "${deps_root}/SDL3/SDL/include/SDL3" "${include_dir}/"
+      cp -r "${deps_root}/SDL3/SDL_image/include/SDL3_image" "${include_dir}/"
+   fi
    cp -r "${deps_root}/SDL3/SDL_ttf/include/SDL3_ttf" "${include_dir}/"
 
    expected="${VPINBALL_LIBALTSOUND_SHA}$([ "${platform}" = "macos" ] && echo "-macos${MACOSX_DEPLOYMENT_TARGET}")"
@@ -301,7 +411,7 @@ ppuc_prepare_vpinball_media_dependencies() {
    fi
 
    if [ "${platform}" = "macos" ]; then
-      ppuc_vpinball_media_glob_copy "${deps_root}/libaltsound/libaltsound/build/libaltsound*.dylib" "${runtime_dir}"
+      ppuc_copy_dylib_link_chain "${deps_root}/libaltsound/libaltsound/build" "libaltsound.dylib" "${runtime_dir}"
    else
       ppuc_vpinball_media_glob_copy "${deps_root}/libaltsound/libaltsound/build/libaltsound.so*" "${runtime_dir}"
    fi
@@ -355,7 +465,7 @@ ppuc_prepare_vpinball_media_dependencies() {
 
    for lib in libavcodec libavformat libavutil libswresample libswscale; do
       if [ "${platform}" = "macos" ]; then
-         ppuc_vpinball_media_glob_copy "${deps_root}/ffmpeg/ffmpeg/${lib}/${lib}*.dylib" "${runtime_dir}"
+         ppuc_copy_dylib_link_chain "${deps_root}/ffmpeg/ffmpeg/${lib}" "${lib}.dylib" "${runtime_dir}"
       else
          ppuc_vpinball_media_glob_copy "${deps_root}/ffmpeg/ffmpeg/${lib}/${lib}.so*" "${runtime_dir}"
       fi
@@ -364,7 +474,7 @@ ppuc_prepare_vpinball_media_dependencies() {
    done
 
    if [ "${platform}" = "macos" ]; then
-      ppuc_vpinball_media_glob_copy "${PPUC_SOURCE_ROOT}/third-party/runtime-libs/${platform_tag}/libpupdmd*.dylib" "${runtime_dir}"
+      ppuc_copy_dylib_link_chain "${PPUC_SOURCE_ROOT}/third-party/runtime-libs/${platform_tag}" "libpupdmd.dylib" "${runtime_dir}"
    else
       ppuc_vpinball_media_glob_copy "${PPUC_SOURCE_ROOT}/third-party/runtime-libs/${platform_tag}/libpupdmd.so*" "${runtime_dir}"
    fi
@@ -443,6 +553,25 @@ ppuc_build_vpinball_media_plugins() {
       ${cmake_platform_args} \
       -DVPINBALL_PPUC_PLUGIN_PACKAGE_DIR="${plugin_package_dir}"
    cmake --build "${vpinball_build_dir}" --target PPUCMediaPluginBundle
+
+   if [ "${platform}" = "macos" ]; then
+      if [ -f "${plugin_package_dir}/pup/plugin-pup.dylib" ]; then
+         install_name_tool -add_rpath "@loader_path/../.." "${plugin_package_dir}/pup/plugin-pup.dylib" 2>/dev/null || true
+      fi
+      rm -f "${plugin_package_dir}"/pup/libSDL3.dylib
+      rm -f "${plugin_package_dir}"/pup/libSDL3.[0-9]*.dylib
+      rm -f "${plugin_package_dir}"/pup/libSDL3_image*.dylib
+      rm -f "${plugin_package_dir}"/pup/libSDL3_mixer*.dylib
+      rm -f "${plugin_package_dir}"/pup/libpupdmd*.dylib
+
+      ppuc_relink_macos_dylib_alias "${plugin_package_dir}/pup" "libSDL3_ttf.0.dylib" "libSDL3_ttf.0.*.dylib"
+      ppuc_relink_macos_dylib_alias "${plugin_package_dir}/pup" "libSDL3_ttf.dylib" "libSDL3_ttf.0.dylib"
+      ppuc_relink_macos_dylib_alias "${plugin_package_dir}/pup" "libavcodec.dylib" "libavcodec.[0-9]*.dylib"
+      ppuc_relink_macos_dylib_alias "${plugin_package_dir}/pup" "libavformat.dylib" "libavformat.[0-9]*.dylib"
+      ppuc_relink_macos_dylib_alias "${plugin_package_dir}/pup" "libavutil.dylib" "libavutil.[0-9]*.dylib"
+      ppuc_relink_macos_dylib_alias "${plugin_package_dir}/pup" "libswresample.dylib" "libswresample.[0-9]*.dylib"
+      ppuc_relink_macos_dylib_alias "${plugin_package_dir}/pup" "libswscale.dylib" "libswscale.[0-9]*.dylib"
+   fi
 }
 
 if [ -z "${BUILD_TYPE}" ]; then
