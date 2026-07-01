@@ -1,6 +1,6 @@
 name: ppuc
 on:
-  workflow_dispatch:
+  pull_request:
 
 defaults:
   run:
