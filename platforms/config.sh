@@ -179,6 +179,8 @@ ppuc_clean_runtime_lib_dir() {
    mkdir -p "${dir}"
    if [ "${platform}" = "macos" ]; then
       find "${dir}" -maxdepth 1 \( -type f -o -type l \) -name "*.dylib" -delete
+   elif [[ "${platform}" = win* ]]; then
+      find "${dir}" -maxdepth 1 \( -type f -o -type l \) -name "*.dll" -delete
    else
       find "${dir}" -maxdepth 1 \( -type f -o -type l \) -name "*.so*" -delete
    fi
@@ -517,6 +519,7 @@ ppuc_build_vpinball_media_plugins() {
    local plugin_package_dir
    local vpinball_build_dir
    local cmake_platform_args
+   local plugin_rpath_args=()
 
    if [ "${PPUC_BUILD_VPINBALL_MEDIA_PLUGINS:-1}" = "0" ]; then
       return 0
@@ -537,6 +540,12 @@ ppuc_build_vpinball_media_plugins() {
    plugin_package_dir="${PPUC_SOURCE_ROOT}/ppuc/plugins"
    vpinball_build_dir="${PPUC_SOURCE_ROOT}/external/vpinball/build-${platform}-${arch}"
    cmake_platform_args="$(ppuc_vpinball_media_cmake_platform_args "${platform}" "${arch}")"
+   if [ "${platform}" = "linux" ]; then
+      plugin_rpath_args=(
+         -DCMAKE_BUILD_WITH_INSTALL_RPATH=TRUE
+         "-DCMAKE_INSTALL_RPATH=\$ORIGIN;\$ORIGIN/../.."
+      )
+   fi
 
    echo "Building VPX media plugins for PPUC: ${platform}-${arch}"
    mkdir -p "${plugin_package_dir}"
@@ -551,6 +560,7 @@ ppuc_build_vpinball_media_plugins() {
       -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
       -DPOST_BUILD_COPY_EXT_LIBS=ON \
       ${cmake_platform_args} \
+      "${plugin_rpath_args[@]}" \
       -DVPINBALL_PPUC_PLUGIN_PACKAGE_DIR="${plugin_package_dir}"
    cmake --build "${vpinball_build_dir}" --target PPUCMediaPluginBundle
 
@@ -571,6 +581,11 @@ ppuc_build_vpinball_media_plugins() {
       ppuc_relink_macos_dylib_alias "${plugin_package_dir}/pup" "libavutil.dylib" "libavutil.[0-9]*.dylib"
       ppuc_relink_macos_dylib_alias "${plugin_package_dir}/pup" "libswresample.dylib" "libswresample.[0-9]*.dylib"
       ppuc_relink_macos_dylib_alias "${plugin_package_dir}/pup" "libswscale.dylib" "libswscale.[0-9]*.dylib"
+   elif [ "${platform}" = "linux" ]; then
+      rm -f "${plugin_package_dir}"/pup/libSDL3.so*
+      rm -f "${plugin_package_dir}"/pup/libSDL3_image.so*
+      rm -f "${plugin_package_dir}"/pup/libSDL3_mixer.so*
+      rm -f "${plugin_package_dir}"/pup/libpupdmd.so*
    fi
 }
 

@@ -310,6 +310,8 @@ if [ "${LIBPPUC_EXPECTED_SHA}" != "${LIBPPUC_FOUND_SHA}" ]; then
    cd ..
 fi
 
+ppuc_clean_runtime_lib_dir "../third-party/runtime-libs/linux-x64" linux
+
 cp -a libsdldmd/libsdldmd/third-party/runtime-libs/linux/x64/libSDL3.{so,so.*} ../third-party/runtime-libs/linux-x64/
 cp -r libsdldmd/libsdldmd/third-party/include/SDL3 ../third-party/include/
 

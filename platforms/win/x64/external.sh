@@ -222,6 +222,8 @@ if [ "${LIBPPUC_EXPECTED_SHA}" != "${LIBPPUC_FOUND_SHA}" ]; then
    cd ..
 fi
 
+ppuc_clean_runtime_lib_dir "../third-party/runtime-libs/win-x64" win
+
 cp libsdldmd/libsdldmd/third-party/build-libs/win/x64/SDL364.lib ../third-party/build-libs/win-x64/
 cp libsdldmd/libsdldmd/third-party/runtime-libs/win/x64/SDL364.dll ../third-party/runtime-libs/win-x64/
 cp -r libsdldmd/libsdldmd/third-party/include/SDL3 ../third-party/include/
