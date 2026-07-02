@@ -7,74 +7,136 @@ SDL_MIXER_SHA=72a81869b45e249e8e67102db4e98dd2441f05a1
 FLITE_SHA=6c9f20dc915b17f5619340069889db0aa007fcdc
 ESPEAK_NG_SHA=1.52.0
 LUA_VERSION=5.4.8
-PINMAME_SHA=bf74d40ef837bdfc377c0266c0ef71b3ed59a751
-PINMAME_NVRAM_MAPS_SHA=fa1086d57118e12f4802f3a9683c1e6acfb6ec6d
-LIBPPUC_SHA=93afce7bfcef68a7766283fb129b0d85f6838229
-LIBSDLDMD_SHA=72a7e9777af59fe430c6f6ae77159e0b8c7301b4
-VPINBALL_SHA=9947367ced86164c7944236b62b3e24ce1161c58
-VPINBALL_SDL_SHA=8e37db5e797b6167f3a00d697d816a684bd259c7
+PINMAME_SHA=2b7a0dfb868fc5e690b8a4ad087526870d333d1a
+PINMAME_NVRAM_MAPS_SHA=d8693b9ca59a1b871d2a473be3adb0392471a8e3
+LIBPPUC_SHA=e61a57b0295122ef43cecb3f4041d5830d5cce92
+LIBSDLDMD_SHA=2a1578e6fa8fde50c64b330cb602812a3d75afd6
+VPINBALL_SHA=0dfaddbbbc896d1259bb326f0568a16e7eb75f09
+VPINBALL_SDL_SHA=f87239e71e42da91ca317a12eefb82cfbf3393eb
 VPINBALL_SDL_IMAGE_SHA="${VPINBALL_SDL_IMAGE_SHA:-${SDL_IMAGE_SHA}}"
 VPINBALL_SDL_TTF_SHA=a1ce3670aec736ecbf0936c43f2f0cc53aa61e5b
 VPINBALL_LIBALTSOUND_SHA=f4b790a19ae45a9f93ae0051df6933800c7a6446
 VPINBALL_FFMPEG_SHA=239f2c733de417201d7ad3b3b8b0d9b63285b2b1
 
 PPUC_SOURCE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-PPUC_LOCAL_DEPS_ROOT="${PPUC_LOCAL_DEPS_ROOT:-$(cd "${PPUC_SOURCE_ROOT}/.." && pwd)}"
-PPUC_USE_LOCAL_DEPS="${PPUC_USE_LOCAL_DEPS:-1}"
-PPUC_LOCAL_DEPS_CACHE_BUSTER="${PPUC_LOCAL_DEPS_CACHE_BUSTER:-$(date +%s)}"
+SOURCE_DIR_CACHE_BUSTER="${SOURCE_DIR_CACHE_BUSTER:-$(date +%s)}"
+PPUC_DEPENDENCY_SOURCE="${PPUC_DEPENDENCY_SOURCE:-explicit}"
+PPUC_LOCAL_SOURCE_ROOT="${PPUC_LOCAL_SOURCE_ROOT:-$(cd "${PPUC_SOURCE_ROOT}/.." && pwd -P)}"
+PPUC_MANAGED_SOURCE_DIR_VARS=(
+   LIBPPUC_SOURCE_DIR
+   LIBSDLDMD_SOURCE_DIR
+   VPINBALL_SOURCE_DIR
+   IO_BOARDS_SOURCE_DIR
+   LIBDMDUTIL_SOURCE_DIR
+   LIBZEDMD_SOURCE_DIR
+   LIBSERUM_SOURCE_DIR
+   LIBVNI_SOURCE_DIR
+   LIBFRAMEUTIL_SOURCE_DIR
+)
 
-ppuc_local_dependency_dir() {
-   local name="$1"
-   local dir="${PPUC_LOCAL_DEPS_ROOT}/${name}"
+set_dependency_source_dir_default() {
+   local var_name="$1"
+   local relative_dir="$2"
 
-   if [ "${PPUC_USE_LOCAL_DEPS}" != "0" ] && [ -d "${dir}" ] && [ "${dir}" != "${PPUC_SOURCE_ROOT}" ]; then
-      echo "${dir}"
+   if [ -z "${!var_name:-}" ]; then
+      printf -v "${var_name}" '%s/%s' "${PPUC_LOCAL_SOURCE_ROOT}" "${relative_dir}"
    fi
+   export "${var_name}"
 }
 
-ppuc_dependency_cache_key() {
-   local name="$1"
-   local sha="$2"
-   local local_dir
+configure_dependency_source_mode() {
+   local source_var
 
-   local_dir="$(ppuc_local_dependency_dir "${name}")"
-   if [ -n "${local_dir}" ]; then
-      echo "local:${local_dir}:${PPUC_LOCAL_DEPS_CACHE_BUSTER}"
+   case "${PPUC_DEPENDENCY_SOURCE}" in
+      explicit|manual|"")
+         for source_var in "${PPUC_MANAGED_SOURCE_DIR_VARS[@]}"; do
+            if [ -n "${!source_var:-}" ]; then
+               export "${source_var}"
+            fi
+         done
+         ;;
+      local|source|sources)
+         set_dependency_source_dir_default LIBPPUC_SOURCE_DIR libppuc
+         set_dependency_source_dir_default LIBSDLDMD_SOURCE_DIR libsdldmd
+         set_dependency_source_dir_default VPINBALL_SOURCE_DIR vpinball
+         set_dependency_source_dir_default IO_BOARDS_SOURCE_DIR io-boards
+         set_dependency_source_dir_default LIBDMDUTIL_SOURCE_DIR libdmdutil
+         set_dependency_source_dir_default LIBZEDMD_SOURCE_DIR libzedmd
+         set_dependency_source_dir_default LIBSERUM_SOURCE_DIR libserum
+         set_dependency_source_dir_default LIBVNI_SOURCE_DIR libvni
+         set_dependency_source_dir_default LIBFRAMEUTIL_SOURCE_DIR libframeutil
+         ;;
+      github|sha|archive|archives)
+         for source_var in "${PPUC_MANAGED_SOURCE_DIR_VARS[@]}"; do
+            unset "${source_var}"
+         done
+         ;;
+      *)
+         echo "Unsupported PPUC_DEPENDENCY_SOURCE: ${PPUC_DEPENDENCY_SOURCE}" >&2
+         echo "Use explicit, local, or github." >&2
+         exit 1
+         ;;
+   esac
+}
+
+configure_dependency_source_mode
+
+dependency_source_dir() {
+   local var_name="$1"
+   local source_dir="${!var_name:-}"
+
+   if [ -z "${source_dir}" ]; then
+      return 0
+   fi
+
+   (cd "${PPUC_SOURCE_ROOT}" && cd "${source_dir}" && pwd -P)
+}
+
+dependency_cache_key() {
+   local sha="$1"
+   local source_var="$2"
+   local source_dir
+
+   source_dir="$(dependency_source_dir "${source_var}")"
+   if [ -n "${source_dir}" ]; then
+      echo "source:${source_dir}:${SOURCE_DIR_CACHE_BUSTER}"
    else
       echo "${sha}"
    fi
 }
 
-ppuc_print_dependency_source() {
+print_dependency_source() {
    local label="$1"
-   local name="$2"
-   local sha="$3"
-   local local_dir
+   local sha="$2"
+   local source_var="$3"
+   local source_dir
 
-   local_dir="$(ppuc_local_dependency_dir "${name}")"
-   if [ -n "${local_dir}" ]; then
-      echo "  ${label}_SOURCE: local ${local_dir}"
+   source_dir="$(dependency_source_dir "${source_var}")"
+   if [ -n "${source_dir}" ]; then
+      echo "  ${label}_SOURCE_DIR: ${source_dir}"
    else
       echo "  ${label}_SOURCE: archive ${sha}"
    fi
 }
 
-ppuc_prepare_dependency_source() {
+prepare_dependency_source() {
    local name="$1"
    local sha="$2"
    local url="$3"
-   local local_dir
+   local source_var="$4"
+   local source_dir
 
-   local_dir="$(ppuc_local_dependency_dir "${name}")"
-   if [ -n "${local_dir}" ]; then
-      echo "Using local ${name}: ${local_dir}"
-      ln -s "${local_dir}" "${name}"
+   source_dir="$(dependency_source_dir "${source_var}")"
+   if [ -n "${source_dir}" ]; then
+      echo "Using ${source_var}: ${source_dir}"
+      ln -s "${source_dir}" "${name}"
    else
       curl -sL "${url}" -o "${name}-${sha}.tar.gz"
       tar xzf "${name}-${sha}.tar.gz"
       mv "${name}-${sha}" "${name}"
    fi
 }
+
 
 ppuc_stage_lua_source() {
    local expected="${LUA_VERSION}"
@@ -88,7 +150,7 @@ ppuc_stage_lua_source() {
       mkdir lua
       cd lua
 
-      ppuc_prepare_dependency_source lua "${LUA_VERSION}" "https://www.lua.org/ftp/lua-${LUA_VERSION}.tar.gz"
+      prepare_dependency_source lua "${LUA_VERSION}" "https://www.lua.org/ftp/lua-${LUA_VERSION}.tar.gz" LUA_SOURCE_DIR
       echo "${expected}" > cache.txt
 
       cd ..
@@ -126,7 +188,7 @@ ppuc_stage_vpinball_source() {
       return 0
    fi
 
-   expected="$(ppuc_dependency_cache_key vpinball "${VPINBALL_SHA}")"
+   expected="$(dependency_cache_key "${VPINBALL_SHA}" VPINBALL_SOURCE_DIR)"
    vpinball_cache_dir="${PPUC_SOURCE_ROOT}/external/vpinball"
    vpinball_source_dir="${vpinball_cache_dir}/vpinball"
    found="$([ -f "${vpinball_cache_dir}/cache.txt" ] && cat "${vpinball_cache_dir}/cache.txt" || echo "")"
@@ -138,7 +200,7 @@ ppuc_stage_vpinball_source() {
       mkdir -p "${vpinball_cache_dir}"
       (
          cd "${vpinball_cache_dir}"
-         ppuc_prepare_dependency_source vpinball "${VPINBALL_SHA}" "https://github.com/PPUC/vpinball/archive/${VPINBALL_SHA}.tar.gz"
+         prepare_dependency_source vpinball "${VPINBALL_SHA}" "https://github.com/PPUC/vpinball/archive/${VPINBALL_SHA}.tar.gz" VPINBALL_SOURCE_DIR
          echo "${expected}" > cache.txt
       )
    fi
@@ -481,6 +543,8 @@ ppuc_prepare_vpinball_media_dependencies() {
       ppuc_vpinball_media_glob_copy "${PPUC_SOURCE_ROOT}/third-party/runtime-libs/${platform_tag}/libpupdmd.so*" "${runtime_dir}"
    fi
    cp "${PPUC_SOURCE_ROOT}/third-party/include/pupdmd.h" "${include_dir}/"
+   mkdir -p "${ppuc_include_dir}/pup"
+   cp "${vpinball_root}/plugins/pup/PUPPlugin.h" "${ppuc_include_dir}/pup/"
 }
 
 ppuc_prepare_vpinball_media_plugins() {
@@ -561,8 +625,10 @@ ppuc_build_vpinball_media_plugins() {
       -DPOST_BUILD_COPY_EXT_LIBS=ON \
       ${cmake_platform_args} \
       "${plugin_rpath_args[@]}" \
-      -DVPINBALL_PPUC_PLUGIN_PACKAGE_DIR="${plugin_package_dir}"
-   cmake --build "${vpinball_build_dir}" --target PPUCMediaPluginBundle
+      -DVPINBALL_PLUGIN_PACKAGE_DIR="${plugin_package_dir}"
+   for plugin_target in PUPPlugin AltSoundPlugin B2SPlugin B2SLegacyPlugin; do
+      cmake --build "${vpinball_build_dir}" --target "${plugin_target}"
+   done
 
    if [ "${platform}" = "macos" ]; then
       if [ -f "${plugin_package_dir}/pup/plugin-pup.dylib" ]; then

@@ -20,12 +20,16 @@ in a file's header or in a sub-directory. Be aware of the fact that your own enh
 under a compatible licence.
 
 PPUC uses
-* [libpinmame](https://github.com/vpinball/pinmame)
-* [libdmdutil](https://github.com/vpinball/libdmdutil)
-* [cargs](https://github.com/likle/cargs)
-* [yaml-cpp](https://github.com/jbeder/yaml-cpp)
-* [openal-soft](https://github.com/kcat/openal-soft/)
-* [libppuc](https://github.com/PPUC/libppuc)
+* [libppuc](https://github.com/PPUC/libppuc) for host-side IO board communication
+* [libpinmame](https://github.com/vpinball/pinmame) for ROM emulation
+* [libdmdutil](https://github.com/vpinball/libdmdutil), [libsdldmd](https://github.com/PPUC/libsdldmd), SDL3, and SDL_image for DMD/backglass rendering
+* VPX media plugins from [vpinball](https://github.com/vpinball/vpinball), including PUP, AltSound, and B2S support
+* [libaltsound](https://github.com/vpinball/libaltsound) and FFmpeg libraries for media plugin audio/video support
+* [Lua](https://www.lua.org/) for runtime rules
+* [cargs](https://github.com/likle/cargs) for command-line parsing
+* [yaml-cpp](https://github.com/jbeder/yaml-cpp) for IO board configuration
+* [flite](https://github.com/festvox/flite) and optionally [eSpeak NG](https://github.com/espeak-ng/espeak-ng) for speech output
+* Optional SDL_mixer support for background music playback
 
 ## Documentation
 
@@ -33,9 +37,81 @@ These components are still in an early development stage and the documentation w
 
 ### Command Line Options
 
+The preferred runtime entry point is a game folder:
+
+```shell
+ppuc-pinmame --game /path/to/games/t2
+```
+
+The game folder is the per-game runtime root. `ppuc-pinmame` derives the
+standard files and media folders from that one path:
+
+```text
+games/
+  t2/
+    io-boards.yaml
+    ppuc.ini
+    t2_l8.directb2s
+    translite-on.png
+    translite-off.png
+
+    rules/
+      00-base.lua
+      10-callouts.lua
+      20-lamps.lua
+
+    music/
+      01-theme.ogg
+      02-multiball.ogg
+
+    pup/
+      pupvideos/
+        t2_l8/
+          ...
+
+    pinmame/
+      roms/
+        t2_l8.zip
+      nvram/
+        t2_l8.nv
+      cfg/
+        t2_l8.cfg
+      altsound/
+        t2_l8/
+          altsound.csv
+          *.ogg
+          *.wav
+      altcolor/
+        t2_l8/
+          t2_l8.cROMc
+          t2_l8.vni
+          t2_l8.pal
+          t2_l8.cRZ
+```
+
+With `--game`, defaults are:
+
+* IO board config: `<game>/io-boards.yaml`
+* runtime INI: `<game>/ppuc.ini`, when present
+* Lua rules: `<game>/rules/*.lua`, when `Runtime.Rules=true`
+* background music: supported audio files in `<game>/music/`, in filename order
+* in-game translite: `<game>/translite-on.*`, falling back to `<game>/translite.*`
+* attract/off translite: `<game>/translite-off.*`, falling back to `<game>/translite-attract.*`
+* PinMAME base: `<game>/pinmame`
+* PUP root: `<game>/pup`; packs are under `<game>/pup/pupvideos/<rom>`
+* AltSound: `<game>/pinmame/altsound/<rom>`
+* AltColor: `<game>/pinmame/altcolor`
+* B2S: `<game>/<rom>.directb2s`, falling back to `<game>/<folder-name>.directb2s`
+
+Dedicated command-line options override values from the game folder and INI.
+
+* --game path
+    * path to a game folder containing `io-boards.yaml`, `ppuc.ini`, rules, PUP, and PinMAME assets
+    * preferred
+    * optional when using the legacy explicit path options
 * -c path
-    * path to config file
-    * required
+    * path to IO board config file
+    * optional when `--game` is used
 * --ini-file path
     * path to a ppuc runtime ini file
     * optional
@@ -53,7 +129,10 @@ These components are still in an early development stage and the documentation w
     * enable effect trigger debug output
     * optional
 * -u
-    * enable Serum colorization
+    * enable legacy Serum/AltColor colorization
+    * optional
+* --altcolor
+    * enable AltColor DMD colorization
     * optional
 * -t VALUE
     * Serum timeout in milliseconds to ignore unknown frames
@@ -63,9 +142,20 @@ These components are still in an early development stage and the documentation w
     * optional
 * --rules path
     * path to one Lua rules file or a directory containing Lua rule files
+    * explicit override for the default `<game>/rules` directory
+    * optional
+* --pup
+    * enable PUP media playback through the plugin host
+    * optional
+* --b2s
+    * enable B2S backglass rendering through the plugin host
+    * optional
+* --altsound
+    * enable AltSound through the plugin host
     * optional
 * --music-files csv
     * comma-separated MP3 playlist for gameplay background music
+    * explicit override for the default `<game>/music` directory
     * plays only while the game is not in attract mode
     * ducks while PinMAME or speech audio is active
     * optional
@@ -74,7 +164,7 @@ These components are still in an early development stage and the documentation w
     * default: `15000`
     * always active; the value must be greater than zero
 * --ball-search
-    * enable host-side ball search for coils marked `ballSearch: true` in the game YAML
+    * enable host-side ball search for coils marked `ballSearch: true` in `io-boards.yaml`
     * optional and disabled by default because newer ROMs often implement their own ball search
 * --ball-search-delay-ms VALUE
     * first ball-search delay after no non-button switch activity while the game is running
@@ -102,6 +192,74 @@ These components are still in an early development stage and the documentation w
 
 An example runtime ini file is available at `examples/ppuc-pinmame.ini`.
 
+### Runtime INI
+
+The game folder should normally contain a full `ppuc.ini`. It is not a minimal
+replacement config; it is the normal runtime configuration file scoped to one
+game.
+
+The ROM can be declared in `[Game]`:
+
+```ini
+[Game]
+Rom = t2_l8
+```
+
+Common media options live in `[Runtime]`:
+
+```ini
+[Runtime]
+Rules = true
+PUP = true
+B2S = true
+AltSound = true
+AltColor = true
+```
+
+`Rules` is a boolean. When it is true and `--game` is used, the rules loader
+scans `<game>/rules/*.lua` in filename order. `AltColor` is the user-facing DMD
+colorization enable switch. `SerumTimeout` and `SerumSkipFrames` remain
+available for Serum-specific tuning only.
+
+### Game Folder Media
+
+PUP packs live under `<game>/pup/pupvideos/<rom>/`. The `pupvideos` directory is
+part of the required PUP folder structure.
+
+Background music files live under `<game>/music/` and are loaded in filename
+order. Supported extensions are `.mp3`, `.ogg`, `.wav`, `.flac`, `.opus`, and
+`.m4a`.
+
+Translite images live at the game-folder root:
+
+```text
+translite-on.png
+translite-off.png
+```
+
+`translite-on.*` is shown during gameplay. `translite-off.*` is shown in
+attract/off mode. The fallback names are `translite.*` and
+`translite-attract.*`.
+
+AltSound lives under `<game>/pinmame/altsound/<rom>/`.
+
+AltColor files live under `<game>/pinmame/altcolor/<rom>/`, for example:
+
+```text
+pinmame/altcolor/t2_l8/t2_l8.cROMc
+pinmame/altcolor/t2_l8/t2_l8.vni
+pinmame/altcolor/t2_l8/t2_l8.pal
+pinmame/altcolor/t2_l8/t2_l8.cRZ
+```
+
+B2S files live at the game-folder root. `--b2s` loads the modern `B2S` plugin,
+not the packaged `B2SLegacy` plugin. Lookup is case-insensitive and checks:
+
+```text
+<game>/<rom>.directb2s
+<game>/<folder-name>.directb2s
+```
+
 ### Switch Refresh And Ball Search
 
 `ppuc-pinmame` always runs a switch-refresh safety net. If no non-button switch
@@ -112,7 +270,7 @@ The normal runtime output/switch-poll cadence is controlled by
 `Runtime.OutputFrameIntervalMs` or `--output-frame-interval-ms`; the default is
 `4`.
 
-Switches can be marked as cabinet/player buttons in the game YAML:
+Switches can be marked as cabinet/player buttons in `io-boards.yaml`:
 
 ```yaml
 switches:
@@ -160,11 +318,12 @@ pwmOutput:
 
 ### Lua Rules
 
-Use `--rules <path>` to run Lua rules. The path is a directory.
-Directory loading is non-recursive, loads top-level `*.lua` files in filename
-order, and fails on the first load or runtime error. Rules are independent
-from `--pup`, and can also drive speech callouts, board-local PPUC effects,
-and host-side interceptor behavior.
+Use `Runtime.Rules=true` in a game-folder INI to run Lua rules from
+`<game>/rules`. Directory loading is non-recursive, loads top-level `*.lua`
+files in filename order, and fails on the first load or runtime error. The
+legacy `--rules <path>` option is still available as an explicit override.
+Rules are independent from `--pup`, and can also drive speech callouts,
+board-local PPUC effects, and host-side interceptor behavior.
 
 Rules define handlers on the `ppuc` namespace:
 
@@ -212,7 +371,7 @@ Named states, history, and switch groups:
 * `ppuc.onlyOnceEvery(name, durationMs)` returns true only once per named time window
 * `ppuc.switchGroupState(name)`, `ppuc.switchGroupClosing(name)`, `ppuc.switchGroupOpening(name)`
 
-Switch groups can be declared in the game YAML:
+Switch groups can be declared in `io-boards.yaml`:
 
 ```yaml
 switchGroups:
@@ -253,7 +412,7 @@ Board effect trigger source:
 * `F`
   * board-local effect trigger
   * forwarded to `libppuc` as a runtime event with source `EVENT_SOURCE_EFFECT`
-  * use matching `trigger.source: F` plus `trigger.name` or `trigger.number` in the game YAML effect block
+  * use matching `trigger.source: F` plus `trigger.name` or `trigger.number` in the `io-boards.yaml` effect block
 
 Speech callouts use the configured speech backend directly from Lua:
 
@@ -281,14 +440,33 @@ Ready-to-use samples are available at:
 
 ### Compiling
 
-The platform build scripts stage pinned third-party dependencies into
-`third-party`. For local development, they automatically prefer sibling
-checkouts named `../libppuc` and `../libsdldmd` when those directories exist,
-then fall back to the pinned GitHub archives from `platforms/config.sh`.
+The platform build scripts stage dependencies into `third-party`. By default,
+they use the pinned GitHub archive SHAs from `platforms/config.sh`, which keeps
+normal user builds reproducible.
 
-Set `PPUC_USE_LOCAL_DEPS=0` to force the pinned archive path, or set
-`PPUC_LOCAL_DEPS_ROOT=/path/to/workspace` to look for local dependency
-checkouts somewhere other than the parent directory.
+For local development across the PPUC repositories, set `PPUC_DEPENDENCY_SOURCE`
+when running a build script from the `ppuc` repository root:
+
+```shell
+PPUC_DEPENDENCY_SOURCE=local platforms/macos/arm64/build.sh
+```
+
+`local` uses sibling source checkouts from the parent workspace for the managed
+PPUC dependency tree, including `../libppuc`, `../libsdldmd`, `../io-boards`,
+`../libdmdutil`, `../libzedmd`, `../libserum`, `../libvni`, `../libframeutil`,
+and `../vpinball`. Override the workspace root with `PPUC_LOCAL_SOURCE_ROOT` if
+those repositories live somewhere else:
+
+```shell
+PPUC_DEPENDENCY_SOURCE=local \
+PPUC_LOCAL_SOURCE_ROOT=/path/to/workspace \
+platforms/macos/arm64/build.sh
+```
+
+Set `PPUC_DEPENDENCY_SOURCE=github` or `PPUC_DEPENDENCY_SOURCE=sha` to force the
+pinned archive path even when source directory variables are present. The default
+mode is `explicit`, where only manually provided `*_SOURCE_DIR` variables are
+used.
 
 #### Windows (x64)
 
@@ -313,7 +491,7 @@ sudo apt install git autoconf libtool libudev-dev libpipewire-0.3-dev libwayland
 git clone https://github.com/PPUC/ppuc.git
 cd ppuc
 platforms/linux/x64/build.sh
-ppuc/ppuc-pinmame -c examples/t2.yml -n -i
+ppuc/ppuc-pinmame --game /path/to/games/t2 -n -i
 ```
 
 ### Menu launcher
@@ -338,7 +516,7 @@ platforms/linux/aarch64/build.sh
 After building, install a per-user GNOME/XDG autostart entry with:
 
 ```shell
-platforms/linux/install-gnome-autostart.sh -- -c examples/t2.yml -n -i
+platforms/linux/install-gnome-autostart.sh -- --game /path/to/games/t2 -n -i
 ```
 
 This writes `~/.config/autostart/ppuc-pinmame.desktop` with absolute paths to the
@@ -350,14 +528,14 @@ By default the installer prefers `gnome-terminal`, then `kgx`, then
 `x-terminal-emulator`. Override that with:
 
 ```shell
-platforms/linux/install-gnome-autostart.sh --terminal gnome-terminal -- -c examples/t2.yml -n -i
+platforms/linux/install-gnome-autostart.sh --terminal gnome-terminal -- --game /path/to/games/t2 -n -i
 ```
 
 The installer also sets a GNOME autostart delay of 10 seconds by default so the
 terminal is launched after the session settles. Override that with:
 
 ```shell
-platforms/linux/install-gnome-autostart.sh --delay 15 -- -c examples/t2.yml -n -i
+platforms/linux/install-gnome-autostart.sh --delay 15 -- --game /path/to/games/t2 -n -i
 ```
 
 On GNOME, the generated launcher also tries to dismiss the Activities overview a

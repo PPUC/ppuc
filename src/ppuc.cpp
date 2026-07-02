@@ -318,6 +318,7 @@ bool opt_serum = false;
 bool opt_pup = false;
 bool opt_altsound = false;
 bool opt_b2s = false;
+const char* opt_game_folder = NULL;
 const char* opt_plugin_dir = NULL;
 const char* opt_pup_folder = NULL;
 const char* opt_altsound_folder = NULL;
@@ -1310,6 +1311,86 @@ static const char* DuplicateOptionalIniString(const std::string& value)
     return nullptr;
   }
   return DuplicateIniString(value);
+}
+
+static const char* DuplicatePathString(const std::filesystem::path& path)
+{
+  return DuplicateIniString(path.string());
+}
+
+static bool PathExtensionEquals(const std::filesystem::path& path, std::initializer_list<const char*> extensions)
+{
+  std::string extension = path.extension().string();
+  std::transform(extension.begin(), extension.end(), extension.begin(),
+                 [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+  for (const char* candidate : extensions)
+  {
+    if (extension == candidate)
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
+static std::optional<std::filesystem::path> FindFirstExistingPath(
+    const std::filesystem::path& directory, std::initializer_list<const char*> baseNames,
+    std::initializer_list<const char*> extensions)
+{
+  std::error_code ec;
+  for (const char* baseName : baseNames)
+  {
+    for (const char* extension : extensions)
+    {
+      std::filesystem::path candidate = directory / (std::string(baseName) + extension);
+      if (std::filesystem::is_regular_file(candidate, ec))
+      {
+        return candidate;
+      }
+      ec.clear();
+    }
+  }
+  return std::nullopt;
+}
+
+static std::string CollectMusicFilesCsv(const std::filesystem::path& musicDirectory)
+{
+  std::error_code ec;
+  if (!std::filesystem::is_directory(musicDirectory, ec))
+  {
+    return {};
+  }
+
+  std::vector<std::filesystem::path> files;
+  for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(musicDirectory, ec))
+  {
+    if (ec)
+    {
+      return {};
+    }
+    if (!entry.is_regular_file(ec))
+    {
+      ec.clear();
+      continue;
+    }
+    const std::filesystem::path path = entry.path();
+    if (PathExtensionEquals(path, {".mp3", ".ogg", ".wav", ".flac", ".opus", ".m4a"}))
+    {
+      files.push_back(path);
+    }
+  }
+  std::sort(files.begin(), files.end());
+
+  std::string csv;
+  for (const std::filesystem::path& file : files)
+  {
+    if (!csv.empty())
+    {
+      csv += ",";
+    }
+    csv += file.string();
+  }
+  return csv;
 }
 
 static bool CollectRulesScripts(const char* pathArg, std::vector<std::string>& scripts, std::string& error)
@@ -2368,6 +2449,10 @@ static struct cag_option options[] = {
      .access_name = "ini-file",
      .value_name = "VALUE",
      .description = "Path to ppuc runtime INI file (optional)"},
+    {.identifier = '$',
+     .access_name = "game",
+     .value_name = "VALUE",
+     .description = "Game folder containing io-boards.yaml, ppuc.ini, rules, pup, and pinmame assets (optional)"},
     {.identifier = 'r',
      .access_letters = "r",
      .access_name = "rom",
@@ -2433,7 +2518,11 @@ static struct cag_option options[] = {
      .access_letters = "u",
      .access_name = "serum",
      .value_name = NULL,
-     .description = "Enable Serum colorization (optional)"},
+     .description = "Enable legacy Serum/AltColor colorization (optional)"},
+    {.identifier = '~',
+     .access_name = "altcolor",
+     .value_name = NULL,
+     .description = "Enable AltColor DMD colorization (optional)"},
     {.identifier = 'T',
      .access_name = "serum-timeout",
      .value_name = "VALUE",
@@ -3097,6 +3186,7 @@ int main(int argc, char** argv)
   const char* config_file = NULL;
   const char* opt_ini_file = NULL;
   const char* opt_rules = NULL;
+  bool opt_rules_enabled = false;
   const char* opt_backbox_address = NULL;
   uint16_t opt_backbox_port = 6789;
   const char* opt_serial = NULL;
@@ -3155,9 +3245,46 @@ int main(int argc, char** argv)
         opt_ini_file = argv[++i];
       }
     }
+    else if (strcmp(arg, "--game") == 0)
+    {
+      if (i + 1 < argc)
+      {
+        opt_game_folder = argv[++i];
+      }
+    }
     else if (strncmp(arg, "--ini-file=", 11) == 0)
     {
       opt_ini_file = arg + 11;
+    }
+    else if (strncmp(arg, "--game=", 7) == 0)
+    {
+      opt_game_folder = arg + 7;
+    }
+  }
+
+  if (HasOptionValue(opt_game_folder))
+  {
+    const std::filesystem::path gameFolder(opt_game_folder);
+    if (opt_ini_file == nullptr)
+    {
+      const std::filesystem::path iniPath = gameFolder / "ppuc.ini";
+      std::error_code ec;
+      if (std::filesystem::is_regular_file(iniPath, ec))
+      {
+        opt_ini_file = DuplicatePathString(iniPath);
+      }
+    }
+    if (config_file == nullptr)
+    {
+      config_file = DuplicatePathString(gameFolder / "io-boards.yaml");
+    }
+    if (opt_pinmame_path == nullptr)
+    {
+      opt_pinmame_path = DuplicatePathString(gameFolder / "pinmame");
+    }
+    if (opt_pup_folder == nullptr)
+    {
+      opt_pup_folder = DuplicatePathString(gameFolder / "pup");
     }
   }
 
@@ -3204,7 +3331,12 @@ int main(int argc, char** argv)
         continue;
       }
 
-      if (section == "Paths")
+      if (section == "Game")
+      {
+        if (key == "Rom")
+          opt_rom = DuplicateOptionalIniString(value);
+      }
+      else if (section == "Paths")
       {
         if (key == "ConfigFile")
           config_file = DuplicateIniString(value);
@@ -3215,7 +3347,10 @@ int main(int argc, char** argv)
         else if (key == "PinmamePath")
           opt_pinmame_path = DuplicateOptionalIniString(value);
         else if (key == "Rules")
+        {
           opt_rules = DuplicateOptionalIniString(value);
+          opt_rules_enabled = HasOptionValue(opt_rules);
+        }
         else if (key == "MusicFiles")
           opt_music_files = DuplicateOptionalIniString(value);
         else if (key == "MusicGapMs")
@@ -3250,8 +3385,10 @@ int main(int argc, char** argv)
           opt_debug_lamps = ParseIniBool(value);
         else if (key == "DebugEffects")
           opt_debug_effects = ParseIniBool(value);
-        else if (key == "Serum")
+        else if (key == "Serum" || key == "AltColor")
           opt_serum = ParseIniBool(value);
+        else if (key == "Rules")
+          opt_rules_enabled = ParseIniBool(value);
         else if (key == "SerumTimeout")
           opt_serum_timeout = static_cast<uint8_t>(atoi(value.c_str()));
         else if (key == "SerumSkipFrames")
@@ -3373,6 +3510,37 @@ int main(int argc, char** argv)
     return 1;
   }
 
+  if (HasOptionValue(opt_game_folder))
+  {
+    const std::filesystem::path gameFolder(opt_game_folder);
+    if (!HasOptionValue(opt_music_files))
+    {
+      const std::string musicFiles = CollectMusicFilesCsv(gameFolder / "music");
+      if (!musicFiles.empty())
+      {
+        opt_music_files = DuplicateIniString(musicFiles);
+      }
+    }
+    if (!HasOptionValue(opt_translite))
+    {
+      const auto transliteOn = FindFirstExistingPath(
+          gameFolder, {"translite-on", "translite"}, {".png", ".jpg", ".jpeg", ".bmp", ".webp"});
+      if (transliteOn)
+      {
+        opt_translite = DuplicatePathString(*transliteOn);
+      }
+    }
+    if (!HasOptionValue(opt_translite_attract))
+    {
+      const auto transliteOff = FindFirstExistingPath(
+          gameFolder, {"translite-off", "translite-attract"}, {".png", ".jpg", ".jpeg", ".bmp", ".webp"});
+      if (transliteOff)
+      {
+        opt_translite_attract = DuplicatePathString(*transliteOff);
+      }
+    }
+  }
+
   cag_option_init(&cag_context, options, CAG_ARRAY_SIZE(options), argc, argv);
   while (cag_option_fetch(&cag_context))
   {
@@ -3384,6 +3552,9 @@ int main(int argc, char** argv)
         break;
       case 'z':
         opt_ini_file = cag_option_get_value(&cag_context);
+        break;
+      case '$':
+        opt_game_folder = cag_option_get_value(&cag_context);
         break;
       case 'r':
         opt_rom = cag_option_get_value(&cag_context);
@@ -3430,6 +3601,9 @@ int main(int argc, char** argv)
       case 'u':
         opt_serum = true;
         break;
+      case '~':
+        opt_serum = true;
+        break;
       case 'A':
         opt_pinmame_path = cag_option_get_value(&cag_context);
         break;
@@ -3459,6 +3633,7 @@ int main(int argc, char** argv)
         break;
       case 'y':
         opt_rules = cag_option_get_value(&cag_context);
+        opt_rules_enabled = HasOptionValue(opt_rules);
         break;
       case 'i':
         opt_console_display = true;
@@ -3702,6 +3877,28 @@ int main(int argc, char** argv)
     opt_debug = ppuc->GetDebug();
   }
 
+  if (opt_rom)
+  {
+    ppuc->SetRom(opt_rom);
+  }
+  else
+  {
+    opt_rom = ppuc->GetRom();
+  }
+
+  if (HasOptionValue(opt_game_folder))
+  {
+    const std::filesystem::path gameFolder(opt_game_folder);
+    if (opt_rules_enabled && !HasOptionValue(opt_rules))
+    {
+      opt_rules = DuplicatePathString(gameFolder / "rules");
+    }
+    if (!HasOptionValue(opt_altsound_folder) && HasOptionValue(opt_rom))
+    {
+      opt_altsound_folder = DuplicatePathString(gameFolder / "pinmame" / "altsound" / opt_rom);
+    }
+  }
+
   if (!ValidateSpeechAudioUsage(opt_no_sound,
                                 (opt_speech || HasOptionValue(opt_speech_voice) ||
                                  HasOptionValue(opt_speech_rate_arg) || HasOptionValue(opt_speech_pitch_arg)),
@@ -3757,7 +3954,16 @@ int main(int argc, char** argv)
     mediaOptions.pluginDir = opt_plugin_dir;
     mediaOptions.pupFolder = opt_pup_folder;
     mediaOptions.altSoundFolder = opt_altsound_folder;
-    mediaOptions.tablePath = config_file;
+    std::string mediaTablePath;
+    if (HasOptionValue(opt_game_folder) && HasOptionValue(opt_rom))
+    {
+      mediaTablePath = (std::filesystem::path(opt_game_folder) / (std::string(opt_rom) + ".vpx")).string();
+      mediaOptions.tablePath = mediaTablePath.c_str();
+    }
+    else
+    {
+      mediaOptions.tablePath = config_file;
+    }
     mediaOptions.prefPath = getenv("HOME");
     mediaOptions.gameId = opt_rom;
     mediaOptions.backglassWidth = opt_translite_width > 0 ? opt_translite_width : 1920;
@@ -3935,15 +4141,6 @@ int main(int argc, char** argv)
     PrintFlushedLogLine("", logLine);
   }
 
-  if (opt_rom)
-  {
-    ppuc->SetRom(opt_rom);
-  }
-  else
-  {
-    opt_rom = ppuc->GetRom();
-  }
-
   if (opt_serial)
   {
     ppuc->SetSerial(opt_serial);
@@ -4041,7 +4238,7 @@ int main(int argc, char** argv)
   }
   dmdConfig->SetRoundedCorners(opt_rounded_corners);
 
-  if (opt_rules)
+  if (opt_rules_enabled && HasOptionValue(opt_rules))
   {
     pLuaRulesEngine = std::make_unique<LuaRulesEngine>();
     pLuaRulesEngine->SetDebug(opt_debug || opt_debug_effects);

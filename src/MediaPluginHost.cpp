@@ -20,6 +20,7 @@
 #include "plugins/ControllerPlugin.h"
 #include "plugins/LoggingPlugin.h"
 #include "plugins/MsgPluginManager.h"
+#include "pup/PUPPlugin.h"
 #include "plugins/ScriptablePlugin.h"
 #include "plugins/VPXPlugin.h"
 
@@ -28,13 +29,6 @@ namespace
 constexpr uint32_t kHostEndpointId = 1;
 constexpr int kDefaultBackglassWidth = 1920;
 constexpr int kDefaultBackglassHeight = 1080;
-
-struct PUPQueueEventMsg
-{
-  char source;
-  int id;
-  int value;
-};
 
 struct B2SSegmentDigitMsg
 {
@@ -56,6 +50,10 @@ struct HostTexture
   VPXTextureFormat format = VPXTEXFMT_sRGBA8;
   std::vector<uint8_t> pixels;
   SDL_Texture* sdlTexture = nullptr;
+  SDL_Renderer* sdlRenderer = nullptr;
+  int sdlTextureWidth = 0;
+  int sdlTextureHeight = 0;
+  VPXTextureFormat sdlTextureFormat = VPXTEXFMT_sRGBA8;
   bool dirty = false;
 };
 
@@ -453,7 +451,7 @@ bool MediaPluginHost::Impl::Initialize(const Options& options,
   onVpxGameEndId_ = api.GetMsgID(VPXPI_NAMESPACE, VPXPI_EVT_ON_GAME_END);
   onSoundCommandId_ =
       api.GetMsgID(CTLPI_NAMESPACE, CTLPI_EVT_ON_SOUND_COMMAND);
-  pupQueueEventId_ = api.GetMsgID("PUP", "QueueEvent");
+  pupQueueEventId_ = api.GetMsgID(PUPPI_NAMESPACE, PUPPI_MSG_QUEUE_EVENT);
 
   api.SubscribeMsg(kHostEndpointId, getLoggingApiId_, OnGetLoggingApi, this);
   api.SubscribeMsg(kHostEndpointId, getScriptApiId_, OnGetScriptApi, this);
@@ -1150,7 +1148,13 @@ void MediaPluginHost::Impl::DeleteTexture(VPXTexture texture)
   }
   if (hostTexture->sdlTexture != nullptr)
   {
+    if (hostTexture->sdlRenderer != nullptr)
+    {
+      SDL_FlushRenderer(hostTexture->sdlRenderer);
+    }
     SDL_DestroyTexture(hostTexture->sdlTexture);
+    hostTexture->sdlTexture = nullptr;
+    hostTexture->sdlRenderer = nullptr;
   }
   delete hostTexture;
 }
@@ -1184,12 +1188,24 @@ void MediaPluginHost::Impl::DrawImage(VPXRenderContext2D* ctx,
     return;
   }
 
-  if (hostTexture->sdlTexture == nullptr || hostTexture->dirty)
+  const bool recreateTexture =
+      hostTexture->sdlTexture == nullptr ||
+      hostTexture->sdlRenderer != self->backglassRenderer_ ||
+      hostTexture->sdlTextureWidth != hostTexture->width ||
+      hostTexture->sdlTextureHeight != hostTexture->height ||
+      hostTexture->sdlTextureFormat != hostTexture->format;
+  if (recreateTexture || hostTexture->dirty)
+  {
+    SDL_FlushRenderer(self->backglassRenderer_);
+  }
+
+  if (recreateTexture)
   {
     if (hostTexture->sdlTexture != nullptr)
     {
       SDL_DestroyTexture(hostTexture->sdlTexture);
       hostTexture->sdlTexture = nullptr;
+      hostTexture->sdlRenderer = nullptr;
     }
     hostTexture->sdlTexture = SDL_CreateTexture(
         self->backglassRenderer_, SdlFormat(hostTexture->format),
@@ -1198,7 +1214,14 @@ void MediaPluginHost::Impl::DrawImage(VPXRenderContext2D* ctx,
     {
       return;
     }
+    hostTexture->sdlRenderer = self->backglassRenderer_;
+    hostTexture->sdlTextureWidth = hostTexture->width;
+    hostTexture->sdlTextureHeight = hostTexture->height;
+    hostTexture->sdlTextureFormat = hostTexture->format;
     SDL_SetTextureBlendMode(hostTexture->sdlTexture, SDL_BLENDMODE_BLEND);
+  }
+  if (hostTexture->dirty)
+  {
     SDL_UpdateTexture(hostTexture->sdlTexture, nullptr,
                       hostTexture->pixels.data(),
                       hostTexture->width * BytesPerPixel(hostTexture->format));
@@ -1464,7 +1487,17 @@ bool MediaPluginHost::Impl::EnsureBackglassWindow()
   }
   SDL_ShowWindow(backglassWindow_);
 
-  backglassRenderer_ = SDL_CreateRenderer(backglassWindow_, nullptr);
+  const char* rendererName = nullptr;
+#if defined(__APPLE__)
+  rendererName = "opengl";
+#endif
+  backglassRenderer_ = SDL_CreateRenderer(backglassWindow_, rendererName);
+  if (backglassRenderer_ == nullptr && rendererName != nullptr)
+  {
+    std::printf("Media backglass %s renderer creation failed: %s\n",
+                rendererName, SDL_GetError());
+    backglassRenderer_ = SDL_CreateRenderer(backglassWindow_, nullptr);
+  }
   if (backglassRenderer_ == nullptr)
   {
     std::printf("Media backglass renderer creation failed: %s\n",
@@ -1473,6 +1506,8 @@ bool MediaPluginHost::Impl::EnsureBackglassWindow()
     backglassWindow_ = nullptr;
     return false;
   }
+  std::printf("Media backglass renderer: %s\n",
+              SDL_GetRendererName(backglassRenderer_));
   return true;
 }
 

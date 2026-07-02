@@ -16,11 +16,11 @@ echo "  LUA_VERSION: ${LUA_VERSION}"
 echo "  PINMAME_SHA: ${PINMAME_SHA}"
 echo "  PINMAME_NVRAM_MAPS_SHA: ${PINMAME_NVRAM_MAPS_SHA}"
 echo "  LIBPPUC_SHA: ${LIBPPUC_SHA}"
-ppuc_print_dependency_source LIBPPUC libppuc "${LIBPPUC_SHA}"
+print_dependency_source LIBPPUC "${LIBPPUC_SHA}" LIBPPUC_SOURCE_DIR
 echo "  LIBSDLDMD_SHA: ${LIBSDLDMD_SHA}"
-ppuc_print_dependency_source LIBSDLDMD libsdldmd "${LIBSDLDMD_SHA}"
+print_dependency_source LIBSDLDMD "${LIBSDLDMD_SHA}" LIBSDLDMD_SOURCE_DIR
 echo "  VPINBALL_SHA: ${VPINBALL_SHA}"
-ppuc_print_dependency_source VPINBALL vpinball "${VPINBALL_SHA}"
+print_dependency_source VPINBALL "${VPINBALL_SHA}" VPINBALL_SOURCE_DIR
 echo ""
 
 if [ -z "${CACHE_DIR}" ]; then
@@ -77,7 +77,7 @@ if [ "${FLITE_EXPECTED_SHA}" != "${FLITE_FOUND_SHA}" ] || [ "${FLITE_ARTIFACTS_O
    cd ..
 fi
 
-LIBSDLDMD_EXPECTED_SHA="$(ppuc_dependency_cache_key libsdldmd "${LIBSDLDMD_SHA}")-macos${MACOSX_DEPLOYMENT_TARGET}"
+LIBSDLDMD_EXPECTED_SHA="$(dependency_cache_key "${LIBSDLDMD_SHA}" LIBSDLDMD_SOURCE_DIR)-macos${MACOSX_DEPLOYMENT_TARGET}"
 LIBSDLDMD_FOUND_SHA="$([ -f libsdldmd/cache.txt ] && cat libsdldmd/cache.txt || echo "")"
 
 if [ -n "${LIBSDLDMD_SHA}" ] && [ "${LIBSDLDMD_EXPECTED_SHA}" != "${LIBSDLDMD_FOUND_SHA}" ]; then
@@ -87,7 +87,7 @@ if [ -n "${LIBSDLDMD_SHA}" ] && [ "${LIBSDLDMD_EXPECTED_SHA}" != "${LIBSDLDMD_FO
    mkdir libsdldmd
    cd libsdldmd
 
-   ppuc_prepare_dependency_source libsdldmd "${LIBSDLDMD_SHA}" "https://github.com/PPUC/libsdldmd/archive/${LIBSDLDMD_SHA}.tar.gz"
+   prepare_dependency_source libsdldmd "${LIBSDLDMD_SHA}" "https://github.com/PPUC/libsdldmd/archive/${LIBSDLDMD_SHA}.tar.gz" LIBSDLDMD_SOURCE_DIR
    cd libsdldmd
 
    BUILD_TYPE=${BUILD_TYPE} platforms/macos/arm64/external.sh
@@ -286,7 +286,7 @@ fi
 # libppuc
 #
 
-LIBPPUC_EXPECTED_SHA="$(ppuc_dependency_cache_key libppuc "${LIBPPUC_SHA}")"
+LIBPPUC_EXPECTED_SHA="$(dependency_cache_key "${LIBPPUC_SHA}" LIBPPUC_SOURCE_DIR)"
 LIBPPUC_FOUND_SHA="$([ -f libppuc/cache.txt ] && cat libppuc/cache.txt || echo "")"
 
 if [ "${LIBPPUC_EXPECTED_SHA}" != "${LIBPPUC_FOUND_SHA}" ]; then
@@ -296,7 +296,7 @@ if [ "${LIBPPUC_EXPECTED_SHA}" != "${LIBPPUC_FOUND_SHA}" ]; then
    mkdir libppuc
    cd libppuc
 
-   ppuc_prepare_dependency_source libppuc "${LIBPPUC_SHA}" "https://github.com/PPUC/libppuc/archive/${LIBPPUC_SHA}.tar.gz"
+   prepare_dependency_source libppuc "${LIBPPUC_SHA}" "https://github.com/PPUC/libppuc/archive/${LIBPPUC_SHA}.tar.gz" LIBPPUC_SOURCE_DIR
    cd libppuc
 
    BUILD_TYPE=${BUILD_TYPE} platforms/macos/arm64/external.sh
