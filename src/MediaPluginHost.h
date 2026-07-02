@@ -18,6 +18,7 @@ public:
   {
     bool enablePup = false;
     bool enableAltSound = false;
+    bool enableB2S = false;
     bool debug = false;
     const char* pluginDir = nullptr;
     const char* pupFolder = nullptr;
@@ -40,6 +41,8 @@ public:
   void OnGameStart();
   void OnGameEnd();
   void QueueEvent(char source, int id, int value);
+  void QueueSegmentDisplay(int digit, int value);
+  void QueuePlayerScore(int player, int score);
   void QueueDmdTrigger(uint16_t id);
   void OnSoundCommand(int boardNo, int cmd);
   void Process();

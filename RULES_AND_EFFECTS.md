@@ -6,11 +6,8 @@ PPUC rules are Lua scripts loaded by `ppuc-pinmame` with:
 --rules <path>
 ```
 
-The path can be one `.lua` file or a directory containing `.lua` files. When a
-directory is used, `ppuc-pinmame` loads top-level `.lua` files in filename order.
-
-The old trigger-rule file format and separate speech text file are no longer
-supported. Speech callouts are written directly in Lua with `ppuc.speech(...)`.
+The path is a directory containing `.lua` files. `ppuc-pinmame` loads top-level
+`.lua` files in filename order.
 
 ## What Rules Can Do
 

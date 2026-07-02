@@ -6,12 +6,16 @@
 #include <cstring>
 #include <filesystem>
 #include <format>
+#include <initializer_list>
 #include <limits>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <utility>
+#include <unordered_map>
 
 #include "SDL3/SDL.h"
+#include "SDL3_image/SDL_image.h"
 
 #include "plugins/ControllerPlugin.h"
 #include "plugins/LoggingPlugin.h"
@@ -30,6 +34,18 @@ struct PUPQueueEventMsg
   char source;
   int id;
   int value;
+};
+
+struct B2SSegmentDigitMsg
+{
+  int digit;
+  int value;
+};
+
+struct B2SPlayerScoreMsg
+{
+  int player;
+  int score;
 };
 
 struct HostTexture
@@ -170,6 +186,8 @@ public:
   void OnGameStart();
   void OnGameEnd();
   void QueueEvent(char source, int id, int value);
+  void QueueSegmentDisplay(int digit, int value);
+  void QueuePlayerScore(int player, int score);
   void QueueDmdTrigger(uint16_t id);
   void OnSoundCommand(int boardNo, int cmd);
   void Process();
@@ -189,16 +207,17 @@ private:
   static void MSGPIAPI Log(const char* source, const char* func, int line,
                            unsigned int level, const char* message);
 
-  static void MSGPIAPI RegisterScriptClass(ScriptClassDef*) {}
+  static void MSGPIAPI RegisterScriptClass(ScriptClassDef* classDef);
   static void MSGPIAPI RegisterScriptTypeAlias(const char*, const char*) {}
   static void MSGPIAPI RegisterScriptArrayType(ScriptArrayDef*) {}
   static void MSGPIAPI SubmitTypeLibrary(unsigned int) {}
-  static void MSGPIAPI UnregisterScriptClass(ScriptClassDef*) {}
+  static void MSGPIAPI UnregisterScriptClass(ScriptClassDef* classDef);
   static void MSGPIAPI UnregisterScriptTypeAlias(const char*) {}
   static void MSGPIAPI UnregisterScriptArrayType(ScriptArrayDef*) {}
   static void MSGPIAPI OnScriptError(unsigned int type, const char* message);
-  static void MSGPIAPI SetCOMObjectOverride(const char*, const ScriptClassDef*) {}
-  static ScriptClassDef* MSGPIAPI GetClassDef(const char*) { return nullptr; }
+  static void MSGPIAPI SetCOMObjectOverride(const char* classname,
+                                            const ScriptClassDef* classDef);
+  static ScriptClassDef* MSGPIAPI GetClassDef(const char* typeName);
 
   static void MSGPIAPI GetVpxInfo(VPXInfo* info);
   static void MSGPIAPI GetTableInfo(VPXTableInfo* info);
@@ -210,7 +229,7 @@ private:
   static void MSGPIAPI GetInputState(VPXInputState*) {}
   static void MSGPIAPI SetInputState(VPXInputState*) {}
   static double MSGPIAPI GetGameTime();
-  static VPXTexture MSGPIAPI CreateTexture(uint8_t*, int) { return nullptr; }
+  static VPXTexture MSGPIAPI CreateTexture(uint8_t* rawData, int size);
   static void MSGPIAPI UpdateTexture(VPXTexture* texture, int width, int height,
                                      VPXTextureFormat format,
                                      const void* image);
@@ -245,6 +264,16 @@ private:
   void ConfigureSetting(const std::string& pluginId,
                         MsgPI::MsgPluginManager::SettingAction action,
                         MsgSettingDef* settingDef);
+  bool EnsureB2SServer();
+  void ReleaseB2SServer();
+  std::optional<unsigned int> FindScriptMember(
+      const ScriptClassDef* classDef, const char* name,
+      std::initializer_list<const char*> argTypes) const;
+  bool CallB2SMember(const char* name, std::initializer_list<const char*> argTypes,
+                     ScriptVariant* args);
+  void DispatchB2SEvent(const PUPQueueEventMsg& event);
+  void DispatchB2SSegmentDigit(const B2SSegmentDigitMsg& digit);
+  void DispatchB2SPlayerScore(const B2SPlayerScoreMsg& score);
   bool EnsureBackglassWindow();
   void DestroyBackglassWindow();
 
@@ -254,6 +283,8 @@ private:
   std::vector<std::shared_ptr<MsgPI::MsgPlugin>> loadedPlugins_;
   std::mutex pendingMutex_;
   std::vector<PUPQueueEventMsg> pendingEvents_;
+  std::vector<B2SSegmentDigitMsg> pendingB2SSegmentDigits_;
+  std::vector<B2SPlayerScoreMsg> pendingB2SPlayerScores_;
   std::vector<std::pair<int, int>> pendingSoundCommands_;
   Options options_;
   std::string pluginDir_;
@@ -271,6 +302,7 @@ private:
   bool loggedNoBackglassRenderer_ = false;
   bool loggedNoPluginBackglassRenderer_ = false;
   bool loggedBackglassRenderer_ = false;
+  bool loggedB2SServerUnavailable_ = false;
   uint64_t lastBackglassDiagnosticMs_ = 0;
 
   unsigned int getLoggingApiId_ = 0;
@@ -287,6 +319,10 @@ private:
 
   AudioSrcId pinmameAudioSrc_ = {};
   uint32_t nextAudioResId_ = 1;
+  std::unordered_map<std::string, ScriptClassDef*> scriptClasses_;
+  std::unordered_map<std::string, const ScriptClassDef*> comOverrides_;
+  const ScriptClassDef* b2sServerClass_ = nullptr;
+  void* b2sServer_ = nullptr;
 
   static Impl* instance_;
   static LoggingPluginAPI loggingApi_;
@@ -447,6 +483,11 @@ bool MediaPluginHost::Impl::Initialize(const Options& options,
   {
     LoadPluginById("AltSound");
   }
+  if (options.enableB2S)
+  {
+    LoadPluginById("B2S");
+    EnsureB2SServer();
+  }
 
   pinmameAudioSrc_.id.endpointId = kHostEndpointId;
   pinmameAudioSrc_.id.resId = nextAudioResId_++;
@@ -467,6 +508,7 @@ void MediaPluginHost::Impl::Shutdown()
   }
 
   OnGameEnd();
+  ReleaseB2SServer();
   DestroyBackglassWindow();
 
   const MsgPluginAPI& api = pluginManager_.GetMsgAPI();
@@ -478,6 +520,8 @@ void MediaPluginHost::Impl::Shutdown()
     }
   }
   loadedPlugins_.clear();
+  scriptClasses_.clear();
+  comOverrides_.clear();
 
   if (getLoggingApiId_ != 0)
   {
@@ -590,7 +634,7 @@ void MediaPluginHost::Impl::OnGameEnd()
 
 void MediaPluginHost::Impl::QueueEvent(char source, int id, int value)
 {
-  if (!initialized_ || pupQueueEventId_ == 0)
+  if (!initialized_)
   {
     return;
   }
@@ -598,6 +642,32 @@ void MediaPluginHost::Impl::QueueEvent(char source, int id, int value)
   if (pendingEvents_.size() < 1024)
   {
     pendingEvents_.push_back(PUPQueueEventMsg{source, id, value});
+  }
+}
+
+void MediaPluginHost::Impl::QueueSegmentDisplay(int digit, int value)
+{
+  if (!initialized_ || !options_.enableB2S)
+  {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(pendingMutex_);
+  if (pendingB2SSegmentDigits_.size() < 1024)
+  {
+    pendingB2SSegmentDigits_.push_back(B2SSegmentDigitMsg{digit, value});
+  }
+}
+
+void MediaPluginHost::Impl::QueuePlayerScore(int player, int score)
+{
+  if (!initialized_ || !options_.enableB2S)
+  {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(pendingMutex_);
+  if (pendingB2SPlayerScores_.size() < 128)
+  {
+    pendingB2SPlayerScores_.push_back(B2SPlayerScoreMsg{player, score});
   }
 }
 
@@ -627,16 +697,32 @@ void MediaPluginHost::Impl::Process()
     return;
   }
   std::vector<PUPQueueEventMsg> events;
+  std::vector<B2SSegmentDigitMsg> b2sSegmentDigits;
+  std::vector<B2SPlayerScoreMsg> b2sPlayerScores;
   std::vector<std::pair<int, int>> soundCommands;
   {
     std::lock_guard<std::mutex> lock(pendingMutex_);
     events.swap(pendingEvents_);
+    b2sSegmentDigits.swap(pendingB2SSegmentDigits_);
+    b2sPlayerScores.swap(pendingB2SPlayerScores_);
     soundCommands.swap(pendingSoundCommands_);
   }
   for (PUPQueueEventMsg& event : events)
   {
-    pluginManager_.GetMsgAPI().BroadcastMsg(kHostEndpointId, pupQueueEventId_,
-                                            &event);
+    if (pupQueueEventId_ != 0)
+    {
+      pluginManager_.GetMsgAPI().BroadcastMsg(kHostEndpointId, pupQueueEventId_,
+                                              &event);
+    }
+    DispatchB2SEvent(event);
+  }
+  for (const B2SSegmentDigitMsg& digit : b2sSegmentDigits)
+  {
+    DispatchB2SSegmentDigit(digit);
+  }
+  for (const B2SPlayerScoreMsg& score : b2sPlayerScores)
+  {
+    DispatchB2SPlayerScore(score);
   }
   for (const auto& [boardNo, cmd] : soundCommands)
   {
@@ -649,7 +735,7 @@ void MediaPluginHost::Impl::Process()
   }
   pluginManager_.ProcessAsyncCallbacks();
 
-  if (!options_.enablePup)
+  if (!options_.enablePup && !options_.enableB2S)
   {
     return;
   }
@@ -671,16 +757,34 @@ void MediaPluginHost::Impl::Process()
   {
     if (!loggedNoBackglassRenderer_)
     {
-      std::printf("PUP backglass: no ancillary renderers registered\n");
+      std::printf("Media backglass: no ancillary renderers registered\n");
       loggedNoBackglassRenderer_ = true;
     }
     return;
   }
 
   AncillaryRendererDef* renderer = nullptr;
+  const char* preferredRendererId = options_.enableB2S ? "B2S" : nullptr;
+  if (preferredRendererId != nullptr)
+  {
+    for (unsigned int i = 0;
+         i < getRenderer.count && i < getRenderer.maxEntryCount; ++i)
+    {
+      if (entries[i].Render != nullptr && entries[i].id != nullptr &&
+          std::strcmp(entries[i].id, preferredRendererId) == 0)
+      {
+        renderer = &entries[i];
+        break;
+      }
+    }
+  }
   for (unsigned int i = 0; i < getRenderer.count && i < getRenderer.maxEntryCount;
        ++i)
   {
+    if (renderer != nullptr)
+    {
+      break;
+    }
     if (entries[i].Render != nullptr &&
         (entries[i].id == nullptr ||
          std::strcmp(entries[i].id, "PPUCBackglass") != 0))
@@ -693,7 +797,7 @@ void MediaPluginHost::Impl::Process()
   {
     if (!loggedNoPluginBackglassRenderer_)
     {
-      std::printf("PUP backglass: no plugin renderer found among %u renderers\n",
+      std::printf("Media backglass: no plugin renderer found among %u renderers\n",
                   getRenderer.count);
       loggedNoPluginBackglassRenderer_ = true;
     }
@@ -701,7 +805,7 @@ void MediaPluginHost::Impl::Process()
   }
   if (!loggedBackglassRenderer_)
   {
-    std::printf("PUP backglass: using renderer %s (%s)\n",
+    std::printf("Media backglass: using renderer %s (%s)\n",
                 renderer->id ? renderer->id : "<unnamed>",
                 renderer->name ? renderer->name : "");
     loggedBackglassRenderer_ = true;
@@ -737,7 +841,7 @@ void MediaPluginHost::Impl::Process()
   if ((!rendered || !backglassFrameDrewImage_) &&
       nowMs - lastBackglassDiagnosticMs_ >= 2000)
   {
-    std::printf("PUP backglass: renderer=%s rendered=%d drewImage=%d\n",
+    std::printf("Media backglass: renderer=%s rendered=%d drewImage=%d\n",
                 renderer->id ? renderer->id : "<unnamed>", rendered,
                 backglassFrameDrewImage_ ? 1 : 0);
     lastBackglassDiagnosticMs_ = nowMs;
@@ -855,10 +959,69 @@ void MediaPluginHost::Impl::Log(const char* source, const char*, int,
               message ? message : "");
 }
 
+void MediaPluginHost::Impl::RegisterScriptClass(ScriptClassDef* classDef)
+{
+  if (instance_ == nullptr || classDef == nullptr || classDef->name.name == nullptr)
+  {
+    return;
+  }
+  instance_->scriptClasses_[classDef->name.name] = classDef;
+}
+
+void MediaPluginHost::Impl::UnregisterScriptClass(ScriptClassDef* classDef)
+{
+  if (instance_ == nullptr || classDef == nullptr || classDef->name.name == nullptr)
+  {
+    return;
+  }
+  auto it = instance_->scriptClasses_.find(classDef->name.name);
+  if (it != instance_->scriptClasses_.end() && it->second == classDef)
+  {
+    instance_->scriptClasses_.erase(it);
+  }
+  for (auto overrideIt = instance_->comOverrides_.begin();
+       overrideIt != instance_->comOverrides_.end();)
+  {
+    if (overrideIt->second == classDef)
+    {
+      overrideIt = instance_->comOverrides_.erase(overrideIt);
+    }
+    else
+    {
+      ++overrideIt;
+    }
+  }
+}
+
 void MediaPluginHost::Impl::OnScriptError(unsigned int type,
                                           const char* message)
 {
   std::printf("[plugin-script:%u] %s\n", type, message ? message : "");
+}
+
+void MediaPluginHost::Impl::SetCOMObjectOverride(
+    const char* classname, const ScriptClassDef* classDef)
+{
+  if (instance_ == nullptr || classname == nullptr || classname[0] == '\0')
+  {
+    return;
+  }
+  if (classDef == nullptr)
+  {
+    instance_->comOverrides_.erase(classname);
+    return;
+  }
+  instance_->comOverrides_[classname] = classDef;
+}
+
+ScriptClassDef* MediaPluginHost::Impl::GetClassDef(const char* typeName)
+{
+  if (instance_ == nullptr || typeName == nullptr)
+  {
+    return nullptr;
+  }
+  auto it = instance_->scriptClasses_.find(typeName);
+  return it == instance_->scriptClasses_.end() ? nullptr : it->second;
 }
 
 void MediaPluginHost::Impl::GetVpxInfo(VPXInfo* info)
@@ -885,6 +1048,49 @@ void MediaPluginHost::Impl::GetTableInfo(VPXTableInfo* info)
 double MediaPluginHost::Impl::GetGameTime()
 {
   return static_cast<double>(SDL_GetTicks()) / 1000.0;
+}
+
+VPXTexture MediaPluginHost::Impl::CreateTexture(uint8_t* rawData, int size)
+{
+  if (rawData == nullptr || size <= 0)
+  {
+    return nullptr;
+  }
+
+  SDL_IOStream* io = SDL_IOFromConstMem(rawData, size);
+  if (io == nullptr)
+  {
+    return nullptr;
+  }
+  SDL_Surface* surface = IMG_Load_IO(io, true);
+  if (surface == nullptr)
+  {
+    return nullptr;
+  }
+  SDL_Surface* converted = SDL_ConvertSurface(surface, SDL_PIXELFORMAT_RGBA32);
+  SDL_DestroySurface(surface);
+  if (converted == nullptr)
+  {
+    return nullptr;
+  }
+
+  auto* hostTexture = new HostTexture();
+  hostTexture->width = converted->w;
+  hostTexture->height = converted->h;
+  hostTexture->format = VPXTEXFMT_sRGBA8;
+  hostTexture->pixels.resize(static_cast<size_t>(converted->w) *
+                             static_cast<size_t>(converted->h) * 4u);
+  for (int y = 0; y < converted->h; ++y)
+  {
+    const auto* src = static_cast<const uint8_t*>(converted->pixels) +
+                      static_cast<size_t>(y) * converted->pitch;
+    auto* dst = hostTexture->pixels.data() +
+                static_cast<size_t>(y) * static_cast<size_t>(converted->w) * 4u;
+    std::memcpy(dst, src, static_cast<size_t>(converted->w) * 4u);
+  }
+  hostTexture->dirty = true;
+  SDL_DestroySurface(converted);
+  return hostTexture;
 }
 
 void MediaPluginHost::Impl::UpdateTexture(VPXTexture* texture, int width,
@@ -1027,6 +1233,157 @@ void MediaPluginHost::Impl::LoadPluginById(const std::string& id)
   }
 }
 
+bool MediaPluginHost::Impl::EnsureB2SServer()
+{
+  if (!options_.enableB2S)
+  {
+    return false;
+  }
+  if (b2sServer_ != nullptr)
+  {
+    return true;
+  }
+
+  auto it = comOverrides_.find("B2S.Server");
+  if (it == comOverrides_.end() || it->second == nullptr ||
+      it->second->CreateObject == nullptr)
+  {
+    if (!loggedB2SServerUnavailable_)
+    {
+      std::printf("B2S server is not available from plugin script API\n");
+      loggedB2SServerUnavailable_ = true;
+    }
+    return false;
+  }
+
+  b2sServerClass_ = it->second;
+  b2sServer_ = b2sServerClass_->CreateObject();
+  if (b2sServer_ == nullptr)
+  {
+    std::printf("B2S server object creation failed\n");
+    b2sServerClass_ = nullptr;
+    return false;
+  }
+  return true;
+}
+
+void MediaPluginHost::Impl::ReleaseB2SServer()
+{
+  if (b2sServer_ == nullptr || b2sServerClass_ == nullptr)
+  {
+    b2sServer_ = nullptr;
+    b2sServerClass_ = nullptr;
+    return;
+  }
+
+  if (auto member = FindScriptMember(b2sServerClass_, "Release", {}))
+  {
+    b2sServerClass_->members[*member].Call(b2sServer_, static_cast<int>(*member),
+                                           nullptr, nullptr);
+  }
+  b2sServer_ = nullptr;
+  b2sServerClass_ = nullptr;
+}
+
+std::optional<unsigned int> MediaPluginHost::Impl::FindScriptMember(
+    const ScriptClassDef* classDef, const char* name,
+    std::initializer_list<const char*> argTypes) const
+{
+  if (classDef == nullptr || name == nullptr)
+  {
+    return std::nullopt;
+  }
+  for (unsigned int i = 0; i < classDef->nMembers; ++i)
+  {
+    const ScriptClassMemberDef& member = classDef->members[i];
+    if (member.name.name == nullptr || std::strcmp(member.name.name, name) != 0 ||
+        member.nArgs != argTypes.size() || member.Call == nullptr)
+    {
+      continue;
+    }
+
+    bool argsMatch = true;
+    unsigned int argIndex = 0;
+    for (const char* expectedType : argTypes)
+    {
+      const char* actualType = member.callArgType[argIndex].name;
+      if (expectedType == nullptr || actualType == nullptr ||
+          std::strcmp(actualType, expectedType) != 0)
+      {
+        argsMatch = false;
+        break;
+      }
+      ++argIndex;
+    }
+    if (argsMatch)
+    {
+      return i;
+    }
+  }
+  return std::nullopt;
+}
+
+bool MediaPluginHost::Impl::CallB2SMember(
+    const char* name, std::initializer_list<const char*> argTypes,
+    ScriptVariant* args)
+{
+  if (!EnsureB2SServer())
+  {
+    return false;
+  }
+  auto member = FindScriptMember(b2sServerClass_, name, argTypes);
+  if (!member)
+  {
+    return false;
+  }
+  b2sServerClass_->members[*member].Call(b2sServer_, static_cast<int>(*member),
+                                         args, nullptr);
+  return true;
+}
+
+void MediaPluginHost::Impl::DispatchB2SEvent(const PUPQueueEventMsg& event)
+{
+  if (!options_.enableB2S)
+  {
+    return;
+  }
+  if (event.source != 'L' && event.source != 'S' && event.source != 'G')
+  {
+    return;
+  }
+
+  ScriptVariant args[2] = {};
+  args[0].vInt = event.id;
+  args[1].vInt = event.value;
+  CallB2SMember("B2SSetData", {"int", "int"}, args);
+}
+
+void MediaPluginHost::Impl::DispatchB2SSegmentDigit(
+    const B2SSegmentDigitMsg& digit)
+{
+  if (!options_.enableB2S)
+  {
+    return;
+  }
+  ScriptVariant args[2] = {};
+  args[0].vInt = digit.digit;
+  args[1].vInt = digit.value;
+  CallB2SMember("B2SSetScoreDigit", {"int", "int"}, args);
+}
+
+void MediaPluginHost::Impl::DispatchB2SPlayerScore(
+    const B2SPlayerScoreMsg& score)
+{
+  if (!options_.enableB2S)
+  {
+    return;
+  }
+  ScriptVariant args[2] = {};
+  args[0].vInt = score.player;
+  args[1].vInt = score.score;
+  CallB2SMember("B2SSetScorePlayer", {"int", "int"}, args);
+}
+
 void MediaPluginHost::Impl::ConfigureSetting(
     const std::string& pluginId,
     MsgPI::MsgPluginManager::SettingAction action, MsgSettingDef* settingDef)
@@ -1081,7 +1438,7 @@ bool MediaPluginHost::Impl::EnsureBackglassWindow()
   {
     if (!SDL_InitSubSystem(SDL_INIT_VIDEO))
     {
-      std::printf("SDL video init failed for PUP backglass: %s\n",
+      std::printf("SDL video init failed for media backglass: %s\n",
                   SDL_GetError());
       return false;
     }
@@ -1095,10 +1452,10 @@ bool MediaPluginHost::Impl::EnsureBackglassWindow()
       options_.backglassHeight > 0 ? options_.backglassHeight
                                    : kDefaultBackglassHeight;
   backglassWindow_ =
-      SDL_CreateWindow("PPUC PUP Backglass", width, height, SDL_WINDOW_HIDDEN);
+      SDL_CreateWindow("PPUC Backglass", width, height, SDL_WINDOW_HIDDEN);
   if (backglassWindow_ == nullptr)
   {
-    std::printf("PUP backglass window creation failed: %s\n", SDL_GetError());
+    std::printf("Media backglass window creation failed: %s\n", SDL_GetError());
     return false;
   }
   if (options_.backglassScreen >= 0)
@@ -1110,7 +1467,7 @@ bool MediaPluginHost::Impl::EnsureBackglassWindow()
   backglassRenderer_ = SDL_CreateRenderer(backglassWindow_, nullptr);
   if (backglassRenderer_ == nullptr)
   {
-    std::printf("PUP backglass renderer creation failed: %s\n",
+    std::printf("Media backglass renderer creation failed: %s\n",
                 SDL_GetError());
     SDL_DestroyWindow(backglassWindow_);
     backglassWindow_ = nullptr;
@@ -1160,6 +1517,16 @@ void MediaPluginHost::OnGameEnd() { impl_->OnGameEnd(); }
 void MediaPluginHost::QueueEvent(char source, int id, int value)
 {
   impl_->QueueEvent(source, id, value);
+}
+
+void MediaPluginHost::QueueSegmentDisplay(int digit, int value)
+{
+  impl_->QueueSegmentDisplay(digit, value);
+}
+
+void MediaPluginHost::QueuePlayerScore(int player, int score)
+{
+  impl_->QueuePlayerScore(player, score);
 }
 
 void MediaPluginHost::QueueDmdTrigger(uint16_t id)

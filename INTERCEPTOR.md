@@ -8,9 +8,9 @@ file loaded with:
 --rules <path>
 ```
 
-The path can be one Lua file or a directory of Lua files. The same Lua rules can
-emit DMD/PUP triggers, speech callouts, board effect triggers, and host-side
-interceptor actions.
+The path is a directory of Lua files. The same Lua rules can emit DMD/PUP
+triggers, speech callouts, board effect triggers, and host-side interceptor
+actions.
 
 ## Runtime API
 

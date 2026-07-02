@@ -568,11 +568,19 @@ ppuc_build_vpinball_media_plugins() {
       if [ -f "${plugin_package_dir}/pup/plugin-pup.dylib" ]; then
          install_name_tool -add_rpath "@loader_path/../.." "${plugin_package_dir}/pup/plugin-pup.dylib" 2>/dev/null || true
       fi
+      if [ -f "${plugin_package_dir}/b2s/plugin-b2s.dylib" ]; then
+         install_name_tool -add_rpath "@loader_path/../.." "${plugin_package_dir}/b2s/plugin-b2s.dylib" 2>/dev/null || true
+      fi
+      if [ -f "${plugin_package_dir}/b2slegacy/plugin-b2slegacy.dylib" ]; then
+         install_name_tool -add_rpath "@loader_path/../.." "${plugin_package_dir}/b2slegacy/plugin-b2slegacy.dylib" 2>/dev/null || true
+      fi
       rm -f "${plugin_package_dir}"/pup/libSDL3.dylib
       rm -f "${plugin_package_dir}"/pup/libSDL3.[0-9]*.dylib
       rm -f "${plugin_package_dir}"/pup/libSDL3_image*.dylib
       rm -f "${plugin_package_dir}"/pup/libSDL3_mixer*.dylib
       rm -f "${plugin_package_dir}"/pup/libpupdmd*.dylib
+      rm -f "${plugin_package_dir}"/b2slegacy/libSDL3.dylib
+      rm -f "${plugin_package_dir}"/b2slegacy/libSDL3.[0-9]*.dylib
 
       ppuc_relink_macos_dylib_alias "${plugin_package_dir}/pup" "libSDL3_ttf.0.dylib" "libSDL3_ttf.0.*.dylib"
       ppuc_relink_macos_dylib_alias "${plugin_package_dir}/pup" "libSDL3_ttf.dylib" "libSDL3_ttf.0.dylib"
@@ -586,6 +594,9 @@ ppuc_build_vpinball_media_plugins() {
       rm -f "${plugin_package_dir}"/pup/libSDL3_image.so*
       rm -f "${plugin_package_dir}"/pup/libSDL3_mixer.so*
       rm -f "${plugin_package_dir}"/pup/libpupdmd.so*
+      rm -f "${plugin_package_dir}"/b2slegacy/libSDL3.so*
+   elif [ "${platform}" = "win" ] || [ "${platform}" = "win-mingw" ]; then
+      rm -f "${plugin_package_dir}"/b2slegacy/SDL3*.dll
    fi
 }
 

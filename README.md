@@ -160,11 +160,11 @@ pwmOutput:
 
 ### Lua Rules
 
-Use `--rules <path>` to run Lua rules. The path can point to one `.lua` file or
-to a directory. Directory loading is non-recursive, loads top-level `*.lua`
-files in filename order, and fails on the first load or runtime error. Rules
-are independent from `--pup`, and can also drive speech callouts, board-local
-PPUC effects, and host-side interceptor behavior.
+Use `--rules <path>` to run Lua rules. The path is a directory.
+Directory loading is non-recursive, loads top-level `*.lua` files in filename
+order, and fails on the first load or runtime error. Rules are independent
+from `--pup`, and can also drive speech callouts, board-local PPUC effects,
+and host-side interceptor behavior.
 
 Rules define handlers on the `ppuc` namespace:
 

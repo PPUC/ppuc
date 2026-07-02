@@ -11,6 +11,7 @@
 #include <inttypes.h>
 #include <stdlib.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <climits>
@@ -316,6 +317,7 @@ bool opt_interactive = false;
 bool opt_serum = false;
 bool opt_pup = false;
 bool opt_altsound = false;
+bool opt_b2s = false;
 const char* opt_plugin_dir = NULL;
 const char* opt_pup_folder = NULL;
 const char* opt_altsound_folder = NULL;
@@ -328,6 +330,8 @@ std::atomic<int> game_state{0};
 std::atomic<bool> ball_search_game_running{false};
 bool running = true;
 volatile std::sig_atomic_t shutdown_requested = 0;
+std::unordered_map<int, int> segmentDisplayDigitBases;
+int nextSegmentDisplayDigitBase = 1;
 
 template <typename T>
 struct LogCallbackTraits;
@@ -2447,6 +2451,10 @@ static struct cag_option options[] = {
      .access_name = "altsound",
      .value_name = NULL,
      .description = "Enable AltSound through the plugin host (optional)"},
+    {.identifier = '?',
+     .access_name = "b2s",
+     .value_name = NULL,
+     .description = "Enable B2S backglass rendering through the plugin host (optional)"},
     {.identifier = '^',
      .access_name = "plugin-dir",
      .value_name = "VALUE",
@@ -2724,6 +2732,72 @@ void DMDUTILCALLBACK OnDmdPupTrigger(uint16_t id, void* userData)
   }
 }
 
+static bool IsSegmentDisplayType(int displayType)
+{
+  switch (displayType & PINMAME_DISPLAY_TYPE_SEGMASK)
+  {
+    case PINMAME_DISPLAY_TYPE_SEG16:
+    case PINMAME_DISPLAY_TYPE_SEG16R:
+    case PINMAME_DISPLAY_TYPE_SEG10:
+    case PINMAME_DISPLAY_TYPE_SEG9:
+    case PINMAME_DISPLAY_TYPE_SEG8:
+    case PINMAME_DISPLAY_TYPE_SEG8D:
+    case PINMAME_DISPLAY_TYPE_SEG7:
+    case PINMAME_DISPLAY_TYPE_SEG87:
+    case PINMAME_DISPLAY_TYPE_SEG87F:
+    case PINMAME_DISPLAY_TYPE_SEG98:
+    case PINMAME_DISPLAY_TYPE_SEG98F:
+    case PINMAME_DISPLAY_TYPE_SEG7S:
+    case PINMAME_DISPLAY_TYPE_SEG7SC:
+    case PINMAME_DISPLAY_TYPE_SEG16S:
+    case PINMAME_DISPLAY_TYPE_SEG16N:
+    case PINMAME_DISPLAY_TYPE_SEG16D:
+    case PINMAME_DISPLAY_TYPE_SEG8H:
+    case PINMAME_DISPLAY_TYPE_SEG7H:
+    case PINMAME_DISPLAY_TYPE_SEG87H:
+    case PINMAME_DISPLAY_TYPE_SEG87FH:
+    case PINMAME_DISPLAY_TYPE_SEG7SH:
+    case PINMAME_DISPLAY_TYPE_SEG7SCH:
+      return true;
+    default:
+      return false;
+  }
+}
+
+static int DecodeB2SSegmentDigit(uint16_t bitState)
+{
+  switch (bitState & ~0x0080u)
+  {
+    case 0x003Fu: return 0;
+    case 0x0006u:
+    case 0x0300u: return 1;
+    case 0x005Bu: return 2;
+    case 0x004Fu: return 3;
+    case 0x0066u: return 4;
+    case 0x006Du: return 5;
+    case 0x007Du:
+    case 0x007Cu: return 6;
+    case 0x0007u: return 7;
+    case 0x007Fu: return 8;
+    case 0x006Fu:
+    case 0x0067u: return 9;
+    default: return -1;
+  }
+}
+
+static int GetSegmentDisplayDigitBase(int index, int length)
+{
+  auto it = segmentDisplayDigitBases.find(index);
+  if (it != segmentDisplayDigitBases.end())
+  {
+    return it->second;
+  }
+  const int base = nextSegmentDisplayDigitBase;
+  segmentDisplayDigitBases[index] = base;
+  nextSegmentDisplayDigitBase += std::max(1, length);
+  return base;
+}
+
 void PINMAMECALLBACK OnDisplayAvailable(int index, int displayCount, PinmameDisplayLayout* p_displayLayout,
                                         const void* p_userData)
 {
@@ -2735,6 +2809,10 @@ void PINMAMECALLBACK OnDisplayAvailable(int index, int displayCount, PinmameDisp
         "depth=%d, length=%d\n",
         index, displayCount, p_displayLayout->type, p_displayLayout->top, p_displayLayout->left, p_displayLayout->width,
         p_displayLayout->height, p_displayLayout->depth, p_displayLayout->length);
+  }
+  if (p_displayLayout != nullptr && IsSegmentDisplayType(p_displayLayout->type))
+  {
+    GetSegmentDisplayDigitBase(index, p_displayLayout->length);
   }
 }
 
@@ -2768,6 +2846,31 @@ void PINMAMECALLBACK OnDisplayUpdated(int index, void* p_displayData, PinmameDis
   }
   else
   {
+    if (pMediaPluginHost != nullptr && IsSegmentDisplayType(p_displayLayout->type) && p_displayLayout->length > 0)
+    {
+      const int base = GetSegmentDisplayDigitBase(index, p_displayLayout->length);
+      const auto* segments = static_cast<const uint16_t*>(p_displayData);
+      int score = 0;
+      bool hasScoreDigit = false;
+      for (int i = 0; i < p_displayLayout->length; ++i)
+      {
+        const int digit = DecodeB2SSegmentDigit(segments[i]);
+        pMediaPluginHost->QueueSegmentDisplay(base + i, digit);
+        if (digit >= 0)
+        {
+          hasScoreDigit = true;
+          score = score * 10 + digit;
+        }
+        else if (hasScoreDigit)
+        {
+          score *= 10;
+        }
+      }
+      if (hasScoreDigit)
+      {
+        pMediaPluginHost->QueuePlayerScore(index + 1, score);
+      }
+    }
     switch (p_displayLayout->type)
     {
       case PINMAME_DISPLAY_TYPE_SEG16:    // 16 segments
@@ -3157,6 +3260,8 @@ int main(int argc, char** argv)
           opt_pup = ParseIniBool(value);
         else if (key == "AltSound")
           opt_altsound = ParseIniBool(value);
+        else if (key == "B2S")
+          opt_b2s = ParseIniBool(value);
         else if (key == "PluginDir")
           opt_plugin_dir = DuplicateOptionalIniString(value);
         else if (key == "PUPFolder")
@@ -3339,6 +3444,9 @@ int main(int argc, char** argv)
         break;
       case '9':
         opt_altsound = true;
+        break;
+      case '?':
+        opt_b2s = true;
         break;
       case '^':
         opt_plugin_dir = cag_option_get_value(&cag_context);
@@ -3638,12 +3746,13 @@ int main(int argc, char** argv)
     }
   }
 
-  if (opt_pup || opt_altsound)
+  if (opt_pup || opt_altsound || opt_b2s)
   {
     pMediaPluginHost = std::make_unique<MediaPluginHost>(pAudioOutput.get());
     MediaPluginHost::Options mediaOptions;
     mediaOptions.enablePup = opt_pup;
     mediaOptions.enableAltSound = opt_altsound;
+    mediaOptions.enableB2S = opt_b2s;
     mediaOptions.debug = opt_debug;
     mediaOptions.pluginDir = opt_plugin_dir;
     mediaOptions.pupFolder = opt_pup_folder;
