@@ -13,6 +13,7 @@
 #include <optional>
 #include <utility>
 #include <unordered_map>
+#include <vector>
 
 #include "SDL3/SDL.h"
 #include "SDL3_image/SDL_image.h"
@@ -29,6 +30,270 @@ namespace
 constexpr uint32_t kHostEndpointId = 1;
 constexpr int kDefaultBackglassWidth = 1920;
 constexpr int kDefaultBackglassHeight = 1080;
+constexpr float kPi = 3.14159265358979323846f;
+
+uint8_t FloatToByte(float value);
+
+struct SegmentPoint
+{
+  float x;
+  float y;
+};
+
+SDL_FColor ScaleColorAlpha(SDL_FColor color, float alphaScale)
+{
+  color.a = std::clamp(color.a * alphaScale, 0.0f, 1.0f);
+  return color;
+}
+
+SegmentPoint SkewSegmentPoint(const SDL_FRect& rect, SegmentPoint point,
+                              float skew)
+{
+  const float centerY = rect.y + rect.h * 0.5f;
+  point.x += (point.y - centerY) * skew;
+  return point;
+}
+
+SDL_FColor SegmentColor(VPXSegDisplayRenderStyle style, float tintR,
+                        float tintG, float tintB, float luminance,
+                        float brightness, float alpha)
+{
+  float baseR = 1.0f;
+  float baseG = 0.35f;
+  float baseB = 0.12f;
+  switch (style)
+  {
+    case VPXSegStyle_BlueVFD:
+      baseR = 0.35f;
+      baseG = 0.75f;
+      baseB = 1.0f;
+      break;
+    case VPXSegStyle_GreenVFD:
+    case VPXSegStyle_GreenLED:
+      baseR = 0.35f;
+      baseG = 1.0f;
+      baseB = 0.45f;
+      break;
+    case VPXSegStyle_RedLED:
+      baseR = 1.0f;
+      baseG = 0.12f;
+      baseB = 0.08f;
+      break;
+    case VPXSegStyle_YellowLED:
+      baseR = 1.0f;
+      baseG = 0.85f;
+      baseB = 0.16f;
+      break;
+    case VPXSegStyle_Plasma:
+    case VPXSegStyle_GenPlasma:
+    case VPXSegStyle_GenLED:
+    default:
+      break;
+  }
+
+  const float intensity = std::clamp(luminance * brightness, 0.0f, 1.0f);
+  return SDL_FColor{std::clamp(baseR * tintR * intensity, 0.0f, 1.0f),
+                    std::clamp(baseG * tintG * intensity, 0.0f, 1.0f),
+                    std::clamp(baseB * tintB * intensity, 0.0f, 1.0f),
+                    std::clamp(alpha, 0.0f, 1.0f)};
+}
+
+SDL_FRect ScaleSourceRectToOutput(const VPXRenderContext2D* ctx, float srcX,
+                                  float srcY, float srcW, float srcH)
+{
+  const float srcWidth = ctx != nullptr && ctx->srcWidth > 0.0f
+                             ? ctx->srcWidth
+                             : static_cast<float>(kDefaultBackglassWidth);
+  const float srcHeight = ctx != nullptr && ctx->srcHeight > 0.0f
+                              ? ctx->srcHeight
+                              : static_cast<float>(kDefaultBackglassHeight);
+  const float outWidth = ctx != nullptr && ctx->outWidth > 0.0f
+                             ? ctx->outWidth
+                             : srcWidth;
+  const float outHeight = ctx != nullptr && ctx->outHeight > 0.0f
+                              ? ctx->outHeight
+                              : srcHeight;
+  const float scaleX = outWidth / srcWidth;
+  const float scaleY = outHeight / srcHeight;
+  return SDL_FRect{srcX * scaleX, srcY * scaleY, srcW * scaleX,
+                   srcH * scaleY};
+}
+
+SDL_FRect ScaleSourceRectToOutputBottomOrigin(const VPXRenderContext2D* ctx,
+                                              float srcX, float srcY,
+                                              float srcW, float srcH)
+{
+  const float srcHeight = ctx != nullptr && ctx->srcHeight > 0.0f
+                              ? ctx->srcHeight
+                              : static_cast<float>(kDefaultBackglassHeight);
+  return ScaleSourceRectToOutput(ctx, srcX, srcHeight - srcY - srcH, srcW,
+                                 srcH);
+}
+
+void DrawFilledPolygon(SDL_Renderer* renderer,
+                       const std::vector<SegmentPoint>& points,
+                       const SDL_FColor& color)
+{
+  if (points.size() < 3)
+  {
+    return;
+  }
+
+  std::vector<SDL_Vertex> vertices;
+  vertices.reserve(points.size());
+  for (const SegmentPoint& point : points)
+  {
+    vertices.push_back(SDL_Vertex{SDL_FPoint{point.x, point.y}, color,
+                                  SDL_FPoint{0.0f, 0.0f}});
+  }
+
+  std::vector<int> indices;
+  indices.reserve((points.size() - 2) * 3);
+  for (int i = 1; i < static_cast<int>(points.size()) - 1; ++i)
+  {
+    indices.push_back(0);
+    indices.push_back(i);
+    indices.push_back(i + 1);
+  }
+
+  SDL_RenderGeometry(renderer, nullptr, vertices.data(),
+                     static_cast<int>(vertices.size()), indices.data(),
+                     static_cast<int>(indices.size()));
+}
+
+void DrawBeveledSegment(SDL_Renderer* renderer, float x1, float y1, float x2,
+                        float y2, float thickness, const SDL_FColor& color,
+                        const SDL_FRect& rect, float skew)
+{
+  const float dx = x2 - x1;
+  const float dy = y2 - y1;
+  const float length = std::sqrt(dx * dx + dy * dy);
+  if (length <= 0.01f)
+  {
+    return;
+  }
+
+  const float ux = dx / length;
+  const float uy = dy / length;
+  const float px = -uy;
+  const float py = ux;
+  const float half = thickness * 0.5f;
+  const float cap = std::min(thickness * 0.85f, length * 0.28f);
+
+  std::vector<SegmentPoint> points{
+      {x1, y1},
+      {x1 + ux * cap + px * half, y1 + uy * cap + py * half},
+      {x2 - ux * cap + px * half, y2 - uy * cap + py * half},
+      {x2, y2},
+      {x2 - ux * cap - px * half, y2 - uy * cap - py * half},
+      {x1 + ux * cap - px * half, y1 + uy * cap - py * half}};
+  for (SegmentPoint& point : points)
+  {
+    point = SkewSegmentPoint(rect, point, skew);
+  }
+  DrawFilledPolygon(renderer, points, color);
+}
+
+void DrawSegmentDot(SDL_Renderer* renderer, float cx, float cy, float radius,
+                    const SDL_FColor& color, const SDL_FRect& rect, float skew)
+{
+  std::vector<SegmentPoint> points;
+  points.reserve(12);
+  for (int i = 0; i < 12; ++i)
+  {
+    const float angle = (static_cast<float>(i) / 12.0f) * 2.0f * kPi;
+    points.push_back(SkewSegmentPoint(
+        rect,
+        SegmentPoint{cx + std::cos(angle) * radius,
+                     cy + std::sin(angle) * radius},
+        skew));
+  }
+  DrawFilledPolygon(renderer, points, color);
+}
+
+void DrawSegmentByIndex(SDL_Renderer* renderer, int index, const SDL_FRect& rect,
+                        float thickness, const SDL_FColor& color, float skew)
+{
+  const float left = rect.x + rect.w * 0.12f;
+  const float right = rect.x + rect.w * 0.88f;
+  const float top = rect.y + rect.h * 0.10f;
+  const float middle = rect.y + rect.h * 0.50f;
+  const float bottom = rect.y + rect.h * 0.90f;
+  const float upper = rect.y + rect.h * 0.27f;
+  const float lower = rect.y + rect.h * 0.73f;
+  const float center = rect.x + rect.w * 0.50f;
+  const float dotSize = std::max(2.0f, thickness * 1.5f);
+
+  switch (index)
+  {
+    case 0:
+      DrawBeveledSegment(renderer, left, top, right, top, thickness, color,
+                         rect, skew);
+      break;
+    case 1:
+      DrawBeveledSegment(renderer, right, top, right, middle, thickness, color,
+                         rect, skew);
+      break;
+    case 2:
+      DrawBeveledSegment(renderer, right, middle, right, bottom, thickness,
+                         color, rect, skew);
+      break;
+    case 3:
+      DrawBeveledSegment(renderer, left, bottom, right, bottom, thickness,
+                         color, rect, skew);
+      break;
+    case 4:
+      DrawBeveledSegment(renderer, left, middle, left, bottom, thickness,
+                         color, rect, skew);
+      break;
+    case 5:
+      DrawBeveledSegment(renderer, left, top, left, middle, thickness, color,
+                         rect, skew);
+      break;
+    case 6:
+      DrawBeveledSegment(renderer, left, middle, right, middle, thickness,
+                         color, rect, skew);
+      break;
+    case 7:
+      DrawSegmentDot(renderer, right + dotSize * 0.9f, bottom - dotSize * 0.5f,
+                     dotSize * 0.5f, color, rect, skew);
+      break;
+    case 8:
+      DrawBeveledSegment(renderer, left, top, center, middle, thickness, color,
+                         rect, skew);
+      break;
+    case 9:
+      DrawBeveledSegment(renderer, right, top, center, middle, thickness,
+                         color, rect, skew);
+      break;
+    case 10:
+      DrawBeveledSegment(renderer, left, bottom, center, middle, thickness,
+                         color, rect, skew);
+      break;
+    case 11:
+      DrawBeveledSegment(renderer, right, bottom, center, middle, thickness,
+                         color, rect, skew);
+      break;
+    case 12:
+      DrawBeveledSegment(renderer, center, top, center, upper, thickness,
+                         color, rect, skew);
+      break;
+    case 13:
+      DrawBeveledSegment(renderer, center, lower, center, bottom, thickness,
+                         color, rect, skew);
+      break;
+    case 14:
+      DrawBeveledSegment(renderer, left, upper, center, upper, thickness,
+                         color, rect, skew);
+      break;
+    case 15:
+      DrawBeveledSegment(renderer, center, lower, right, lower, thickness,
+                         color, rect, skew);
+      break;
+    default:
+      break;
+  }
+}
 
 struct B2SSegmentDigitMsg
 {
@@ -256,7 +521,7 @@ private:
                                       SegElementType,
                                       const float*, float, float, float, float,
                                       float, float, float, float, float, float,
-                                      float, float, float) {}
+                                      float, float, float);
 
   void LoadPluginById(const std::string& id);
   void ConfigureSetting(const std::string& pluginId,
@@ -284,6 +549,7 @@ private:
   std::vector<B2SSegmentDigitMsg> pendingB2SSegmentDigits_;
   std::vector<B2SPlayerScoreMsg> pendingB2SPlayerScores_;
   std::vector<std::pair<int, int>> pendingSoundCommands_;
+  std::unordered_map<int, int> debugLastB2SSegmentDigit_;
   Options options_;
   std::string pluginDir_;
   std::string pupFolder_;
@@ -1229,12 +1495,98 @@ void MediaPluginHost::Impl::DrawImage(VPXRenderContext2D* ctx,
   }
 
   SDL_FRect src{texX, texY, texW, texH};
-  SDL_FRect dst{srcX, srcY, srcW, srcH};
+  SDL_FRect dst = ScaleSourceRectToOutput(ctx, srcX, srcY, srcW, srcH);
   SDL_SetTextureColorMod(hostTexture->sdlTexture, FloatToByte(tintR),
                          FloatToByte(tintG), FloatToByte(tintB));
   SDL_SetTextureAlphaMod(hostTexture->sdlTexture, FloatToByte(alpha));
   SDL_RenderTexture(self->backglassRenderer_, hostTexture->sdlTexture, &src,
                     &dst);
+}
+
+void MediaPluginHost::Impl::DrawSegDisplay(
+    VPXRenderContext2D* ctx, VPXSegDisplayRenderStyle style,
+    VPXSegDisplayHint, VPXTexture, float, float, float, float, float, float,
+    float, float, float, float, float, SegElementType type, const float* state,
+    float dispTintR, float dispTintG, float dispTintB, float brightness,
+    float alpha, float, float, float, float, float srcX, float srcY,
+    float srcW, float srcH)
+{
+  auto* self = ctx == nullptr ? nullptr : static_cast<Impl*>(ctx->rendererData);
+  if (self == nullptr || self->backglassRenderer_ == nullptr ||
+      state == nullptr || alpha <= 0.0f)
+  {
+    return;
+  }
+
+  SDL_FRect dst = ScaleSourceRectToOutputBottomOrigin(ctx, srcX, srcY, srcW,
+                                                      srcH);
+  if (dst.w <= 0.0f || dst.h <= 0.0f)
+  {
+    return;
+  }
+
+  int segmentCount = 16;
+  switch (type)
+  {
+    case CTLPI_SEG_LAYOUT_7:
+      segmentCount = 7;
+      break;
+    case CTLPI_SEG_LAYOUT_7C:
+    case CTLPI_SEG_LAYOUT_7D:
+      segmentCount = 8;
+      break;
+    case CTLPI_SEG_LAYOUT_9:
+      segmentCount = 9;
+      break;
+    case CTLPI_SEG_LAYOUT_9C:
+      segmentCount = 10;
+      break;
+    case CTLPI_SEG_LAYOUT_14:
+      segmentCount = 14;
+      break;
+    case CTLPI_SEG_LAYOUT_14D:
+      segmentCount = 15;
+      break;
+    case CTLPI_SEG_LAYOUT_14DC:
+    case CTLPI_SEG_LAYOUT_16:
+    default:
+      segmentCount = 16;
+      break;
+  }
+
+  SDL_SetRenderDrawBlendMode(self->backglassRenderer_, SDL_BLENDMODE_ADD);
+  const float thickness = std::max(1.0f, std::min(dst.w, dst.h) * 0.052f);
+  const float glow = std::clamp(self->options_.b2sSegmentGlow, 0.0f, 4.0f);
+  const float glowThickness =
+      std::max(thickness * (1.8f + glow * 0.75f),
+               std::min(dst.w, dst.h) * (0.055f + glow * 0.035f));
+  const float segmentAngle =
+      std::clamp(self->options_.b2sSegmentAngleDegrees, -30.0f, 30.0f);
+  const float skew = -std::tan(segmentAngle * kPi / 180.0f);
+  for (int i = 0; i < segmentCount; ++i)
+  {
+    if (state[i] <= 0.01f)
+    {
+      continue;
+    }
+    const SDL_FColor color =
+        SegmentColor(style, dispTintR, dispTintG, dispTintB, state[i],
+                     brightness, alpha);
+    if (glow > 0.0f)
+    {
+      DrawSegmentByIndex(self->backglassRenderer_, i, dst, glowThickness,
+                         ScaleColorAlpha(color, 0.11f * glow), skew);
+    }
+    if (self->options_.b2sSegmentSmoothing)
+    {
+      DrawSegmentByIndex(self->backglassRenderer_, i, dst, thickness * 1.35f,
+                         ScaleColorAlpha(color, 0.32f), skew);
+    }
+    DrawSegmentByIndex(self->backglassRenderer_, i, dst, thickness, color,
+                       skew);
+  }
+  SDL_SetRenderDrawBlendMode(self->backglassRenderer_, SDL_BLENDMODE_BLEND);
+  self->backglassFrameDrewImage_ = true;
 }
 
 void MediaPluginHost::Impl::LoadPluginById(const std::string& id)
@@ -1387,6 +1739,16 @@ void MediaPluginHost::Impl::DispatchB2SSegmentDigit(
   if (!options_.enableB2S)
   {
     return;
+  }
+  if (options_.debug)
+  {
+    auto it = debugLastB2SSegmentDigit_.find(digit.digit);
+    if (it == debugLastB2SSegmentDigit_.end() || it->second != digit.value)
+    {
+      debugLastB2SSegmentDigit_[digit.digit] = digit.value;
+      std::printf("B2S dispatch score digit: digit=%d value=%d\n",
+                  digit.digit, digit.value);
+    }
   }
   ScriptVariant args[2] = {};
   args[0].vInt = digit.digit;

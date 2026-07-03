@@ -318,6 +318,9 @@ bool opt_serum = false;
 bool opt_pup = false;
 bool opt_altsound = false;
 bool opt_b2s = false;
+float opt_b2s_segment_angle_degrees = 9.0f;
+float opt_b2s_segment_glow = 1.4f;
+bool opt_b2s_segment_smoothing = true;
 const char* opt_game_folder = NULL;
 const char* opt_plugin_dir = NULL;
 const char* opt_pup_folder = NULL;
@@ -332,6 +335,7 @@ std::atomic<bool> ball_search_game_running{false};
 bool running = true;
 volatile std::sig_atomic_t shutdown_requested = 0;
 std::unordered_map<int, int> segmentDisplayDigitBases;
+std::unordered_map<int, std::string> lastSegmentDisplayDebugLine;
 int nextSegmentDisplayDigitBase = 1;
 
 template <typename T>
@@ -1257,6 +1261,25 @@ static bool ParseIniBool(const std::string& value, bool defaultValue = false)
     return false;
   }
   return defaultValue;
+}
+
+static float ParseIniFloat(const std::string& value, float defaultValue)
+{
+  char* end = nullptr;
+  const float parsed = strtof(value.c_str(), &end);
+  if (end == value.c_str())
+  {
+    return defaultValue;
+  }
+  while (end != nullptr && *end != '\0')
+  {
+    if (!isspace(static_cast<unsigned char>(*end)))
+    {
+      return defaultValue;
+    }
+    ++end;
+  }
+  return parsed;
 }
 
 static bool HasOptionValue(const char* value) { return value != nullptr && value[0] != '\0'; }
@@ -2887,6 +2910,44 @@ static int GetSegmentDisplayDigitBase(int index, int length)
   return base;
 }
 
+static void DebugSegmentDisplayUpdate(int index, int type, int base,
+                                      const uint16_t* segments, int length)
+{
+  if (!opt_debug || segments == nullptr || length <= 0)
+  {
+    return;
+  }
+
+  std::ostringstream line;
+  line << "B2S segment display update: index=" << index << " type=" << type
+       << " base=" << base << " length=" << length << " raw=";
+  for (int i = 0; i < length; ++i)
+  {
+    if (i > 0)
+    {
+      line << ',';
+    }
+    line << "0x" << std::hex << std::uppercase << segments[i] << std::dec;
+  }
+  line << " digits=";
+  for (int i = 0; i < length; ++i)
+  {
+    if (i > 0)
+    {
+      line << ',';
+    }
+    line << DecodeB2SSegmentDigit(segments[i]);
+  }
+
+  std::string text = line.str();
+  if (lastSegmentDisplayDebugLine[index] == text)
+  {
+    return;
+  }
+  lastSegmentDisplayDebugLine[index] = text;
+  printf("%s\n", text.c_str());
+}
+
 void PINMAMECALLBACK OnDisplayAvailable(int index, int displayCount, PinmameDisplayLayout* p_displayLayout,
                                         const void* p_userData)
 {
@@ -2908,7 +2969,7 @@ void PINMAMECALLBACK OnDisplayAvailable(int index, int displayCount, PinmameDisp
 void PINMAMECALLBACK OnDisplayUpdated(int index, void* p_displayData, PinmameDisplayLayout* p_displayLayout,
                                       const void* p_userData)
 {
-  if (p_displayData == nullptr)
+  if (p_displayData == nullptr || p_displayLayout == nullptr)
   {
     return;
   }
@@ -2920,6 +2981,34 @@ void PINMAMECALLBACK OnDisplayUpdated(int index, void* p_displayData, PinmameDis
         "height=%d, depth=%d, length=%d\n",
         index, p_displayLayout->type, p_displayLayout->top, p_displayLayout->left, p_displayLayout->width,
         p_displayLayout->height, p_displayLayout->depth, p_displayLayout->length);
+  }
+
+  if (pMediaPluginHost != nullptr && IsSegmentDisplayType(p_displayLayout->type) && p_displayLayout->length > 0)
+  {
+    const int base = GetSegmentDisplayDigitBase(index, p_displayLayout->length);
+    const auto* segments = static_cast<const uint16_t*>(p_displayData);
+    DebugSegmentDisplayUpdate(index, p_displayLayout->type, base, segments,
+                              p_displayLayout->length);
+    int score = 0;
+    bool hasScoreDigit = false;
+    for (int i = 0; i < p_displayLayout->length; ++i)
+    {
+      const int digit = DecodeB2SSegmentDigit(segments[i]);
+      pMediaPluginHost->QueueSegmentDisplay(base + i, digit);
+      if (digit >= 0)
+      {
+        hasScoreDigit = true;
+        score = score * 10 + digit;
+      }
+      else if (hasScoreDigit)
+      {
+        score *= 10;
+      }
+    }
+    if (hasScoreDigit)
+    {
+      pMediaPluginHost->QueuePlayerScore(index + 1, score);
+    }
   }
 
   // For DMD games, the ype is PINMAME_DISPLAY_TYPE_DMD.
@@ -2935,31 +3024,6 @@ void PINMAMECALLBACK OnDisplayUpdated(int index, void* p_displayData, PinmameDis
   }
   else
   {
-    if (pMediaPluginHost != nullptr && IsSegmentDisplayType(p_displayLayout->type) && p_displayLayout->length > 0)
-    {
-      const int base = GetSegmentDisplayDigitBase(index, p_displayLayout->length);
-      const auto* segments = static_cast<const uint16_t*>(p_displayData);
-      int score = 0;
-      bool hasScoreDigit = false;
-      for (int i = 0; i < p_displayLayout->length; ++i)
-      {
-        const int digit = DecodeB2SSegmentDigit(segments[i]);
-        pMediaPluginHost->QueueSegmentDisplay(base + i, digit);
-        if (digit >= 0)
-        {
-          hasScoreDigit = true;
-          score = score * 10 + digit;
-        }
-        else if (hasScoreDigit)
-        {
-          score *= 10;
-        }
-      }
-      if (hasScoreDigit)
-      {
-        pMediaPluginHost->QueuePlayerScore(index + 1, score);
-      }
-    }
     switch (p_displayLayout->type)
     {
       case PINMAME_DISPLAY_TYPE_SEG16:    // 16 segments
@@ -3252,6 +3316,10 @@ int main(int argc, char** argv)
         opt_game_folder = argv[++i];
       }
     }
+    else if (strcmp(arg, "--b2s") == 0)
+    {
+      opt_b2s = true;
+    }
     else if (strncmp(arg, "--ini-file=", 11) == 0)
     {
       opt_ini_file = arg + 11;
@@ -3399,6 +3467,12 @@ int main(int argc, char** argv)
           opt_altsound = ParseIniBool(value);
         else if (key == "B2S")
           opt_b2s = ParseIniBool(value);
+        else if (key == "B2SSegmentAngleDegrees")
+          opt_b2s_segment_angle_degrees = static_cast<float>(atof(value.c_str()));
+        else if (key == "B2SSegmentGlow")
+          opt_b2s_segment_glow = static_cast<float>(atof(value.c_str()));
+        else if (key == "B2SSegmentSmoothing")
+          opt_b2s_segment_smoothing = ParseIniBool(value);
         else if (key == "PluginDir")
           opt_plugin_dir = DuplicateOptionalIniString(value);
         else if (key == "PUPFolder")
@@ -3521,7 +3595,7 @@ int main(int argc, char** argv)
         opt_music_files = DuplicateIniString(musicFiles);
       }
     }
-    if (!HasOptionValue(opt_translite))
+    if (!opt_b2s && !HasOptionValue(opt_translite))
     {
       const auto transliteOn = FindFirstExistingPath(
           gameFolder, {"translite-on", "translite"}, {".png", ".jpg", ".jpeg", ".bmp", ".webp"});
@@ -3530,7 +3604,7 @@ int main(int argc, char** argv)
         opt_translite = DuplicatePathString(*transliteOn);
       }
     }
-    if (!HasOptionValue(opt_translite_attract))
+    if (!opt_b2s && !HasOptionValue(opt_translite_attract))
     {
       const auto transliteOff = FindFirstExistingPath(
           gameFolder, {"translite-off", "translite-attract"}, {".png", ".jpg", ".jpeg", ".bmp", ".webp"});
@@ -3969,6 +4043,9 @@ int main(int argc, char** argv)
     mediaOptions.backglassWidth = opt_translite_width > 0 ? opt_translite_width : 1920;
     mediaOptions.backglassHeight = opt_translite_height > 0 ? opt_translite_height : 1080;
     mediaOptions.backglassScreen = opt_translite_screen;
+    mediaOptions.b2sSegmentAngleDegrees = opt_b2s_segment_angle_degrees;
+    mediaOptions.b2sSegmentGlow = opt_b2s_segment_glow;
+    mediaOptions.b2sSegmentSmoothing = opt_b2s_segment_smoothing;
     std::string mediaError;
     if (!pMediaPluginHost->Initialize(mediaOptions, &mediaError))
     {

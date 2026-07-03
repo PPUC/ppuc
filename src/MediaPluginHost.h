@@ -30,6 +30,9 @@ public:
     int backglassWidth = 1920;
     int backglassHeight = 1080;
     int backglassScreen = 0;
+    float b2sSegmentAngleDegrees = 9.0f;
+    float b2sSegmentGlow = 1.4f;
+    bool b2sSegmentSmoothing = true;
   };
 
   explicit MediaPluginHost(AudioOutput* audioOutput);

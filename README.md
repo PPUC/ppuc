@@ -95,8 +95,8 @@ With `--game`, defaults are:
 * runtime INI: `<game>/ppuc.ini`, when present
 * Lua rules: `<game>/rules/*.lua`, when `Runtime.Rules=true`
 * background music: supported audio files in `<game>/music/`, in filename order
-* in-game translite: `<game>/translite-on.*`, falling back to `<game>/translite.*`
-* attract/off translite: `<game>/translite-off.*`, falling back to `<game>/translite-attract.*`
+* in-game translite: `<game>/translite-on.*`, falling back to `<game>/translite.*`, unless B2S is enabled
+* attract/off translite: `<game>/translite-off.*`, falling back to `<game>/translite-attract.*`, unless B2S is enabled
 * PinMAME base: `<game>/pinmame`
 * PUP root: `<game>/pup`; packs are under `<game>/pup/pupvideos/<rom>`
 * AltSound: `<game>/pinmame/altsound/<rom>`
@@ -212,6 +212,9 @@ Common media options live in `[Runtime]`:
 Rules = true
 PUP = true
 B2S = true
+B2SSegmentAngleDegrees = 9.0
+B2SSegmentGlow = 1.4
+B2SSegmentSmoothing = true
 AltSound = true
 AltColor = true
 ```
@@ -239,7 +242,9 @@ translite-off.png
 
 `translite-on.*` is shown during gameplay. `translite-off.*` is shown in
 attract/off mode. The fallback names are `translite.*` and
-`translite-attract.*`.
+`translite-attract.*`. When `--b2s` or `Runtime.B2S=true` is used, these
+game-folder translite defaults are ignored so the B2S plugin owns the
+backglass.
 
 AltSound lives under `<game>/pinmame/altsound/<rom>/`.
 
