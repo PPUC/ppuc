@@ -303,6 +303,7 @@ bool opt_debug_switches = false;
 bool opt_debug_coils = false;
 bool opt_debug_lamps = false;
 bool opt_debug_effects = false;
+bool opt_debug_sound_commands = false;
 bool opt_no_serial = false;
 bool opt_no_sound = false;
 bool opt_speech = false;
@@ -337,6 +338,8 @@ volatile std::sig_atomic_t shutdown_requested = 0;
 std::unordered_map<int, int> segmentDisplayDigitBases;
 std::unordered_map<int, std::string> lastSegmentDisplayDebugLine;
 int nextSegmentDisplayDigitBase = 1;
+std::mutex soundCommandDebugMutex;
+std::unordered_set<uint64_t> soundCommandDebugSeen;
 
 template <typename T>
 struct LogCallbackTraits;
@@ -2659,6 +2662,10 @@ static struct cag_option options[] = {
      .access_name = "debug-effects",
      .value_name = NULL,
      .description = "Enable effect trigger debug output (optional)"},
+    {.identifier = '{',
+     .access_name = "debug-sound-commands",
+     .value_name = NULL,
+     .description = "Print PinMAME sound command IDs for building altsound packs (optional)"},
     {.identifier = '0', .access_name = "switch-test", .value_name = NULL, .description = "Run switch test"},
     {.identifier = '1', .access_name = "coil-test", .value_name = NULL, .description = "Run coil test"},
     {.identifier = '2', .access_name = "lamp-test", .value_name = NULL, .description = "Run lamp test"},
@@ -3216,11 +3223,55 @@ void PINMAMECALLBACK OnConsoleDataUpdated(void* p_data, int size, const void* p_
   }
 }
 
+static void LogPinmameSoundCommand(int boardNo, int cmd)
+{
+  if (!opt_debug_sound_commands)
+  {
+    return;
+  }
+
+  const uint64_t key = (static_cast<uint64_t>(static_cast<uint32_t>(boardNo)) << 32) |
+                       static_cast<uint32_t>(cmd);
+  bool firstSeen = false;
+  {
+    std::lock_guard<std::mutex> lock(soundCommandDebugMutex);
+    firstSeen = soundCommandDebugSeen.insert(key).second;
+  }
+  printf("PinMAME sound command: board=%d id=%d hex=0x%X new=%d\n", boardNo, cmd,
+         static_cast<unsigned int>(cmd), firstSeen ? 1 : 0);
+}
+
 void PINMAMECALLBACK OnSoundCommand(int boardNo, int cmd, const void* p_userData)
 {
+  LogPinmameSoundCommand(boardNo, cmd);
+
   if (pMediaPluginHost != nullptr)
   {
     pMediaPluginHost->OnSoundCommand(boardNo, cmd);
+  }
+}
+
+static void PollPinmameSoundCommands(std::vector<PinmameSoundCommand>& soundCommands)
+{
+  if (!opt_debug_sound_commands)
+  {
+    return;
+  }
+
+  const int maxSoundCommands = PinmameGetMaxSoundCommands();
+  if (maxSoundCommands <= 0)
+  {
+    return;
+  }
+  if (soundCommands.size() < static_cast<size_t>(maxSoundCommands))
+  {
+    soundCommands.resize(static_cast<size_t>(maxSoundCommands));
+  }
+
+  const int count = PinmameGetNewSoundCommands(soundCommands.data());
+  for (int i = 0; i < count && i < maxSoundCommands; ++i)
+  {
+    LogPinmameSoundCommand(-1, soundCommands[static_cast<size_t>(i)].sndNo);
   }
 }
 
@@ -3453,6 +3504,8 @@ int main(int argc, char** argv)
           opt_debug_lamps = ParseIniBool(value);
         else if (key == "DebugEffects")
           opt_debug_effects = ParseIniBool(value);
+        else if (key == "DebugSoundCommands")
+          opt_debug_sound_commands = ParseIniBool(value);
         else if (key == "Serum" || key == "AltColor")
           opt_serum = ParseIniBool(value);
         else if (key == "Rules")
@@ -3763,6 +3816,9 @@ int main(int argc, char** argv)
         break;
       case 'f':
         opt_debug_effects = true;
+        break;
+      case '{':
+        opt_debug_sound_commands = true;
         break;
       case '0':
         opt_switch_test = true;
@@ -4595,6 +4651,7 @@ int main(int argc, char** argv)
   PinmameLampState changedLampStates[PinmameGetMaxLamps()];
   PinmameGIState changedGIStates[PinmameGetMaxGIs()];
 #endif
+  std::vector<PinmameSoundCommand> soundCommands;
 
   if (PinmameRun(opt_rom) == PINMAME_STATUS_OK)
   {
@@ -4679,6 +4736,7 @@ int main(int argc, char** argv)
           }
         }
         g_interceptorOutputs.Service(ppuc);
+        PollPinmameSoundCommands(soundCommands);
         if (pMediaPluginHost != nullptr)
         {
           pMediaPluginHost->Process();
@@ -4687,6 +4745,7 @@ int main(int argc, char** argv)
       }
 
       const auto now = std::chrono::steady_clock::now();
+      PollPinmameSoundCommands(soundCommands);
       if ((trackCurrentBall || trackCurrentPlayer) && now >= nextTrackedStatePollAt)
       {
         nextTrackedStatePollAt = now + kPinmameTrackedStatePollInterval;
