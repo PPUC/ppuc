@@ -72,7 +72,7 @@ void AudioOutput::Shutdown()
 {
   std::lock_guard<std::mutex> lock(mutex_);
   gameQueue_.clear();
-  pluginQueue_.clear();
+  pluginQueues_.clear();
   speechQueue_.clear();
 #if defined(PPUC_HAS_SDL3_MIXER)
   DestroyMusicTracksLocked();
@@ -220,8 +220,9 @@ void AudioOutput::QueueGameFrames(const int16_t* samples, size_t frameCount)
                      gameFrequency_, gameChannels_);
 }
 
-void AudioOutput::QueuePluginSamples(const int16_t* samples, size_t sampleCount,
-                                     int frequency, int channels)
+void AudioOutput::QueuePluginSamples(uint64_t streamId, const int16_t* samples,
+                                     size_t sampleCount, int frequency,
+                                     int channels)
 {
   if (samples == nullptr || sampleCount == 0 || frequency <= 0 || channels <= 0)
   {
@@ -229,7 +230,20 @@ void AudioOutput::QueuePluginSamples(const int16_t* samples, size_t sampleCount,
   }
 
   std::lock_guard<std::mutex> lock(mutex_);
-  QueueSamplesLocked(pluginQueue_, samples, sampleCount, frequency, channels);
+  QueueSamplesLocked(pluginQueues_[streamId], samples, sampleCount, frequency,
+                     channels);
+}
+
+void AudioOutput::StopPluginStream(uint64_t streamId)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  pluginQueues_.erase(streamId);
+}
+
+void AudioOutput::QueuePluginSamples(const int16_t* samples, size_t sampleCount,
+                                     int frequency, int channels)
+{
+  QueuePluginSamples(0, samples, sampleCount, frequency, channels);
 }
 
 void AudioOutput::QueueSpeechSamples(const int16_t* samples, size_t sampleCount,
@@ -261,7 +275,22 @@ void SDLCALL AudioOutput::OnDeviceNeedsAudio(void* userdata,
   {
     std::lock_guard<std::mutex> lock(self->mutex_);
     const bool gameActive = self->MixQueueLocked(self->gameQueue_, mixBuffer.data(), sampleCount);
-    const bool pluginActive = self->MixQueueLocked(self->pluginQueue_, mixBuffer.data(), sampleCount);
+    bool pluginActive = false;
+    for (auto it = self->pluginQueues_.begin();
+         it != self->pluginQueues_.end();)
+    {
+      pluginActive = self->MixQueueLocked(it->second, mixBuffer.data(),
+                                          sampleCount) ||
+                     pluginActive;
+      if (it->second.empty())
+      {
+        it = self->pluginQueues_.erase(it);
+      }
+      else
+      {
+        ++it;
+      }
+    }
     const bool speechActive = self->MixQueueLocked(self->speechQueue_, mixBuffer.data(), sampleCount);
     self->MixMusicLocked(mixBuffer.data(), sampleCount, gameActive || pluginActive || speechActive);
   }

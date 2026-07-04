@@ -380,7 +380,9 @@ void ConvertAudioUpdateToS16(const AudioUpdateMsg& msg,
     return;
   }
 
-  const float volume = std::max(0.0f, msg.volume);
+  const float volume = std::isfinite(msg.volume)
+                           ? std::clamp(msg.volume, 0.0f, 1.0f)
+                           : 0.0f;
   if (msg.format == CTLPI_AUDIO_FORMAT_SAMPLE_FLOAT)
   {
     const size_t count = msg.bufferSize / sizeof(float);
@@ -1160,9 +1162,14 @@ void MediaPluginHost::Impl::OnAudioUpdate(unsigned int, void* userData,
   auto* self = static_cast<Impl*>(userData);
   auto* msg = static_cast<AudioUpdateMsg*>(msgData);
   if (self == nullptr || msg == nullptr || self->audioOutput_ == nullptr ||
-      msg->id.endpointId == kHostEndpointId || msg->buffer == nullptr ||
-      msg->bufferSize == 0)
+      msg->id.endpointId == kHostEndpointId)
   {
+    return;
+  }
+
+  if (msg->buffer == nullptr || msg->bufferSize == 0)
+  {
+    self->audioOutput_->StopPluginStream(msg->id.id);
     return;
   }
 
@@ -1175,9 +1182,9 @@ void MediaPluginHost::Impl::OnAudioUpdate(unsigned int, void* userData,
 
   const int channels =
       msg->type == CTLPI_AUDIO_SRC_BACKGLASS_MONO ? 1 : 2;
-  self->audioOutput_->QueuePluginSamples(samples.data(), samples.size(),
-                                         static_cast<int>(msg->sampleRate),
-                                         channels);
+  self->audioOutput_->QueuePluginSamples(
+      msg->id.id, samples.data(), samples.size(),
+      static_cast<int>(msg->sampleRate), channels);
 }
 
 void MediaPluginHost::Impl::OnGetBackglassRenderer(unsigned int, void* userData,

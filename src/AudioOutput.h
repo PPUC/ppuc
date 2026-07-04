@@ -5,6 +5,7 @@
 #include <deque>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "SDL3/SDL.h"
@@ -29,6 +30,9 @@ public:
   void SetMusicTrackGapMs(Uint64 gapMs);
   void SetMusicEnabled(bool enabled);
   void QueueGameFrames(const int16_t* samples, size_t frameCount);
+  void QueuePluginSamples(uint64_t streamId, const int16_t* samples,
+                          size_t sampleCount, int frequency, int channels);
+  void StopPluginStream(uint64_t streamId);
   void QueuePluginSamples(const int16_t* samples, size_t sampleCount,
                           int frequency, int channels);
   void QueueSpeechSamples(const int16_t* samples, size_t sampleCount,
@@ -88,7 +92,7 @@ private:
   int gameFrequency_ = 48000;
   int gameChannels_ = 2;
   std::deque<PendingBuffer> gameQueue_;
-  std::deque<PendingBuffer> pluginQueue_;
+  std::unordered_map<uint64_t, std::deque<PendingBuffer>> pluginQueues_;
   std::deque<PendingBuffer> speechQueue_;
   std::vector<MusicTrack> musicTracks_;
 #if defined(PPUC_HAS_SDL3_MIXER)
