@@ -1,6 +1,7 @@
 name: ppuc
 on:
   pull_request:
+  push:
 
 defaults:
   run:
@@ -39,15 +40,15 @@ jobs:
           - os: macos-latest
             platform: macos
             arch: arm64
-          - os: macos-latest
-            platform: macos
-            arch: x64
+          #- os: macos-latest
+          #  platform: macos
+          #  arch: x64
           - os: ubuntu-latest
             platform: linux
             arch: x64
-          - os: ubuntu-latest
-            platform: linux
-            arch: aarch64
+          #- os: ubuntu-latest
+          #  platform: linux
+          #  arch: aarch64
     steps:
       - uses: actions/checkout@v6
       - if: (matrix.platform != 'macos')
