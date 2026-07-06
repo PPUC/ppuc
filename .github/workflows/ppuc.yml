@@ -71,12 +71,20 @@ jobs:
             base-devel
             autoconf
             automake
+            bison
+            diffutils
             git
             libtool
+            make
+            nasm
             unzip
             mingw-w64-ucrt-x86_64-cmake
             mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-libiconv
+            mingw-w64-ucrt-x86_64-libwinpthread
             mingw-w64-ucrt-x86_64-pkg-config
+            mingw-w64-ucrt-x86_64-tools
+            mingw-w64-ucrt-x86_64-zlib
       - if: (matrix.platform == 'macos')
         name: Add autoconf and automake (mac runner)
         run: |

@@ -303,6 +303,20 @@ cp libppuc/libppuc/build/ppuc64.dll ../third-party/runtime-libs/win-mingw-x64/
 cp -a libppuc/libppuc/third-party/build-libs/win-mingw/x64/libyaml-cpp.dll.a ../third-party/build-libs/win-mingw-x64/
 cp -a libppuc/libppuc/third-party/runtime-libs/win-mingw/x64/libyaml-cpp.dll ../third-party/runtime-libs/win-mingw-x64/
 
+if [ "${PPUC_BUILD_VPINBALL_MEDIA_PLUGINS:-1}" != "0" ]; then
+   ppuc_stage_vpinball_source
+   VPINBALL_ROOT="$(ppuc_vpinball_root)"
+   if [ -f "${VPINBALL_ROOT}/platforms/windows-mingw-x64/external.sh" ]; then
+      echo "Preparing VPX media plugin dependencies for PPUC: windows-mingw-x64"
+      (
+         cd "${VPINBALL_ROOT}"
+         BUILD_TYPE=${BUILD_TYPE} ./platforms/windows-mingw-x64/external.sh
+      )
+   else
+      echo "Skipping VPX media plugin externals: unsupported vpinball platform windows-mingw-x64" >&2
+   fi
+fi
+
 UCRT64_BIN="${MINGW_PREFIX}/bin"
 cp "${UCRT64_BIN}/libgcc_s_seh-1.dll" ../third-party/runtime-libs/win-mingw-x64/
 cp "${UCRT64_BIN}/libstdc++-6.dll" ../third-party/runtime-libs/win-mingw-x64/

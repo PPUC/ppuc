@@ -107,6 +107,7 @@ endif()
 if(EXISTS "${PPUC_STAGED_INCLUDE_DIR}")
    list(APPEND PPUC_INCLUDE_DIRS "${PPUC_STAGED_INCLUDE_DIR}")
 endif()
+list(APPEND PPUC_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/src")
 get_filename_component(PPUC_REAL_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}" REALPATH)
 if(NOT DEFINED PPUC_VPINBALL_DIR OR PPUC_VPINBALL_DIR STREQUAL "")
    set(PPUC_VPINBALL_DIR "${PPUC_REAL_SOURCE_DIR}/../vpinball")
@@ -117,24 +118,24 @@ if(NOT DEFINED PPUC_VPINBALL_DIR OR PPUC_VPINBALL_DIR STREQUAL "")
    endif()
 endif()
 get_filename_component(PPUC_VPINBALL_DIR "${PPUC_VPINBALL_DIR}" ABSOLUTE BASE_DIR "${PPUC_REAL_SOURCE_DIR}")
-set(PPUC_MEDIA_PLUGIN_HOST_SOURCE src/MediaPluginHostStub.cpp)
-set(PPUC_MEDIA_PLUGIN_HOST_EXTRA_SOURCES "")
-if(EXISTS "${PPUC_VPINBALL_DIR}/plugins/plugins/MsgPlugin.h" AND
-   EXISTS "${PPUC_VPINBALL_DIR}/plugins/plugins/MsgPluginManager.h" AND
-   EXISTS "${PPUC_VPINBALL_DIR}/plugins/plugins/MsgPluginManager.cpp" AND
-   EXISTS "${PPUC_VPINBALL_DIR}/plugins/pup/PUPPlugin.h")
-   list(APPEND PPUC_INCLUDE_DIRS
-      "${PPUC_VPINBALL_DIR}/plugins"
-      "${PPUC_VPINBALL_DIR}/third-party/include"
-   )
-   set(PPUC_MEDIA_PLUGIN_HOST_SOURCE src/MediaPluginHost.cpp)
-   list(APPEND PPUC_MEDIA_PLUGIN_HOST_EXTRA_SOURCES
-      "${PPUC_VPINBALL_DIR}/plugins/plugins/MsgPluginManager.cpp"
-   )
-   message(STATUS "Media plugin host: enabled (${PPUC_VPINBALL_DIR})")
-else()
-   message(STATUS "Media plugin host: disabled (vpinball plugin SDK not found at ${PPUC_VPINBALL_DIR})")
-endif()
+set(PPUC_REQUIRED_VPINBALL_PLUGIN_FILES
+   "${PPUC_VPINBALL_DIR}/plugins/plugins/MsgPlugin.h"
+   "${PPUC_VPINBALL_DIR}/plugins/plugins/MsgPluginManager.h"
+   "${PPUC_VPINBALL_DIR}/plugins/plugins/MsgPluginManager.cpp"
+   "${PPUC_VPINBALL_DIR}/plugins/pup/PUPPlugin.h"
+)
+foreach(PPUC_REQUIRED_VPINBALL_PLUGIN_FILE IN LISTS PPUC_REQUIRED_VPINBALL_PLUGIN_FILES)
+   if(NOT EXISTS "${PPUC_REQUIRED_VPINBALL_PLUGIN_FILE}")
+      message(FATAL_ERROR
+         "Could not find required vpinball plugin SDK file: ${PPUC_REQUIRED_VPINBALL_PLUGIN_FILE}. "
+         "Run the platform external.sh script first.")
+   endif()
+endforeach()
+list(APPEND PPUC_INCLUDE_DIRS
+   "${PPUC_VPINBALL_DIR}/plugins"
+   "${PPUC_VPINBALL_DIR}/third-party/include"
+)
+message(STATUS "Media plugin host: enabled (${PPUC_VPINBALL_DIR})")
 
 set(PPUC_LUA_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third-party/lua-src")
 set(PPUC_LUA_INCLUDE_DIR "")
@@ -247,8 +248,8 @@ endif()
 add_executable(ppuc-pinmame
    src/AudioOutput.cpp
    src/LuaRulesEngine.cpp
-   ${PPUC_MEDIA_PLUGIN_HOST_SOURCE}
-   ${PPUC_MEDIA_PLUGIN_HOST_EXTRA_SOURCES}
+   src/MediaPluginHost.cpp
+   "${PPUC_VPINBALL_DIR}/plugins/plugins/MsgPluginManager.cpp"
    ${PPUC_LUA_SOURCES}
    src/SpeechCliSupport.cpp
    src/SpeechService.cpp

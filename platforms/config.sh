@@ -700,7 +700,7 @@ ppuc_build_vpinball_media_plugins() {
       rm -f "${plugin_package_dir}"/pup/libSDL3_mixer.so*
       rm -f "${plugin_package_dir}"/pup/libpupdmd.so*
       rm -f "${plugin_package_dir}"/b2slegacy/libSDL3.so*
-   elif [ "${platform}" = "win" ] || [ "${platform}" = "win-mingw" ]; then
+   elif [ "${platform}" = "win" ] || [ "${platform}" = "win-mingw" ] || [ "${platform}" = "windows-mingw" ]; then
       rm -f "${plugin_package_dir}"/b2slegacy/SDL3*.dll
    fi
 }
