@@ -2,6 +2,10 @@
 
 set -e
 
+if [ "${VERBOSE:-0}" = "1" ] || [ "${PPUC_VERBOSE:-0}" = "1" ]; then
+   set -x
+fi
+
 SDL_IMAGE_SHA=bec9134a26c7d0f31b36d6083c25296e04cabff5
 SDL_MIXER_SHA=72a81869b45e249e8e67102db4e98dd2441f05a1
 FLITE_SHA=6c9f20dc915b17f5619340069889db0aa007fcdc
@@ -234,6 +238,34 @@ ppuc_vpinball_media_glob_copy() {
    fi
 }
 
+ppuc_vpinball_media_required_glob_copy() {
+   local pattern="$1"
+   local dest="$2"
+   local matches
+
+   matches=( ${pattern} )
+   if [ "${#matches[@]}" -eq 0 ] || [ ! -e "${matches[0]}" ]; then
+      echo "Missing required media dependency artifact: ${pattern}" >&2
+      return 1
+   fi
+
+   echo "Copying media dependency artifact(s): ${pattern} -> ${dest}"
+   cp -a "${matches[@]}" "${dest}"
+}
+
+ppuc_vpinball_media_required_dir_copy() {
+   local source_dir="$1"
+   local dest="$2"
+
+   if [ ! -d "${source_dir}" ]; then
+      echo "Missing required media dependency include dir: ${source_dir}" >&2
+      return 1
+   fi
+
+   echo "Copying media dependency include dir: ${source_dir} -> ${dest}"
+   cp -r "${source_dir}" "${dest}"
+}
+
 ppuc_clean_runtime_lib_dir() {
    local dir="$1"
    local platform="$2"
@@ -436,24 +468,27 @@ ppuc_prepare_vpinball_media_dependencies() {
       ppuc_copy_dylib_link_chain "${deps_root}/SDL3/SDL_ttf/build" "libSDL3_ttf.dylib" "${runtime_dir}"
    else
       if [ "${reuse_ppuc_sdl_stack}" = "1" ]; then
-         ppuc_vpinball_media_glob_copy "${ppuc_runtime_dir}/libSDL3.so*" "${runtime_dir}"
-         ppuc_vpinball_media_glob_copy "${ppuc_runtime_dir}/libSDL3_image.so*" "${runtime_dir}"
+         ppuc_vpinball_media_required_glob_copy "${ppuc_runtime_dir}/libSDL3.so*" "${runtime_dir}"
+         ppuc_vpinball_media_required_glob_copy "${ppuc_runtime_dir}/libSDL3_image.so*" "${runtime_dir}"
       else
-         ppuc_vpinball_media_glob_copy "${deps_root}/SDL3/SDL/build/libSDL3.so*" "${runtime_dir}"
-         ppuc_vpinball_media_glob_copy "${deps_root}/SDL3/SDL_image/build/libSDL3_image.so*" "${runtime_dir}"
+         ppuc_vpinball_media_required_glob_copy "${deps_root}/SDL3/SDL/build/libSDL3.so*" "${runtime_dir}"
+         ppuc_vpinball_media_required_glob_copy "${deps_root}/SDL3/SDL_image/build/libSDL3_image.so*" "${runtime_dir}"
       fi
-      ppuc_vpinball_media_glob_copy "${deps_root}/SDL3/SDL_ttf/build/libSDL3_ttf.so*" "${runtime_dir}"
+      ppuc_vpinball_media_required_glob_copy "${deps_root}/SDL3/SDL_ttf/build/libSDL3_ttf.so*" "${runtime_dir}"
    fi
    if [ "${reuse_ppuc_sdl_stack}" = "1" ]; then
-      cp -r "${ppuc_include_dir}/SDL3" "${include_dir}/"
-      cp -r "${ppuc_include_dir}/SDL3_image" "${include_dir}/"
+      ppuc_vpinball_media_required_dir_copy "${ppuc_include_dir}/SDL3" "${include_dir}/"
+      ppuc_vpinball_media_required_dir_copy "${ppuc_include_dir}/SDL3_image" "${include_dir}/"
    else
-      cp -r "${deps_root}/SDL3/SDL/include/SDL3" "${include_dir}/"
-      cp -r "${deps_root}/SDL3/SDL_image/include/SDL3_image" "${include_dir}/"
+      ppuc_vpinball_media_required_dir_copy "${deps_root}/SDL3/SDL/include/SDL3" "${include_dir}/"
+      ppuc_vpinball_media_required_dir_copy "${deps_root}/SDL3/SDL_image/include/SDL3_image" "${include_dir}/"
    fi
-   cp -r "${deps_root}/SDL3/SDL_ttf/include/SDL3_ttf" "${include_dir}/"
+   ppuc_vpinball_media_required_dir_copy "${deps_root}/SDL3/SDL_ttf/include/SDL3_ttf" "${include_dir}/"
 
-   expected="${VPINBALL_LIBALTSOUND_SHA}$([ "${platform}" = "macos" ] && echo "-macos${MACOSX_DEPLOYMENT_TARGET}")"
+   expected="${VPINBALL_LIBALTSOUND_SHA}"
+   if [ "${platform}" = "macos" ]; then
+      expected="${expected}-macos${MACOSX_DEPLOYMENT_TARGET}"
+   fi
    found="$([ -f "${deps_root}/libaltsound/cache.txt" ] && cat "${deps_root}/libaltsound/cache.txt" || echo "")"
    if [ "${expected}" != "${found}" ]; then
       echo "Building VPX media libaltsound. Expected: ${expected}, Found: ${found}"
@@ -482,7 +517,10 @@ ppuc_prepare_vpinball_media_dependencies() {
    fi
    cp "${deps_root}/libaltsound/libaltsound/src/altsound.h" "${include_dir}/"
 
-   expected="${VPINBALL_FFMPEG_SHA}$([ "${platform}" = "macos" ] && echo "-macos${MACOSX_DEPLOYMENT_TARGET}")"
+   expected="${VPINBALL_FFMPEG_SHA}"
+   if [ "${platform}" = "macos" ]; then
+      expected="${expected}-macos${MACOSX_DEPLOYMENT_TARGET}"
+   fi
    found="$([ -f "${deps_root}/ffmpeg/cache.txt" ] && cat "${deps_root}/ffmpeg/cache.txt" || echo "")"
    if [ "${expected}" != "${found}" ]; then
       echo "Building VPX media ffmpeg. Expected: ${expected}, Found: ${found}"
