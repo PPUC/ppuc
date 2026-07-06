@@ -94,7 +94,7 @@ jobs:
       - if: (!(matrix.platform == 'linux' && matrix.arch == 'aarch64') && matrix.platform != 'win-mingw')
         name: Build ppuc-${{ matrix.platform }}-${{ matrix.arch }}
         run: |
-          VERBOSE=1./platforms/${{ matrix.platform }}/${{ matrix.arch }}/build.sh
+          VERBOSE=1 ./platforms/${{ matrix.platform }}/${{ matrix.arch }}/build.sh
       - if: (matrix.platform == 'linux' && matrix.arch == 'aarch64')
         name: Build ppuc-${{ matrix.platform }}-${{ matrix.arch }} (arm runner)
         uses: pguyot/arm-runner-action@v2
