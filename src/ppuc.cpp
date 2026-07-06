@@ -2466,19 +2466,19 @@ static void CleanupBenchTestRunner(PPUC* ppuc, const BenchTestRunner& runner)
 }
 
 static struct cag_option options[] = {
+    {.identifier = '$',
+     .access_name = "game",
+     .value_name = "VALUE",
+     .description = "Game folder containing io-boards.yaml, ppuc.ini, rules, pup, and pinmame assets"},
     {.identifier = 'c',
      .access_letters = "c",
      .access_name = "config",
      .value_name = "VALUE",
-     .description = "Path to config file (required)"},
+     .description = "Path to config file (optional)"},
     {.identifier = 'z',
      .access_name = "ini-file",
      .value_name = "VALUE",
      .description = "Path to ppuc runtime INI file (optional)"},
-    {.identifier = '$',
-     .access_name = "game",
-     .value_name = "VALUE",
-     .description = "Game folder containing io-boards.yaml, ppuc.ini, rules, pup, and pinmame assets (optional)"},
     {.identifier = 'r',
      .access_letters = "r",
      .access_name = "rom",
@@ -3888,7 +3888,8 @@ int main(int argc, char** argv)
         opt_virtual_dmd_y = atoi(cag_option_get_value(&cag_context));
         break;
       case 'h':
-        printf("Usage: ppuc [OPTION]...\n");
+      printf("Use option --game to specify the game folder.\nAny other option is optional to override the settings from within the game folder.\n");
+        printf("Usage: ppuc --game <game_folder> [OPTION]...\n");
         cag_option_print(options, CAG_ARRAY_SIZE(options), stdout);
         return 0;
       default:
@@ -3896,7 +3897,7 @@ int main(int argc, char** argv)
         {
           fprintf(stderr, "Unknown command line option: ");
           cag_option_print_error(&cag_context, stderr);
-          fprintf(stderr, "Usage: ppuc [OPTION]...\n");
+          fprintf(stderr, "Usage: ppuc --game <game_folder> [OPTION]...\n");
           cag_option_print(options, CAG_ARRAY_SIZE(options), stderr);
           return 1;
         }

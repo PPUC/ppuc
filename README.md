@@ -449,6 +449,10 @@ The platform build scripts stage dependencies into `third-party`. By default,
 they use the pinned GitHub archive SHAs from `platforms/config.sh`, which keeps
 normal user builds reproducible.
 
+```shell
+PPUC_DEPENDENCY_SOURCE=github platforms/macos/arm64/build.sh
+```
+
 For local development across the PPUC repositories, set `PPUC_DEPENDENCY_SOURCE`
 when running a build script from the `ppuc` repository root:
 
@@ -495,7 +499,7 @@ platforms/linux/x64/build.sh
 sudo apt install git autoconf libtool libudev-dev libpipewire-0.3-dev libwayland-dev libdecor-0-dev liburing-dev libasound2-dev libpulse-dev libaudio-dev libjack-dev libsndio-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libxtst-dev libxkbcommon-dev libdrm-dev libgbm-dev libgl1-mesa-dev libgles2-mesa-dev libegl1-mesa-dev libdbus-1-dev libibus-1.0-dev
 git clone https://github.com/PPUC/ppuc.git
 cd ppuc
-platforms/linux/x64/build.sh
+PPUC_DEPENDENCY_SOURCE=github platforms/linux/x64/build.sh
 ppuc/ppuc-pinmame --game /path/to/games/t2 -n -i
 ```
 

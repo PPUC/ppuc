@@ -10,7 +10,7 @@ defaults:
 jobs:
   version:
     name: Detect version
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       tag: ${{ steps.version.outputs.tag }}
     steps:
@@ -43,7 +43,7 @@ jobs:
           #- os: macos-latest
           #  platform: macos
           #  arch: x64
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             platform: linux
             arch: x64
           #- os: ubuntu-latest

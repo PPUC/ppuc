@@ -386,6 +386,7 @@ ppuc_prepare_vpinball_media_dependencies() {
                -DSDL_STATIC=OFF \
                -DSDL_TEST_LIBRARY=OFF \
                -DSDL_OPENGLES=OFF \
+               -DSDL_WAYLAND=OFF \
                ${cmake_platform_args} \
                -DCMAKE_BUILD_TYPE="${BUILD_TYPE}"
             cmake --build SDL/build -- -j"${num_procs}"
