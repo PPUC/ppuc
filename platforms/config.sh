@@ -485,7 +485,10 @@ ppuc_prepare_vpinball_media_dependencies() {
    fi
    ppuc_vpinball_media_required_dir_copy "${deps_root}/SDL3/SDL_ttf/include/SDL3_ttf" "${include_dir}/"
 
-   expected="${VPINBALL_LIBALTSOUND_SHA}$([ "${platform}" = "macos" ] && echo "-macos${MACOSX_DEPLOYMENT_TARGET}")"
+   expected="${VPINBALL_LIBALTSOUND_SHA}"
+   if [ "${platform}" = "macos" ]; then
+      expected="${expected}-macos${MACOSX_DEPLOYMENT_TARGET}"
+   fi
    found="$([ -f "${deps_root}/libaltsound/cache.txt" ] && cat "${deps_root}/libaltsound/cache.txt" || echo "")"
    if [ "${expected}" != "${found}" ]; then
       echo "Building VPX media libaltsound. Expected: ${expected}, Found: ${found}"
@@ -514,7 +517,10 @@ ppuc_prepare_vpinball_media_dependencies() {
    fi
    cp "${deps_root}/libaltsound/libaltsound/src/altsound.h" "${include_dir}/"
 
-   expected="${VPINBALL_FFMPEG_SHA}$([ "${platform}" = "macos" ] && echo "-macos${MACOSX_DEPLOYMENT_TARGET}")"
+   expected="${VPINBALL_FFMPEG_SHA}"
+   if [ "${platform}" = "macos" ]; then
+      expected="${expected}-macos${MACOSX_DEPLOYMENT_TARGET}"
+   fi
    found="$([ -f "${deps_root}/ffmpeg/cache.txt" ] && cat "${deps_root}/ffmpeg/cache.txt" || echo "")"
    if [ "${expected}" != "${found}" ]; then
       echo "Building VPX media ffmpeg. Expected: ${expected}, Found: ${found}"
