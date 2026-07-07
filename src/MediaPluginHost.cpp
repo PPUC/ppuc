@@ -15,6 +15,13 @@
 #include <unordered_map>
 #include <vector>
 
+#if defined(_WIN32) || defined(_WIN64)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+
 #include "SDL3/SDL.h"
 #include "SDL3_image/SDL_image.h"
 
@@ -413,13 +420,13 @@ public:
   void* Link(const std::string& directory, const std::string& file) override
   {
 #if defined(_WIN32) || defined(__MINGW32__)
-    SetDllDirectory(directory.c_str());
+    SetDllDirectoryA(directory.c_str());
 #else
     (void)directory;
 #endif
     void* module = SDL_LoadObject(file.c_str());
 #if defined(_WIN32) || defined(__MINGW32__)
-    SetDllDirectory(nullptr);
+    SetDllDirectoryA(nullptr);
 #endif
     return module;
   }
