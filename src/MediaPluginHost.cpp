@@ -672,6 +672,7 @@ bool MediaPluginHost::Impl::Initialize(const Options& options,
     }
     candidates.emplace_back("ppuc/plugins");
     candidates.emplace_back("plugins");
+    candidates.emplace_back("/usr/lib/ppuc/plugins");
     candidates.emplace_back("../vpinball/plugins");
 
     for (const auto& candidate : candidates)
