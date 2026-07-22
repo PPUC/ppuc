@@ -179,14 +179,19 @@ if(EXISTS "${PPUC_LUA_SOURCE_DIR}/lua.h")
    )
    message(STATUS "Lua source dir: ${PPUC_LUA_SOURCE_DIR}")
 else()
-   find_path(PPUC_LUA_INCLUDE_DIR
-      NAMES lua.h
-      PATHS
-         "${PPUC_STAGED_INCLUDE_DIR}"
-         "${PPUC_STAGED_INCLUDE_DIR}/lua"
-         "${PPUC_STAGED_INCLUDE_DIR}/lua5.4"
-         "${PPUC_STAGED_INCLUDE_DIR}/lua54"
-   )
+   set(PPUC_LUA_INCLUDE_DIR "" CACHE PATH "Lua include directory")
+   set(PPUC_LUA_LIBRARY "" CACHE FILEPATH "Lua library")
+
+   if(NOT PPUC_LUA_INCLUDE_DIR)
+      find_path(PPUC_LUA_INCLUDE_DIR
+         NAMES lua.h
+         PATHS
+            "${PPUC_STAGED_INCLUDE_DIR}"
+            "${PPUC_STAGED_INCLUDE_DIR}/lua"
+            "${PPUC_STAGED_INCLUDE_DIR}/lua5.4"
+            "${PPUC_STAGED_INCLUDE_DIR}/lua54"
+      )
+   endif()
    if(NOT PPUC_LUA_INCLUDE_DIR)
       find_path(PPUC_LUA_INCLUDE_DIR
          NAMES lua.h
@@ -194,12 +199,14 @@ else()
       )
    endif()
 
-   find_library(PPUC_LUA_LIBRARY
-      NAMES lua54 lua5.4 lua
-      PATHS
-         "${PPUC_STAGED_BUILD_LIB_DIR}"
-         "${PPUC_STAGED_RUNTIME_LIB_DIR}"
-   )
+   if(NOT PPUC_LUA_LIBRARY)
+      find_library(PPUC_LUA_LIBRARY
+         NAMES lua54 lua5.4 lua
+         PATHS
+            "${PPUC_STAGED_BUILD_LIB_DIR}"
+            "${PPUC_STAGED_RUNTIME_LIB_DIR}"
+      )
+   endif()
    if(NOT PPUC_LUA_LIBRARY)
       find_library(PPUC_LUA_LIBRARY
          NAMES lua54 lua5.4 lua
