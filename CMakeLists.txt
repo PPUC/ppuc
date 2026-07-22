@@ -138,8 +138,8 @@ list(APPEND PPUC_INCLUDE_DIRS
 message(STATUS "Media plugin host: enabled (${PPUC_VPINBALL_DIR})")
 
 set(PPUC_LUA_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third-party/lua-src")
-set(PPUC_LUA_INCLUDE_DIR "")
-set(PPUC_LUA_LIBRARY "")
+set(PPUC_LUA_INCLUDE_DIR "" CACHE PATH "Lua include directory")
+set(PPUC_LUA_LIBRARY "" CACHE FILEPATH "Lua library")
 set(PPUC_LUA_SOURCES "")
 if(EXISTS "${PPUC_LUA_SOURCE_DIR}/lua.h")
    set(PPUC_LUA_INCLUDE_DIR "${PPUC_LUA_SOURCE_DIR}")
@@ -179,9 +179,6 @@ if(EXISTS "${PPUC_LUA_SOURCE_DIR}/lua.h")
    )
    message(STATUS "Lua source dir: ${PPUC_LUA_SOURCE_DIR}")
 else()
-   set(PPUC_LUA_INCLUDE_DIR "" CACHE PATH "Lua include directory")
-   set(PPUC_LUA_LIBRARY "" CACHE FILEPATH "Lua library")
-
    if(NOT PPUC_LUA_INCLUDE_DIR)
       find_path(PPUC_LUA_INCLUDE_DIR
          NAMES lua.h
