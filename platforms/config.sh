@@ -14,6 +14,7 @@ LUA_VERSION=5.4.8
 PINMAME_SHA=3a5ce504118c6cb79bd365db12d6baec08708aaf
 PINMAME_NVRAM_MAPS_SHA=d8693b9ca59a1b871d2a473be3adb0392471a8e3
 LIBPPUC_SHA=44515c17dbd731f5bba954e30f443ef7e6b12c75
+DOCTEST_VERSION=2.4.11
 LIBSDLDMD_SHA=97992de06160020e34aeff41c6392ee7d7745d2c
 VPINBALL_SHA=c0b065d443c4d6ca393679795f76159a0229418c
 VPINBALL_SDL_SHA=f87239e71e42da91ca317a12eefb82cfbf3393eb
@@ -96,6 +97,35 @@ dependency_source_dir() {
    (cd "${PPUC_SOURCE_ROOT}" && cd "${source_dir}" && pwd -P)
 }
 
+ppuc_source_dir_fingerprint() {
+   # A stable fingerprint of a local dependency checkout: its commit plus any
+   # uncommitted work. Used so that building from a source directory rebuilds
+   # when the sources actually changed, rather than on every invocation.
+   #
+   # Falls back to the timestamp for anything that is not a git checkout, which
+   # restores the old always-rebuild behaviour for that case.
+   local dir="$1"
+   local head
+   local dirty
+
+   if ! head="$(git -C "${dir}" rev-parse HEAD 2>/dev/null)"; then
+      echo "${SOURCE_DIR_CACHE_BUSTER}"
+      return 0
+   fi
+
+   dirty="$( {
+      # Content of tracked modifications.
+      git -C "${dir}" diff HEAD
+      # Content of untracked files, so a new or edited untracked source file
+      # (a test suite, for instance) still triggers a rebuild.
+      git -C "${dir}" ls-files --others --exclude-standard | while read -r f; do
+         shasum "${dir}/${f}" 2>/dev/null
+      done
+   } 2>/dev/null | shasum | cut -c1-12 )"
+
+   echo "${head:0:12}-${dirty}"
+}
+
 dependency_cache_key() {
    local sha="$1"
    local source_var="$2"
@@ -103,7 +133,7 @@ dependency_cache_key() {
 
    source_dir="$(dependency_source_dir "${source_var}")"
    if [ -n "${source_dir}" ]; then
-      echo "source:${source_dir}:${SOURCE_DIR_CACHE_BUSTER}"
+      echo "source:${source_dir}:$(ppuc_source_dir_fingerprint "${source_dir}")"
    else
       echo "${sha}"
    fi
@@ -161,9 +191,11 @@ ppuc_stage_lua_source() {
    fi
 
    mkdir -p ../third-party/include/lua ../third-party/lua-src
-   cp lua/lua/src/*.h ../third-party/include/lua/
-   cp lua/lua/src/*.h ../third-party/lua-src/
-   cp lua/lua/src/*.c ../third-party/lua-src/
+   # -a preserves timestamps. A plain cp would restamp all of Lua on every run
+   # and force the ~33 Lua translation units to recompile each build.
+   cp -a lua/lua/src/*.h ../third-party/include/lua/
+   cp -a lua/lua/src/*.h ../third-party/lua-src/
+   cp -a lua/lua/src/*.c ../third-party/lua-src/
 }
 
 ppuc_macos_deployment_target() {
@@ -263,7 +295,9 @@ ppuc_vpinball_media_required_dir_copy() {
    fi
 
    echo "Copying media dependency include dir: ${source_dir} -> ${dest}"
-   cp -r "${source_dir}" "${dest}"
+   # -a preserves timestamps: a plain cp would make every staged header look
+   # newer than the objects that include it and force a full plugin rebuild.
+   cp -a "${source_dir}" "${dest}"
 }
 
 ppuc_clean_runtime_lib_dir() {
@@ -515,7 +549,7 @@ ppuc_prepare_vpinball_media_dependencies() {
    else
       ppuc_vpinball_media_glob_copy "${deps_root}/libaltsound/libaltsound/build/libaltsound.so*" "${runtime_dir}"
    fi
-   cp "${deps_root}/libaltsound/libaltsound/src/altsound.h" "${include_dir}/"
+   cp -a "${deps_root}/libaltsound/libaltsound/src/altsound.h" "${include_dir}/"
 
    expected="${VPINBALL_FFMPEG_SHA}"
    if [ "${platform}" = "macos" ]; then
@@ -573,7 +607,7 @@ ppuc_prepare_vpinball_media_dependencies() {
          ppuc_vpinball_media_glob_copy "${deps_root}/ffmpeg/ffmpeg/${lib}/${lib}.so*" "${runtime_dir}"
       fi
       mkdir -p "${include_dir}/${lib}"
-      cp "${deps_root}/ffmpeg/ffmpeg/${lib}"/*.h "${include_dir}/${lib}/"
+      cp -a "${deps_root}/ffmpeg/ffmpeg/${lib}"/*.h "${include_dir}/${lib}/"
    done
 
    if [ "${platform}" = "macos" ]; then
@@ -581,9 +615,9 @@ ppuc_prepare_vpinball_media_dependencies() {
    else
       ppuc_vpinball_media_glob_copy "${PPUC_SOURCE_ROOT}/third-party/runtime-libs/${platform_tag}/libpupdmd.so*" "${runtime_dir}"
    fi
-   cp "${PPUC_SOURCE_ROOT}/third-party/include/pupdmd.h" "${include_dir}/"
+   cp -a "${PPUC_SOURCE_ROOT}/third-party/include/pupdmd.h" "${include_dir}/"
    mkdir -p "${ppuc_include_dir}/pup"
-   cp "${vpinball_root}/plugins/pup/PUPPlugin.h" "${ppuc_include_dir}/pup/"
+   cp -a "${vpinball_root}/plugins/pup/PUPPlugin.h" "${ppuc_include_dir}/pup/"
 }
 
 ppuc_prepare_vpinball_media_plugins() {
@@ -651,6 +685,7 @@ ppuc_build_vpinball_media_plugins() {
    fi
 
    echo "Building VPX media plugins for PPUC: ${platform}-${arch}"
+   ppuc_reset_stale_cmake_cache "${vpinball_build_dir}" "${vpinball_root}"
    mkdir -p "${plugin_package_dir}"
    if [ "${platform}" = "macos" ]; then
       export MACOSX_DEPLOYMENT_TARGET="$(ppuc_macos_deployment_target)"
@@ -665,7 +700,9 @@ ppuc_build_vpinball_media_plugins() {
       ${cmake_platform_args} \
       "${plugin_rpath_args[@]}" \
       -DVPINBALL_PLUGIN_PACKAGE_DIR="${plugin_package_dir}"
-   for plugin_target in PUPPlugin AltSoundPlugin B2SPlugin B2SLegacyPlugin; do
+   # B2SLegacyPlugin is deliberately not built: MediaPluginHost only ever
+   # loads "PUP", "AltSound" and "B2S". --b2s uses the modern B2S plugin.
+   for plugin_target in PUPPlugin AltSoundPlugin B2SPlugin; do
       cmake --build "${vpinball_build_dir}" --target "${plugin_target}"
    done
 
@@ -676,16 +713,11 @@ ppuc_build_vpinball_media_plugins() {
       if [ -f "${plugin_package_dir}/b2s/plugin-b2s.dylib" ]; then
          install_name_tool -add_rpath "@loader_path/../.." "${plugin_package_dir}/b2s/plugin-b2s.dylib" 2>/dev/null || true
       fi
-      if [ -f "${plugin_package_dir}/b2slegacy/plugin-b2slegacy.dylib" ]; then
-         install_name_tool -add_rpath "@loader_path/../.." "${plugin_package_dir}/b2slegacy/plugin-b2slegacy.dylib" 2>/dev/null || true
-      fi
       rm -f "${plugin_package_dir}"/pup/libSDL3.dylib
       rm -f "${plugin_package_dir}"/pup/libSDL3.[0-9]*.dylib
       rm -f "${plugin_package_dir}"/pup/libSDL3_image*.dylib
       rm -f "${plugin_package_dir}"/pup/libSDL3_mixer*.dylib
       rm -f "${plugin_package_dir}"/pup/libpupdmd*.dylib
-      rm -f "${plugin_package_dir}"/b2slegacy/libSDL3.dylib
-      rm -f "${plugin_package_dir}"/b2slegacy/libSDL3.[0-9]*.dylib
 
       ppuc_relink_macos_dylib_alias "${plugin_package_dir}/pup" "libSDL3_ttf.0.dylib" "libSDL3_ttf.0.*.dylib"
       ppuc_relink_macos_dylib_alias "${plugin_package_dir}/pup" "libSDL3_ttf.dylib" "libSDL3_ttf.0.dylib"
@@ -699,10 +731,258 @@ ppuc_build_vpinball_media_plugins() {
       rm -f "${plugin_package_dir}"/pup/libSDL3_image.so*
       rm -f "${plugin_package_dir}"/pup/libSDL3_mixer.so*
       rm -f "${plugin_package_dir}"/pup/libpupdmd.so*
-      rm -f "${plugin_package_dir}"/b2slegacy/libSDL3.so*
-   elif [ "${platform}" = "win" ] || [ "${platform}" = "win-mingw" ] || [ "${platform}" = "windows-mingw" ]; then
-      rm -f "${plugin_package_dir}"/b2slegacy/SDL3*.dll
    fi
+   # Windows needed no post-build fixups once B2SLegacy was dropped: its only
+   # step was removing SDL3 DLLs from the b2slegacy package directory.
+}
+
+ppuc_reset_stale_cmake_cache() {
+   # A CMake build directory records the absolute path of the source tree it
+   # was configured for. Moving, renaming or copying the workspace makes every
+   # such directory unusable, and CMake then refuses to configure with an error
+   # that only says "re-run cmake with a different source directory".
+   #
+   # Removing the build directory is the only remedy, and it is always safe:
+   # these directories are generated and gitignored. Do it automatically rather
+   # than making every developer diagnose it.
+   #
+   # Only build directories that are actually reconfigured need this. Build
+   # directories inside cached dependency trees are never re-run (their
+   # cache.txt short-circuits the whole block), and deleting those would remove
+   # artifacts that external.sh later copies.
+   local build_dir="$1"
+   local source_dir="$2"
+   local cached
+   local cached_real
+   local source_real
+
+   [ -f "${build_dir}/CMakeCache.txt" ] || return 0
+
+   cached="$(grep -m1 '^CMAKE_HOME_DIRECTORY:' "${build_dir}/CMakeCache.txt" |
+      cut -d= -f2)"
+   [ -n "${cached}" ] || return 0
+
+   # Resolve both sides: a symlinked workspace root (for example
+   # /Users/<user>/workspace -> /Volumes/data/workspace) spells the same
+   # directory two ways and must not count as stale.
+   cached_real="$(cd "${cached}" 2>/dev/null && pwd -P)" || cached_real=""
+   source_real="$(cd "${source_dir}" 2>/dev/null && pwd -P)" || source_real=""
+
+   if [ -n "${source_real}" ] && [ "${cached_real}" != "${source_real}" ]; then
+      echo "Removing stale CMake cache: ${build_dir}"
+      echo "  configured for: ${cached}"
+      echo "  building:       ${source_real}"
+      rm -rf "${build_dir}"
+   fi
+}
+
+ppuc_stage_doctest() {
+   # doctest is the unit test framework. It is staged like every other
+   # dependency rather than committed, because third-party/include is
+   # generated and gitignored.
+   #
+   # libppuc stages the same header, so a full build reuses that copy instead
+   # of downloading it twice. But ppuc keeps its own pin and its own fallback:
+   # doctest is a build tool, not an interface dependency, so the ability to
+   # run ppuc's tests must not depend on which libppuc revision is pinned.
+   local include_dir="${PPUC_SOURCE_ROOT}/third-party/include"
+   local header="${include_dir}/doctest.h"
+   local marker="${include_dir}/doctest.cache.txt"
+   local from_libppuc="${PPUC_SOURCE_ROOT}/external/libppuc/libppuc/third-party/include/doctest.h"
+   local expected="${DOCTEST_VERSION}"
+   local found
+
+   found="$([ -f "${marker}" ] && cat "${marker}" || echo "")"
+
+   if [ "${expected}" = "${found}" ] && [ -f "${header}" ]; then
+      return 0
+   fi
+
+   mkdir -p "${include_dir}"
+
+   if [ -f "${from_libppuc}" ]; then
+      echo "Staging doctest from libppuc"
+      cp "${from_libppuc}" "${header}"
+   else
+      echo "Staging doctest ${DOCTEST_VERSION}"
+      curl -sL \
+         "https://raw.githubusercontent.com/doctest/doctest/v${DOCTEST_VERSION}/doctest/doctest.h" \
+         -o "${header}"
+   fi
+
+   echo "${expected}" > "${marker}"
+}
+
+ppuc_parse_build_args() {
+   # Shared option parsing for every platforms/*/*/build.sh.
+   while [ $# -gt 0 ]; do
+      case "$1" in
+         --test|--tests)
+            PPUC_RUN_TESTS=1
+            ;;
+         --help|-h)
+            echo "Usage: build.sh [--test]"
+            echo ""
+            echo "  --test   after building, build and run the host-side C++"
+            echo "           unit test suites (libppuc and ppuc)"
+            exit 0
+            ;;
+         *)
+            echo "Unknown build option: $1" >&2
+            echo "Supported options: --test" >&2
+            exit 1
+            ;;
+      esac
+      shift
+   done
+
+   export PPUC_RUN_TESTS="${PPUC_RUN_TESTS:-0}"
+}
+
+PPUC_TEST_RESULTS=()
+PPUC_TEST_FAILED_LOGS=()
+
+ppuc_doctest_summary() {
+   # Extracts a compact "N test cases, M assertions" line from a ctest log.
+   local log="$1"
+   local cases
+   local assertions
+
+   cases="$(grep -m1 'test cases:' "${log}" 2>/dev/null |
+      sed -E 's/.*test cases: *([0-9]+).*/\1/')"
+   assertions="$(grep -m1 'assertions:' "${log}" 2>/dev/null |
+      sed -E 's/.*assertions: *([0-9]+).*/\1/')"
+
+   if [ -n "${cases}" ] && [ -n "${assertions}" ]; then
+      echo "${cases} test cases, ${assertions} assertions"
+   else
+      echo ""
+   fi
+}
+
+ppuc_record_test_suite() {
+   PPUC_TEST_RESULTS+=("$(printf '  %-10s %-8s %s' "$1" "$2" "$3")")
+}
+
+ppuc_run_test_suite() {
+   # Configures, builds and runs one suite. All detail goes to a log file so
+   # that the console stays readable; the log is replayed only on failure.
+   local label="$1"
+   local build_dir="$2"
+   local log="$3"
+   shift 3
+
+   printf '  %-10s configuring and building ... ' "${label}"
+   if ! "$@" > "${log}" 2>&1; then
+      echo "BUILD FAILED"
+      ppuc_record_test_suite "${label}" "FAILED" "build failed, see ${log}"
+      PPUC_TEST_FAILED_LOGS+=("${log}")
+      return 1
+   fi
+
+   printf 'running ... '
+   if ( cd "${build_dir}" && ctest --verbose ) >> "${log}" 2>&1; then
+      echo "ok"
+      ppuc_record_test_suite "${label}" "PASSED" "$(ppuc_doctest_summary "${log}")"
+      return 0
+   fi
+
+   echo "FAILED"
+   ppuc_record_test_suite "${label}" "FAILED" "see ${log}"
+   PPUC_TEST_FAILED_LOGS+=("${log}")
+   return 1
+}
+
+ppuc_run_host_tests() {
+   # Builds and runs the unit tests across the host-side C++ stack. libppuc is
+   # tested from the copy staged under external/, which is the same source the
+   # ppuc build links against, so the tests cover exactly what was built.
+   #
+   # Per-suite detail is written to build-tests/logs/ and only echoed when a
+   # suite fails, so the results are legible at the end of a long build.
+   local platform="$1"
+   local arch="$2"
+   local libppuc_dir
+   local num_procs
+   local log_dir
+   local failures=0
+   local line
+   local log
+
+   if [ "${PPUC_RUN_TESTS:-0}" != "1" ]; then
+      return 0
+   fi
+
+   num_procs="$(ppuc_vpinball_media_num_procs)"
+   libppuc_dir="${PPUC_SOURCE_ROOT}/external/libppuc/libppuc"
+   log_dir="${PPUC_SOURCE_ROOT}/build-tests/logs"
+   mkdir -p "${log_dir}"
+
+   PPUC_TEST_RESULTS=()
+   PPUC_TEST_FAILED_LOGS=()
+
+   echo ""
+   echo "================================================================"
+   echo " Host-side C++ test suites"
+   echo "================================================================"
+
+   if [ ! -f "${libppuc_dir}/CMakeLists.txt" ]; then
+      ppuc_record_test_suite "libppuc" "SKIPPED" "sources not staged"
+   elif [ ! -d "${libppuc_dir}/tests" ]; then
+      # The staged libppuc is whatever LIBPPUC_SHA points at. A revision that
+      # predates the test suite has no tests/ directory and no BUILD_TESTS
+      # option, so skip rather than fail the build.
+      ppuc_record_test_suite "libppuc" "SKIPPED" \
+         "pinned revision has no test suite; bump LIBPPUC_SHA or set LIBPPUC_SOURCE_DIR"
+   else
+      ppuc_reset_stale_cmake_cache "${libppuc_dir}/build-tests" "${libppuc_dir}"
+      # The test target compiles the library sources directly, so the shared
+      # and static libraries are not needed here.
+      ppuc_run_test_suite "libppuc" "${libppuc_dir}/build-tests" \
+         "${log_dir}/libppuc.log" \
+         bash -c "cmake -S '${libppuc_dir}' -B '${libppuc_dir}/build-tests' \
+               -DPLATFORM='${platform}' -DARCH='${arch}' \
+               -DBUILD_SHARED=OFF -DBUILD_STATIC=OFF -DBUILD_TESTS=ON \
+               -DCMAKE_BUILD_TYPE='${BUILD_TYPE}' &&
+            cmake --build '${libppuc_dir}/build-tests' -- -j${num_procs}" ||
+         failures=1
+   fi
+
+   ppuc_reset_stale_cmake_cache "${PPUC_SOURCE_ROOT}/build-tests" "${PPUC_SOURCE_ROOT}"
+   ppuc_run_test_suite "ppuc" "${PPUC_SOURCE_ROOT}/build-tests" \
+      "${log_dir}/ppuc.log" \
+      bash -c "cmake -S '${PPUC_SOURCE_ROOT}' -B '${PPUC_SOURCE_ROOT}/build-tests' \
+            -DPLATFORM='${platform}' -DARCH='${arch}' \
+            -DPPUC_BUILD_TESTS=ON -DPPUC_BUILD_MENU=OFF -DPPUC_BUILD_BACKBOX=OFF \
+            -DCMAKE_BUILD_TYPE='${BUILD_TYPE}' &&
+         cmake --build '${PPUC_SOURCE_ROOT}/build-tests' --target ppuc_tests -- -j${num_procs}" ||
+      failures=1
+
+   # Replay the detail for anything that failed, so the reason is visible
+   # without hunting for a log file.
+   for log in "${PPUC_TEST_FAILED_LOGS[@]}"; do
+      echo ""
+      echo "---------------- ${log} ----------------"
+      cat "${log}"
+      echo "---------------- end of ${log} ----------------"
+   done
+
+   echo ""
+   echo "================================================================"
+   echo " Test results"
+   echo "================================================================"
+   for line in "${PPUC_TEST_RESULTS[@]}"; do
+      echo "${line}"
+   done
+   echo "================================================================"
+
+   if [ "${failures}" != "0" ]; then
+      echo " FAILED"
+      echo "================================================================"
+      return 1
+   fi
+   echo " All host-side test suites passed"
+   echo "================================================================"
 }
 
 if [ -z "${BUILD_TYPE}" ]; then

@@ -6,6 +6,7 @@ option(ENABLE_SANITIZERS "Enable AddressSanitizer and UBSan for Debug builds" OF
 option(PPUC_USE_KMSDMD "Use libkmsdmd instead of SDL/libsdldmd for graphics" OFF)
 option(PPUC_BUILD_MENU "Build ppuc-menu" ON)
 option(PPUC_BUILD_BACKBOX "Build ppuc-backbox" ON)
+option(PPUC_BUILD_TESTS "Build unit tests" OFF)
 
 message(STATUS "PLATFORM: ${PLATFORM}")
 message(STATUS "ARCH: ${ARCH}")
@@ -13,6 +14,7 @@ message(STATUS "ENABLE_SANITIZERS: ${ENABLE_SANITIZERS}")
 message(STATUS "PPUC_USE_KMSDMD: ${PPUC_USE_KMSDMD}")
 message(STATUS "PPUC_BUILD_MENU: ${PPUC_BUILD_MENU}")
 message(STATUS "PPUC_BUILD_BACKBOX: ${PPUC_BUILD_BACKBOX}")
+message(STATUS "PPUC_BUILD_TESTS: ${PPUC_BUILD_TESTS}")
 
 if(PLATFORM STREQUAL "macos" AND NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET)
    if(DEFINED ENV{MACOSX_DEPLOYMENT_TARGET} AND NOT "$ENV{MACOSX_DEPLOYMENT_TARGET}" STREQUAL "")
@@ -653,4 +655,40 @@ else()
       sockpp
    )
 endif()
+endif()
+
+if(PPUC_BUILD_TESTS)
+   enable_testing()
+
+   # LuaRulesEngine is the most valuable unit to cover: it is the newest
+   # subsystem, it owns game behaviour, and it is cleanly injectable — all of
+   # its outputs go through std::function callbacks and it has no dependency on
+   # PPUC or the serial transport.
+   add_executable(ppuc_tests
+      src/LuaRulesEngine.cpp
+      ${PPUC_LUA_SOURCES}
+      tests/main.cpp
+      tests/RulesFixture.h
+      tests/test_lua_rules_engine.cpp
+   )
+
+   target_include_directories(ppuc_tests PRIVATE ${PPUC_INCLUDE_DIRS} tests)
+
+   if(PLATFORM STREQUAL "win" OR PLATFORM STREQUAL "win-mingw")
+      target_link_directories(ppuc_tests PRIVATE
+         third-party/build-libs/${PLATFORM}-${ARCH}
+         third-party/runtime-libs/${PLATFORM}-${ARCH}
+      )
+   else()
+      target_link_directories(ppuc_tests PRIVATE
+         third-party/build-libs/${PLATFORM}-${ARCH}
+         third-party/runtime-libs/${PLATFORM}-${ARCH}
+      )
+   endif()
+
+   if(PPUC_LUA_LIBRARY)
+      target_link_libraries(ppuc_tests PRIVATE ${PPUC_LUA_LIBRARY})
+   endif()
+
+   add_test(NAME ppuc_tests COMMAND ppuc_tests)
 endif()

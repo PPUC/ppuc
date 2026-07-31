@@ -45,7 +45,7 @@ FLITE_EXPECTED_SHA="${FLITE_SHA}"
 FLITE_FOUND_SHA="$([ -f flite/cache.txt ] && cat flite/cache.txt || echo "")"
 FLITE_INSTALL_DIR="flite/flite/install"
 FLITE_ARTIFACTS_OK=0
-if [ -d "${FLITE_INSTALL_DIR}/include/flite" ] && ls "${FLITE_INSTALL_DIR}"/lib/libflite*.a >/dev/null 2>&1; then
+if [ -f "${FLITE_INSTALL_DIR}/include/flite.h" ] && ls "${FLITE_INSTALL_DIR}"/lib/libflite*.a >/dev/null 2>&1; then
    FLITE_ARTIFACTS_OK=1
 fi
 
@@ -68,7 +68,7 @@ if [ "${FLITE_EXPECTED_SHA}" != "${FLITE_FOUND_SHA}" ] || [ "${FLITE_ARTIFACTS_O
    make -j${NUM_PROCS} -C src
    make -j${NUM_PROCS} -C lang
    mkdir -p install/include install/lib
-   cp -r include/* install/include/
+   cp -a include/* install/include/
    find build -path '*/lib/libflite*.a' -exec cp {} install/lib/ \;
    cd ..
 
@@ -248,7 +248,7 @@ if [ "${PINMAME_EXPECTED_SHA}" != "${PINMAME_FOUND_SHA}" ]; then
    tar xzf pinmame-${PINMAME_SHA}.tar.gz
    mv pinmame-${PINMAME_SHA} pinmame
    cd pinmame
-   cp cmake/libpinmame/CMakeLists.txt .
+   cp -a cmake/libpinmame/CMakeLists.txt .
    cmake \
       -DPLATFORM=macos \
       -DARCH=arm64 \
@@ -319,27 +319,27 @@ ppuc_clean_runtime_lib_dir "../third-party/runtime-libs/macos-arm64" macos
 PPUC_RUNTIME_DIR="../third-party/runtime-libs/macos-arm64"
 
 ppuc_copy_dylib_link_chain "libsdldmd/libsdldmd/third-party/runtime-libs/macos/arm64" "libSDL3.dylib" "${PPUC_RUNTIME_DIR}"
-cp -r libsdldmd/libsdldmd/third-party/include/SDL3 ../third-party/include/
+cp -a libsdldmd/libsdldmd/third-party/include/SDL3 ../third-party/include/
 
 ppuc_copy_dylib_link_chain "SDL3_image/SDL_image/build" "libSDL3_image.dylib" "${PPUC_RUNTIME_DIR}"
-cp -r SDL3_image/SDL_image/include/SDL3_image ../third-party/include/
+cp -a SDL3_image/SDL_image/include/SDL3_image ../third-party/include/
 
 ppuc_copy_dylib_link_chain "SDL3_mixer/SDL_mixer/build" "libSDL3_mixer.dylib" "${PPUC_RUNTIME_DIR}"
-cp -r SDL3_mixer/SDL_mixer/include/SDL3_mixer ../third-party/include/
+cp -a SDL3_mixer/SDL_mixer/include/SDL3_mixer ../third-party/include/
 
 mkdir -p ../third-party/include/flite
-cp -r flite/flite/install/include/* ../third-party/include/flite/
+cp -a flite/flite/install/include/* ../third-party/include/flite/
 cp -a flite/flite/install/lib/libflite*.a ../third-party/build-libs/macos-arm64/
 
-cp -r espeak-ng/espeak-ng/install/include/espeak-ng ../third-party/include/
+cp -a espeak-ng/espeak-ng/install/include/espeak-ng ../third-party/include/
 ppuc_copy_dylib_link_chain "espeak-ng/espeak-ng/install/lib" "libespeak-ng.dylib" "${PPUC_RUNTIME_DIR}"
 cp -R espeak-ng/espeak-ng/install/share/espeak-ng-data ../third-party/runtime-libs/macos-arm64/
 
 ppuc_copy_dylib_link_chain "pinmame/pinmame/build" "libpinmame.dylib" "${PPUC_RUNTIME_DIR}"
-cp pinmame/pinmame/src/libpinmame/libpinmame.h ../third-party/include/
+cp -a pinmame/pinmame/src/libpinmame/libpinmame.h ../third-party/include/
 rm -rf ../third-party/pinmame-nvram-maps
 mkdir -p ../third-party/pinmame-nvram-maps
-cp pinmame-nvram-maps/pinmame-nvram-maps/index.json ../third-party/pinmame-nvram-maps/
+cp -a pinmame-nvram-maps/pinmame-nvram-maps/index.json ../third-party/pinmame-nvram-maps/
 cp -R pinmame-nvram-maps/pinmame-nvram-maps/maps ../third-party/pinmame-nvram-maps/
 cp -R pinmame-nvram-maps/pinmame-nvram-maps/platforms ../third-party/pinmame-nvram-maps/
 #cp pinmame/pinmame/src/libpinmame/pinmamedef.h ../third-party/include/
@@ -348,30 +348,31 @@ if [ -n "${LIBSDLDMD_SHA}" ]; then
    LIBSDLDMD_DMDUTIL_THIRD_PARTY="libsdldmd/libsdldmd/external/libdmdutil/third-party"
 
    ppuc_copy_dylib_link_chain "libsdldmd/libsdldmd/third-party/runtime-libs/macos/arm64" "libdmdutil.dylib" "${PPUC_RUNTIME_DIR}"
-   cp -r libsdldmd/libsdldmd/third-party/include/DMDUtil ../third-party/include/
+   cp -a libsdldmd/libsdldmd/third-party/include/DMDUtil ../third-party/include/
    ppuc_copy_dylib_link_chain "${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/runtime-libs/macos/arm64" "libusb-1.0.dylib" "${PPUC_RUNTIME_DIR}"
    ppuc_copy_dylib_link_chain "${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/runtime-libs/macos/arm64" "libvni.dylib" "${PPUC_RUNTIME_DIR}"
    ppuc_copy_dylib_link_chain "${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/runtime-libs/macos/arm64" "libzedmd.dylib" "${PPUC_RUNTIME_DIR}"
-   cp ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/include/ZeDMD.h ../third-party/include/
+   cp -a ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/include/ZeDMD.h ../third-party/include/
    ppuc_copy_dylib_link_chain "${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/runtime-libs/macos/arm64" "libserum.dylib" "${PPUC_RUNTIME_DIR}"
-   cp ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/include/serum.h ../third-party/include/
-   cp ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/include/serum-decode.h ../third-party/include/
+   cp -a ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/include/serum.h ../third-party/include/
+   cp -a ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/include/serum-decode.h ../third-party/include/
    ppuc_copy_dylib_link_chain "${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/runtime-libs/macos/arm64" "libserialport.dylib" "${PPUC_RUNTIME_DIR}"
    ppuc_copy_dylib_link_chain "${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/runtime-libs/macos/arm64" "libpupdmd.dylib" "${PPUC_RUNTIME_DIR}"
-   cp ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/include/pupdmd.h ../third-party/include/
+   cp -a ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/include/pupdmd.h ../third-party/include/
    ppuc_copy_dylib_link_chain "${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/runtime-libs/macos/arm64" "libsockpp.dylib" "${PPUC_RUNTIME_DIR}"
-   cp ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/runtime-libs/macos/arm64/libcargs.dylib "${PPUC_RUNTIME_DIR}/"
-   cp -r ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/include/sockpp ../third-party/include/
-   cp ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/include/cargs.h ../third-party/include/
-   cp ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/include/FrameUtil.h ../third-party/include/
-   cp -r libsdldmd/libsdldmd/include/SDLDMD ../third-party/include/
+   cp -a ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/runtime-libs/macos/arm64/libcargs.dylib "${PPUC_RUNTIME_DIR}/"
+   cp -a ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/include/sockpp ../third-party/include/
+   cp -a ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/include/cargs.h ../third-party/include/
+   cp -a ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/include/FrameUtil.h ../third-party/include/
+   cp -a libsdldmd/libsdldmd/include/SDLDMD ../third-party/include/
    ppuc_copy_dylib_link_chain "libsdldmd/libsdldmd/build" "libsdldmd.dylib" "${PPUC_RUNTIME_DIR}"
 fi
 
-cp libppuc/libppuc/src/PPUC.h ../third-party/include/
-cp libppuc/libppuc/src/PPUC_structs.h ../third-party/include/
-cp -r libppuc/libppuc/third-party/include/yaml-cpp ../third-party/include/
-cp -r libppuc/libppuc/third-party/include/io-boards ../third-party/include/
+cp -a libppuc/libppuc/src/PPUC.h ../third-party/include/
+cp -a libppuc/libppuc/src/PPUC_structs.h ../third-party/include/
+cp -a libppuc/libppuc/third-party/include/yaml-cpp ../third-party/include/
+cp -a libppuc/libppuc/third-party/include/io-boards ../third-party/include/
+ppuc_stage_doctest
 ppuc_copy_dylib_link_chain "libppuc/libppuc/build" "libppuc.dylib" "${PPUC_RUNTIME_DIR}"
 ppuc_copy_dylib_link_chain "libppuc/libppuc/third-party/runtime-libs/macos/arm64" "libyaml-cpp.dylib" "${PPUC_RUNTIME_DIR}"
 
