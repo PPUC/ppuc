@@ -20,6 +20,12 @@ class LuaRulesEngine
   using SpeechCallback = std::function<void(const std::string& text)>;
   using ActionCallback = std::function<void(const RulesAction& action)>;
 
+  // Source of the millisecond timestamp used for named-state expiry, trigger
+  // history windows, onlyOnceEvery and ppuc.after scheduling. Defaults to a
+  // steady clock; injectable so that time-dependent rule behaviour can be
+  // tested deterministically instead of with sleeps.
+  using ClockFn = std::function<uint64_t()>;
+
   struct SwitchProcessResult
   {
     bool forwardToCpu = true;
@@ -35,6 +41,8 @@ class LuaRulesEngine
   void SetTriggerCallback(TriggerCallback callback);
   void SetSpeechCallback(SpeechCallback callback);
   void SetActionCallback(ActionCallback callback);
+  // Overrides the clock. Passing an empty function restores the default.
+  void SetClock(ClockFn clock);
   void SetSwitchGroups(const std::unordered_map<std::string, std::vector<uint16_t>>& switchGroups);
   bool LoadScript(const char* path, std::string& error);
   bool LoadScripts(const std::vector<std::string>& paths, std::string& error);
@@ -150,6 +158,7 @@ class LuaRulesEngine
   TriggerCallback m_triggerCallback;
   SpeechCallback m_speechCallback;
   ActionCallback m_actionCallback;
+  ClockFn m_clock;
   uint8_t m_currentBall = 0;
   uint8_t m_currentPlayer = 0;
   bool m_attractMode = true;

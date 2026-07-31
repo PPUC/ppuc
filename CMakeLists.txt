@@ -670,6 +670,7 @@ if(PPUC_BUILD_TESTS)
       tests/main.cpp
       tests/RulesFixture.h
       tests/test_lua_rules_engine.cpp
+      tests/test_lua_rules_timing.cpp
    )
 
    target_include_directories(ppuc_tests PRIVATE ${PPUC_INCLUDE_DIRS} tests)

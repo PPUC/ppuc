@@ -97,6 +97,12 @@ void LuaRulesEngine::SetActionCallback(ActionCallback callback)
   m_actionCallback = std::move(callback);
 }
 
+void LuaRulesEngine::SetClock(ClockFn clock)
+{
+  std::lock_guard<std::mutex> lock(m_mutex);
+  m_clock = std::move(clock);
+}
+
 void LuaRulesEngine::SetSwitchGroups(const std::unordered_map<std::string, std::vector<uint16_t>>& switchGroups)
 {
   std::lock_guard<std::mutex> lock(m_mutex);
@@ -646,6 +652,11 @@ bool LuaRulesEngine::StartOnceEvery(const std::string& name, uint32_t durationMs
 
 uint64_t LuaRulesEngine::GetNowMs() const
 {
+  if (m_clock)
+  {
+    return m_clock();
+  }
+
   return static_cast<uint64_t>(
       std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
           .count());

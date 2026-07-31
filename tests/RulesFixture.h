@@ -55,6 +55,11 @@ struct RecordedTrigger {
 class RulesHarness {
  public:
   explicit RulesHarness(const std::string& script) : m_script(script) {
+    // Drive the engine from a clock the test controls, so time-dependent
+    // behaviour can be asserted exactly instead of with sleeps. Starts well
+    // away from 0, since 0 is the "never expires" sentinel for named states.
+    m_engine.SetClock([this]() { return m_nowMs; });
+
     m_engine.SetTriggerCallback([this](char source, uint16_t id, uint8_t value) {
       triggers.push_back(RecordedTrigger{source, id, value});
     });
@@ -81,12 +86,26 @@ class RulesHarness {
 
   LuaRulesEngine& engine() { return m_engine; }
 
+  // Moves the injected clock forward. Nothing time-driven happens until the
+  // engine is asked to do work, so most tests advance then call Update().
+  void Advance(uint64_t ms) { m_nowMs += ms; }
+
+  // Advances and pumps the engine, which is what the ppuc-pinmame main loop
+  // does every tick.
+  void AdvanceAndUpdate(uint64_t ms) {
+    Advance(ms);
+    m_engine.Update();
+  }
+
+  uint64_t now() const { return m_nowMs; }
+
   std::vector<RecordedTrigger> triggers;
   std::vector<std::string> speech;
   std::vector<RulesAction> actions;
 
  private:
   TempLua m_script;
+  uint64_t m_nowMs = 10'000;
   LuaRulesEngine m_engine;
 };
 
