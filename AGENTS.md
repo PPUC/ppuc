@@ -13,7 +13,22 @@ It sits above `../libppuc` and indirectly above `../io-boards`. It is the
 application layer, **not** the protocol definition. Protocol changes belong in
 `../io-boards` (wire format) and `../libppuc` (host transport).
 
-Reference documentation lives next to the code:
+Because `platforms/*/*/build.sh` transitively builds the whole C++ stack, this
+repository is also the root of the build graph and the home of the stack-wide
+documentation:
+
+- `docs/STACK.md`: architecture, dependency/pin model, and build system across
+  **all** PPUC repositories. Read this first for anything cross-repo.
+- `docs/ASSESSMENT.md`: independent architecture review, current state, and the
+  prioritized stabilization backlog.
+- `docs/V2_RESYNC_PROPOSAL.md`, `docs/LUA_RULES_MIGRATION_PLAN.md`: design
+  rationale for session resync and the Lua rules system.
+- `tools/check-pins.sh`: resolves the transitive dependency pin chain, verifies
+  each pin is on its repository's `main`, and reports local checkouts that drift
+  from what is pinned. Run it before concluding that a cross-repo change took
+  effect.
+
+Repository-local reference documentation:
 
 - `README.md`: full CLI reference, game-folder layout, INI, Lua rules, build
   instructions
