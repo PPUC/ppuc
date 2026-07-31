@@ -116,6 +116,40 @@ jobs:
             apt update -y --allow-releaseinfo-change
             apt install --no-install-recommends -y git pkg-config cmake autoconf automake libtool nasm libudev-dev libpipewire-0.3-dev libwayland-dev libdecor-0-dev liburing-dev libasound2-dev libpulse-dev libaudio-dev libjack-dev libsndio-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libxtst-dev libxkbcommon-dev libdrm-dev libgbm-dev libgl1-mesa-dev libgles2-mesa-dev libegl1-mesa-dev libdbus-1-dev libibus-1.0-dev libgpiod-dev
             ./platforms/${{ matrix.platform }}/${{ matrix.arch }}/build.sh
+      - if: (!(matrix.platform == 'linux' && matrix.arch == 'aarch64') && matrix.platform != 'win-mingw')
+        name: Unit tests
+        run: |
+          if [[ "$(uname)" == "Darwin" ]]; then
+             NUM_PROCS=$(sysctl -n hw.ncpu)
+          else
+             NUM_PROCS=$(nproc)
+          fi
+          cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DPLATFORM=${{ matrix.platform }} \
+            -DARCH=${{ matrix.arch }} \
+            -DPPUC_BUILD_TESTS=ON \
+            -DPPUC_BUILD_MENU=OFF \
+            -DPPUC_BUILD_BACKBOX=OFF \
+            -B build-tests
+          cmake --build build-tests --target ppuc_tests -- -j${NUM_PROCS}
+          ctest --test-dir build-tests --output-on-failure
+      - if: (matrix.platform == 'linux' && matrix.arch == 'x64')
+        name: Rebuild must be a no-op
+        run: |
+          # Three of four build-caching defects found during this work were
+          # completely silent: no error, just work redone every time. A second
+          # build with nothing changed must compile nothing at all.
+          ./platforms/${{ matrix.platform }}/${{ matrix.arch }}/build.sh > /tmp/rebuild.log 2>&1
+          if grep -qE "Building (CXX|C) object" /tmp/rebuild.log; then
+            echo "::error::A rebuild with no changes recompiled the following:"
+            grep -E "Building (CXX|C) object" /tmp/rebuild.log | head -40
+            echo ""
+            echo "Something is invalidating a cache or restamping a staged file."
+            echo "See docs/STABILIZATION_PLAN.md section 4.5."
+            exit 1
+          fi
+          echo "Rebuild recompiled nothing, as expected."
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:
