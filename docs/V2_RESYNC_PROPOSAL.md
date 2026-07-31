@@ -1,13 +1,33 @@
 # V2 Resync Proposal
 
-Status note:
-
-- Parts of this proposal are now implemented in the active tree:
-  - 5-byte `FrameHeader` with `epoch`
-  - switch-status payload on switch reply frames
-  - host-side epoch-based session resync
-- This file remains useful as design rationale, but it is no longer a pure
-  "future proposal" document.
+> **Status: largely implemented.** This is design rationale and historical
+> record, not a plan for future work. Verified against the tree on 2026-07-31:
+>
+> **Shipped as proposed**
+> - 5-byte `FrameHeader` with `epoch` (`kHeaderBytes = 5`)
+> - `SwitchStatusPayload` on both switch reply variants, with all six flags
+>   under the proposed names: `kStatusInSync`, `kStatusNeedsSetup`,
+>   `kStatusMappingIncomplete`, `kStatusSequenceGap`, `kStatusParserResynced`,
+>   `kStatusSwitchOverflow`
+> - host-side `m_epoch`, epoch written into all frames, epoch-based session
+>   resync after `RS485_COMM_SWITCH_REPLY_MISS_THRESHOLD` consecutive misses
+> - `ResetFrame` reserved for hard reboot only
+>
+> **Not implemented**
+> - Sequence validation. `sequence` is transmitted and parsed but never checked
+>   for advance, loss or duplication, so `lastAckedSequencePerBoard` and step 3
+>   of the "Normal runtime loop" below do not exist. Still open work.
+>
+> **Superseded**
+> - Every reference to UART DMA RX is obsolete. DMA was not merely "unstable" —
+>   it has since been **removed from the firmware entirely**, and the blocking
+>   framed parser is the only RX path. Ignore the DMA items in "Current Problem
+>   Summary" and "Implementation Order".
+> - The proposal predates `kFrameRestart (0x0B)`. `RestartFrame` became the
+>   actual normal-path answer to "recover without rebooting": it clears
+>   board-local config and runtime state and turns outputs off while keeping the
+>   RP2040 alive on UART. It is now the standard startup and shutdown path, with
+>   epoch resync handling mid-session recovery. See `ppuc/docs/STACK.md` §5.
 
 ## Goal
 
@@ -21,6 +41,9 @@ Hard reset remains available for true safety faults, but ordinary transport
 desync must not depower outputs.
 
 ## Current Problem Summary
+
+*Historical — these were the observed failure modes when this document was
+written. See the status block above for what has since changed.*
 
 Observed failure modes:
 
@@ -321,14 +344,17 @@ Add board-side support for:
 
 ## Implementation Order
 
+*Historical. Steps 1–6 were completed; step 7 was overtaken by events — DMA RX
+was removed from the firmware rather than revisited.*
+
 1. Update `PPUCProtocolV2.h` with header/status changes.
 2. Update board fallback RX path first, not DMA.
 3. Update host send/receive path for epoch and switch status.
 4. Make `SetupFrame` idempotent and session-forming.
 5. Add host session resync ladder.
 6. Validate long-running runtime without DMA.
-7. Revisit DMA RX only after the session-resync-capable non-DMA path is
-   stable.
+7. ~~Revisit DMA RX only after the session-resync-capable non-DMA path is
+   stable.~~ DMA RX was removed instead.
 
 ## Non-Goals For First Pass
 

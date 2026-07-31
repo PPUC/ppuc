@@ -21,8 +21,8 @@ documentation:
   **all** PPUC repositories. Read this first for anything cross-repo.
 - `docs/ASSESSMENT.md`: independent architecture review, current state, and the
   prioritized stabilization backlog.
-- `docs/V2_RESYNC_PROPOSAL.md`, `docs/LUA_RULES_MIGRATION_PLAN.md`: design
-  rationale for session resync and the Lua rules system.
+- `docs/V2_RESYNC_PROPOSAL.md`: design rationale for epoch-based session resync,
+  with a status block covering what shipped and what did not.
 - `tools/check-pins.sh`: resolves the transitive dependency pin chain, verifies
   each pin is on its repository's `main`, and reports local checkouts that drift
   from what is pinned. Run it before concluding that a cross-repo change took
@@ -32,8 +32,8 @@ Repository-local reference documentation:
 
 - `README.md`: full CLI reference, game-folder layout, INI, Lua rules, build
   instructions
-- `RULES_AND_EFFECTS.md`: what Lua rules can do and the `ppuc.*` API
-- `INTERCEPTOR.md`: host-side interception of physical machine events
+- `docs/RULES_AND_EFFECTS.md`: what Lua rules can do and the `ppuc.*` API
+- `docs/INTERCEPTOR.md`: host-side interception of physical machine events
 - `examples/ppuc-pinmame.ini`: the authoritative annotated INI reference
 - `examples/rules.lua`, `examples/menu.txt`, `examples/t2.yml`
 
@@ -158,7 +158,7 @@ handler, all of them run in load order.
 Handlers: `onSwitchChanged`, `onLampChanged`, `onCoilChanged`, `onBallChanged`,
 `onPlayerChanged`, `onRulesUpdate`.
 
-Capability groups (see `README.md` / `RULES_AND_EFFECTS.md` for the full API):
+Capability groups (see `README.md` / `docs/RULES_AND_EFFECTS.md` for the full API):
 
 - state: `switchState`, `lampState`, `coilState`, `currentBall`, `currentPlayer`,
   `attractMode`
@@ -181,8 +181,7 @@ behavior, ball flow, and attract/game mode. Rules add presentation and extra
 behavior around that baseline.
 
 This replaced the old `--pup-triggers` rule-file format and the separate
-`--speech-file`; both are gone. `LUA_RULES_MIGRATION_PLAN.md` in the workspace
-root records the design.
+`--speech-file`; both are gone.
 
 ## Cross-Layer Findings To Remember
 

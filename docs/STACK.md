@@ -32,10 +32,16 @@ Companion documents in this directory:
 - [`ASSESSMENT.md`](ASSESSMENT.md) — independent architecture review, current
   state, and prioritized stabilization backlog.
 - [`V2_RESYNC_PROPOSAL.md`](V2_RESYNC_PROPOSAL.md) — design rationale for
-  epoch-based session resync. Partially implemented.
-- [`LUA_RULES_MIGRATION_PLAN.md`](LUA_RULES_MIGRATION_PLAN.md) — design of the
-  Lua rules system that replaced the old `--pup-triggers` rule files. Largely
-  implemented.
+  epoch-based session resync. Largely implemented; see its status block for what
+  shipped, what did not, and what was superseded.
+
+- [`RULES_AND_EFFECTS.md`](RULES_AND_EFFECTS.md) — what Lua rules can do and the
+  `ppuc.*` API.
+- [`INTERCEPTOR.md`](INTERCEPTOR.md) — host-side interception of physical machine
+  events before they reach PinMAME.
+
+The authoritative CLI, game-folder and INI reference is `README.md` in the
+repository root.
 
 ## 2. The Stack At A Glance
 
@@ -109,7 +115,7 @@ bandwidth than an idle playfield.
   connects to the `libdmdutil` DMD server exposed by `ppuc-pinmame`
   (`--backbox-address`, default port `6789`).
 - Also read: `README.md` (full CLI + game folder reference),
-  `RULES_AND_EFFECTS.md`, `INTERCEPTOR.md`.
+  `docs/RULES_AND_EFFECTS.md`, `docs/INTERCEPTOR.md`.
 
 CMake options: `PPUC_BUILD_MENU`, `PPUC_BUILD_BACKBOX` (both `ON`),
 `PPUC_USE_KMSDMD` (use `libkmsdmd` instead of SDL/`libsdldmd`, for KMS-only
@@ -206,8 +212,13 @@ Precedence: CLI options > `ppuc.ini` > game-folder defaults.
 `io-boards.yaml` top-level sections (validated in `libppuc/src/PPUC.cpp`):
 `ppucVersion`, `rom`, `serialPort`, `platform`, `debug`, `boards`,
 `dipSwitches`, `switches`, `switchMatrix`, `switchGroups`, `pwmOutput`,
-`ledStripes`, `mechs`. Per-device `effects` blocks configure board-local
-effects and their triggers.
+`ledStripes`, `coilGiMappings`, `mechs`. Per-device `effects` blocks configure
+board-local effects and their triggers.
+
+`coilGiMappings` supports Williams System 11 games that drive GI strings from a
+coil: when PinMAME reports the mapped coil active, `ppuc-pinmame` sets the mapped
+GI string to `onBrightness`, and to `offBrightness` when it goes inactive. See
+`docs/RULES_AND_EFFECTS.md`.
 
 Optional metadata the runtime depends on: `button: true` on switches
 (cabinet/flipper controls, excluded from idle detection), `ballSearch: true` on

@@ -411,7 +411,7 @@ end
 ```
 
 A ready-to-use sample file is available at `examples/rules.lua`.
-Interceptor-specific behavior is documented in `INTERCEPTOR.md`.
+Interceptor-specific behavior is documented in [`docs/INTERCEPTOR.md`](docs/INTERCEPTOR.md).
 
 Board effect trigger source:
 * `F`

@@ -51,6 +51,14 @@ ppuc.switchGroupClosing(name)
 ppuc.switchGroupOpening(name)
 ```
 
+Trigger history and sequences:
+
+```lua
+ppuc.triggerHistory(id)
+ppuc.triggerHistory(id, windowMs)
+ppuc.triggerSequence(windowMs, id1, id2, id3)
+```
+
 Outputs and integrations:
 
 ```lua
@@ -121,7 +129,7 @@ end
 `ppuc.after(...)` schedules work on the rules update tick. It does not sleep and
 does not block `ppuc-pinmame`.
 
-See `INTERCEPTOR.md` for a focused interceptor reference.
+See [`INTERCEPTOR.md`](INTERCEPTOR.md) for a focused interceptor reference.
 
 ## Switch Groups
 
