@@ -471,51 +471,107 @@ Scope, roughly 720 lines:
 |------|-------|
 | `src/IODevices/SwitchMatrix.cpp` / `.h` | 431 |
 | `src/IODevices/SwitchMatrixPIO/*.pio` (6 programs) | 175 |
-| `src/IODevices/SwitchMatrix8x16.pio` | 114 |
+| `src/IODevices/SwitchMatrix8x16.pio` | 114 (experimental, for `IO_16x8_matrix` — see 4.8) |
 
 Approach:
 
-1. **Decide whether PIO is the right mechanism at all.** The rewrite has not
-   worked and it is expensive: `Switches.h` hardcodes `int sm = 2` with the
-   comment *"State machine 0 and 1 are used by SwitchMatrix"*, so the matrix
-   permanently reserves two of the eight state machines whether or not a
-   machine uses it, and WS2812FX competes for the rest. A conventional
-   interrupt- or timer-driven scan may be both sufficient and far easier to
-   reason about at pinball switch rates.
-2. **Get it under test before changing it.** The PWM tests
+1. **Do 4.7 first.** Dynamic PIO/state-machine allocation removes the
+   hardcoded `pio0` and `sm = 2` assignments that make the current code hard to
+   reason about. Repairing the matrix on top of manual allocation would build
+   on the wrong foundation.
+2. **Then decide whether PIO is the right mechanism for the matrix at all.**
+   The rewrite has never worked. A conventional interrupt- or timer-driven scan
+   may be sufficient at pinball switch rates and far easier to reason about —
+   though note that 4.8 brings a second matrix board (`Out_8x10`, lamp matrix),
+   so whatever is chosen should suit both.
+3. **Get it under test before changing it.** The PWM tests
    (`test/test_pwm/`) show the pattern: the native environment plus a
    test-driven clock and pin recorder. Matrix scanning is column strobe plus
    row read — testable natively if the PIO layer is separated from the scan
    logic.
-3. **Only then repair it on hardware**, ideally on a machine that actually uses
+4. **Only then repair it on hardware**, ideally on a machine that actually uses
    a matrix.
 
 **Do not treat "it compiles and the board boots" as evidence.** It has done
 both throughout, while never reading a matrix correctly.
 
-### 4.7 Remove obsolete code (`io-boards`)
+### 4.7 Allocate PIO state machines dynamically (`io-boards`)
 
-Found while surveying for 4.6:
+**This is a prerequisite for the upcoming boards, not cleanup.**
 
-- **`src/IODevices/SwitchMatrix8x16.pio`** and its generated `.pio.h` define
-  the program `columns8x16_pio`, which **no `.cpp` references**. 114 lines of
-  dead PIO assembly plus generated output. All ten other `.pio` programs have
-  exactly one reference each.
+PIO resources are currently assigned by hand. `SwitchMatrix` takes state
+machines 0 and 1, and `Switches.h` hardcodes `int sm = 2` with the comment
+*"State machine 0 and 1 are used by SwitchMatrix"*. `pio0` is hardcoded in both
+`Switches.h` and `SwitchMatrix.h`. WS2812FX needs PIO as well. So the matrix
+reserves two of eight state machines on every board whether or not that machine
+has a matrix, and adding any new PIO consumer means hand-auditing the whole
+allocation.
+
+That does not survive the roadmap in 4.8: two of the three new boards are
+matrix boards and will each want PIO programs of their own.
+
+The Pico SDK bundled with the Arduino core already provides the allocation API —
+verified present in `framework-arduinopico/pico-sdk`:
+
+```c
+pio_claim_free_sm_and_add_program(program, &pio, &sm, &offset)
+pio_claim_free_sm_and_add_program_for_gpio_range(...)
+pio_claim_unused_sm(pio, required)
+pio_remove_program(...) / pio_sm_unclaim(...)
+```
+
+Switching to these:
+
+- uses **both** PIO blocks instead of only `pio0`
+- claims state machines only for devices a board actually has configured, so an
+  unconfigured matrix costs nothing
+- frees resources on reconfiguration — relevant because `RestartFrame` clears
+  board-local config and a fresh setup follows
+- fails loudly and locally when PIO is genuinely exhausted, rather than through
+  a device that silently never reads
+
+Do this **before** the switch matrix repair in 4.6: the hardcoded allocation is
+part of what makes the current code hard to reason about, and the repair should
+not be built on top of it.
+
+### 4.8 Support the remaining hardware (`io-boards`)
+
+Three further boards exist in hardware and are intended to be supported. They
+are recorded here because they change what counts as dead code and because they
+drive the PIO work above.
+
+| Board | Function |
+|---|---|
+| `IO_16x8_matrix` | 16 inputs × 8 signal outputs — a **switch matrix** for an original playfield harness, diodes and cabling included. Also usable as 16 direct inputs plus 8 low-power outputs. |
+| `Out_8x10` | 8 high-side × 10 low-side — a **lamp matrix** for driving an original lamp matrix with LEDs. Also usable as plain high-side and low-side outputs. |
+| `Opto_16` | opto-isolated inputs. |
+
+All three carry an RP2040 and an ADM3483, so they join the same v2 bus and
+`config-tool` already knows `Out_8x10`.
+
+**Consequence for 4.6:** `SwitchMatrix8x16.pio` (`columns8x16_pio`) is
+*experimental*, not obsolete. It has no `.cpp` reference today because it is
+forward-looking work toward `IO_16x8_matrix`. It should be kept, and reviewed
+together with the matrix repair rather than deleted.
+
+### 4.9 Genuinely obsolete or stale
+
+Much shorter than it first appeared, once 4.8 is taken into account:
+
 - **`CrossLinkDebugger` is inert.** Both listener registrations in `main.cpp`
   are commented out, so `active` is never set and every `debug()` call is a
   no-op behind that flag. Either delete it or make it usable — as written, it
   prints per event with `rp2040.idleOtherCore()` around blocking USB writes and
   formats into a 1024-byte stack buffer, so anyone re-enabling it would get
   behaviour far worse than the debug DIP switch. See 4.2b.
-- **The `*.ino` rule in `io-boards/AGENTS.md` is itself stale.** It instructs
-  readers to ignore legacy `*.ino` files in the repository root; `git ls-files`
-  shows none are tracked. Remove the instruction.
+- **The `*.ino` rule in `io-boards/AGENTS.md` is stale.** It instructs readers
+  to ignore legacy `*.ino` files in the repository root; `git ls-files` shows
+  none are tracked. Remove the instruction.
 
-Worth also noting an asymmetry rather than an obsolescence:
-`SwitchesPIO/` provides only *ActiveLow* variants (4/8/16 switches), while
-`SwitchMatrixPIO/` provides both ActiveHigh and ActiveLow. Dedicated switches
-therefore support only active-low wiring. That may be deliberate, but it is
-undocumented.
+An asymmetry worth confirming rather than assuming: `SwitchesPIO/` provides only
+*ActiveLow* variants (4/8/16 switches), while `SwitchMatrixPIO/` provides both
+polarities. Dedicated switches therefore appear to support active-low wiring
+only, which is undocumented either way.
 
 ## Phase 5 — Hygiene
 
