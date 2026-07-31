@@ -31,6 +31,12 @@ Companion documents in this directory:
 
 - [`ASSESSMENT.md`](ASSESSMENT.md) — independent architecture review, current
   state, and prioritized stabilization backlog.
+- [`STABILIZATION_PLAN.md`](STABILIZATION_PLAN.md) — proposed work plan for
+  tests, validators and diagnostics that does not depend on hardware
+  measurement.
+- [`BUS_MEASUREMENT.md`](BUS_MEASUREMENT.md) — logic-analyzer brief for
+  establishing real RS485 cycle timing and what the switch-reply delay
+  compensates for.
 - [`V2_RESYNC_PROPOSAL.md`](V2_RESYNC_PROPOSAL.md) — design rationale for
   epoch-based session resync. Largely implemented; see its status block for what
   shipped, what did not, and what was superseded.
