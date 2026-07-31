@@ -110,6 +110,18 @@ A dual-wound flipper with EOS and `maxPulseTime: 0` is correct. A single-winding
 kicker with the same setting is a fire risk. **The configuration cannot
 currently express the difference**, so this ordering is forced:
 
+> **Narrowed by the pwmOutput tests.** `minPulseTime`, `maxPulseTime`,
+> `holdPower` and `holdPowerActivationTime` are *already required to be
+> present* — the existing validator rejects a `pwmOutput` entry missing any of
+> them. So this work is not about adding fields or presence checks; it is
+> purely about constraining their **values**. Today `maxPulseTime: 0` together
+> with `holdPower: 0` is accepted, which is exactly the unprotected case.
+>
+> `libppuc/tests/test_pwm_output.cpp` characterises that in a test named
+> *"KNOWN GAP: a solenoid with no thermal protection is accepted"*. It **will
+> fail when this validator lands** — that failure is the prompt to rewrite it
+> as a rejection test, rather than the behaviour changing silently.
+
 1. Add a YAML field declaring a coil as dual-wound with EOS.
    *Decision needed: field name. Proposal: `dualWinding: true` alongside the
    existing `fastSwitch`/`ballSearch` boolean style, optionally with
