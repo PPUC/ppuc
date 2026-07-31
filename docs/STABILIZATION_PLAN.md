@@ -610,8 +610,12 @@ Phases 2–4 the items are largely independent and can be reordered freely.
    `eosSwitch`)?
 3. **Validator severity** — warn for one release, then error? Or error
    immediately?
-4. **Existing game configs** — fix `ppuc_games` YAML in the same change, or
-   separately?
+4. ~~**Existing game configs**~~ — largely resolved: `ppuc_games` has not been
+   migrated to the config-tool's game-folder export yet, and the T2 config is
+   old. Both are being regenerated from the real machines. So the coil
+   validator should be written against the *new* exports rather than the
+   current ones, and there is little point fixing YAML that is about to be
+   replaced.
 5. **Scope of first delivery** — Phase 1 alone, so the harness can be reviewed
    before tests are written against it? Or Phase 1 + 2.1 together, so the first
    real safety test lands with it?
