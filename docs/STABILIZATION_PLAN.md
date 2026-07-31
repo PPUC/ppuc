@@ -452,10 +452,76 @@ inputs.
 approach so an interrupted run is detected and re-staged rather than silently
 half-applied. Either removes the failure mode.
 
+### 4.6 Switch matrix: review and repair (`io-boards`)
+
+**The switch matrix has never worked.** It was rewritten around PIO state
+machines, and in that form it not only failed to read the matrix correctly, it
+also *blocked other updates* — lamps visibly suffered. The
+`switch_matrix_refactoring` work (`6cff627` "re-use PIOs and SMs") improved the
+blocking, but did not make the matrix itself function.
+
+This has gone unnoticed in day-to-day testing because the main test machine,
+Flash, uses **dedicated switches rather than the matrix**. So the feature is
+both broken and unexercised — the worst combination, since nothing will surface
+a regression and nothing has surfaced the original fault either.
+
+Scope, roughly 720 lines:
+
+| File | Lines |
+|------|-------|
+| `src/IODevices/SwitchMatrix.cpp` / `.h` | 431 |
+| `src/IODevices/SwitchMatrixPIO/*.pio` (6 programs) | 175 |
+| `src/IODevices/SwitchMatrix8x16.pio` | 114 |
+
+Approach:
+
+1. **Decide whether PIO is the right mechanism at all.** The rewrite has not
+   worked and it is expensive: `Switches.h` hardcodes `int sm = 2` with the
+   comment *"State machine 0 and 1 are used by SwitchMatrix"*, so the matrix
+   permanently reserves two of the eight state machines whether or not a
+   machine uses it, and WS2812FX competes for the rest. A conventional
+   interrupt- or timer-driven scan may be both sufficient and far easier to
+   reason about at pinball switch rates.
+2. **Get it under test before changing it.** The PWM tests
+   (`test/test_pwm/`) show the pattern: the native environment plus a
+   test-driven clock and pin recorder. Matrix scanning is column strobe plus
+   row read — testable natively if the PIO layer is separated from the scan
+   logic.
+3. **Only then repair it on hardware**, ideally on a machine that actually uses
+   a matrix.
+
+**Do not treat "it compiles and the board boots" as evidence.** It has done
+both throughout, while never reading a matrix correctly.
+
+### 4.7 Remove obsolete code (`io-boards`)
+
+Found while surveying for 4.6:
+
+- **`src/IODevices/SwitchMatrix8x16.pio`** and its generated `.pio.h` define
+  the program `columns8x16_pio`, which **no `.cpp` references**. 114 lines of
+  dead PIO assembly plus generated output. All ten other `.pio` programs have
+  exactly one reference each.
+- **`CrossLinkDebugger` is inert.** Both listener registrations in `main.cpp`
+  are commented out, so `active` is never set and every `debug()` call is a
+  no-op behind that flag. Either delete it or make it usable — as written, it
+  prints per event with `rp2040.idleOtherCore()` around blocking USB writes and
+  formats into a 1024-byte stack buffer, so anyone re-enabling it would get
+  behaviour far worse than the debug DIP switch. See 4.2b.
+- **The `*.ino` rule in `io-boards/AGENTS.md` is itself stale.** It instructs
+  readers to ignore legacy `*.ino` files in the repository root; `git ls-files`
+  shows none are tracked. Remove the instruction.
+
+Worth also noting an asymmetry rather than an obsolescence:
+`SwitchesPIO/` provides only *ActiveLow* variants (4/8/16 switches), while
+`SwitchMatrixPIO/` provides both ActiveHigh and ActiveLow. Dedicated switches
+therefore support only active-low wiring. That may be deliberate, but it is
+undocumented.
+
 ## Phase 5 — Hygiene
 
 - Delete stale feature branches (`v2*`, `lua*`, `interceptor`, …) left from the
-  v2 bring-up.
+  v2 bring-up. `switch_matrix_refactoring` was merged into `io-boards` `main`
+  and can go.
 - Decide the fate of the `Out_8x10` board: `config-tool` knows it,
   `platformio.ini` does not build it.
 - Consider stub files at the old `INTERCEPTOR.md` / `RULES_AND_EFFECTS.md`
