@@ -113,15 +113,19 @@ ppuc_source_dir_fingerprint() {
       return 0
    fi
 
+   # Hash with git rather than shasum/sha1sum: git is definitionally available
+   # here (the branch above already used it), whereas shasum is a Perl script
+   # that is not guaranteed on every build host. A missing hasher would have
+   # silently degraded the fingerprint to commit-only rather than failing.
    dirty="$( {
       # Content of tracked modifications.
       git -C "${dir}" diff HEAD
       # Content of untracked files, so a new or edited untracked source file
       # (a test suite, for instance) still triggers a rebuild.
       git -C "${dir}" ls-files --others --exclude-standard | while read -r f; do
-         shasum "${dir}/${f}" 2>/dev/null
+         git hash-object "${dir}/${f}" 2>/dev/null
       done
-   } 2>/dev/null | shasum | cut -c1-12 )"
+   } 2>/dev/null | git hash-object --stdin | cut -c1-12 )"
 
    echo "${head:0:12}-${dirty}"
 }
