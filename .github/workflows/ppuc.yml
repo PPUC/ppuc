@@ -51,6 +51,44 @@ jobs:
           #  arch: aarch64
     steps:
       - uses: actions/checkout@v6
+      - id: depkey
+        name: Compute dependency cache key
+        run: |
+          # Hash only what actually decides whether a dependency must be
+          # rebuilt: the heavy third-party pins plus this platform's
+          # external.sh (its build logic).
+          #
+          # LIBPPUC_SHA is deliberately NOT in the key. It changes on almost
+          # every commit, but staging libppuc takes seconds, while vpinball,
+          # pinmame, SDL, flite and espeak-ng are most of the build. Including
+          # it would throw away a ~2 GB cache to save a few seconds of work.
+          # external.sh re-stages libppuc on its own anyway, because its
+          # per-dependency cache.txt marker will not match.
+          KEY=$( {
+            grep -E '^(VPINBALL_SHA|LIBSDLDMD_SHA|PINMAME_SHA|PINMAME_NVRAM_MAPS_SHA|SDL_IMAGE_SHA|SDL_MIXER_SHA|FLITE_SHA|ESPEAK_NG_SHA|LUA_VERSION)=' platforms/config.sh
+            cat platforms/${{ matrix.platform }}/${{ matrix.arch }}/external.sh
+          } | git hash-object --stdin )
+          echo "key=${KEY}" >> "$GITHUB_OUTPUT"
+      - name: Cache third-party dependencies
+        uses: actions/cache@v5
+        with:
+          # external/ holds the dependency source and build trees; third-party/
+          # holds the headers and libraries staged out of them. Both are needed:
+          # on a cache hit external.sh skips a dependency entirely, including
+          # the step that copies its artifacts into third-party/.
+          #
+          # ppuc's own build/ is deliberately not cached. Its sources change
+          # every commit, and caching it would weaken the "rebuild must be a
+          # no-op" guard below.
+          path: |
+            external
+            third-party
+          key: ppuc-deps-${{ matrix.platform }}-${{ matrix.arch }}-${{ steps.depkey.outputs.key }}
+          # A partial hit is still worth a lot: external.sh rebuilds only the
+          # dependencies whose own cache.txt no longer matches and leaves the
+          # rest untouched.
+          restore-keys: |
+            ppuc-deps-${{ matrix.platform }}-${{ matrix.arch }}-
       - if: (matrix.platform != 'macos')
         name: Patch SHA into ppuc_version.h
         run: |
