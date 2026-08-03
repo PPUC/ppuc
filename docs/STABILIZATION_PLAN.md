@@ -98,7 +98,41 @@ Cases:
 - `holdPowerActivationTime` elapses → power drops to `holdPower`
 - host disappears mid-pulse (no further events) → output still turns off
 
-### 2.2 Coil configuration validator (`libppuc` + `config-tool`)
+### 2.2 Coil configuration validator (`libppuc` + `config-tool`) — **libppuc done**
+
+**Decisions taken** (2026-08-03): field names are `dualWinding: true` with an
+optional `eosSwitch: <number>`; severity is **warn**, to become an error once
+game configs have been re-exported.
+
+Implemented in `libppuc`: the two fields are accepted, and a solenoid with
+`maxPulseTime: 0`, no engaging hold power and no `dualWinding` is reported on
+stdout with its path, description and YAML location. The `KNOWN GAP` test has
+become a rejection test as it asked to.
+
+Scoped to solenoids, motors and shakers. Lamps are excluded — no such failure
+mode. **Flashers are excluded too, which is a judgement call worth revisiting**:
+a flasher left energised will cook its bulb, but they are routinely configured
+without a pulse bound today, so warning on every one would bury the coils that
+matter.
+
+Two things surfaced while testing:
+
+- **`holdPower` alone is not protection.** `PwmDevices` only reduces power when
+  `holdPowerActivationTime > 0`, so a hold power with activation time 0 never
+  engages. A pre-existing test set exactly that and called it safe.
+- The validator therefore requires `holdPower > 0` **and**
+  `holdPowerActivationTime > 0` together.
+
+**Still open:** the `config-tool` form and exporter, so the field can be set at
+all. That means two new fields on the `pwm_device` node type
+(`field_dual_winding` boolean, `field_eos_switch` entity reference, mirroring
+`field_ball_search` and `field_fast_activation_switch`), the form display, and
+the `pwmOutput` block in `GamesController`. Covering the exporter properly
+needs Kernel tests rather than the unit suite added in that repo.
+
+---
+
+#### Original description
 
 Every solenoid needs **at least one** thermal protection mechanism:
 
