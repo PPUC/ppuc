@@ -495,9 +495,28 @@ Approach:
 **Do not treat "it compiles and the board boots" as evidence.** It has done
 both throughout, while never reading a matrix correctly.
 
-### 4.7 Allocate PIO state machines dynamically (`io-boards`)
+### 4.7 Allocate PIO state machines dynamically (`io-boards`) — **done**
 
 **This is a prerequisite for the upcoming boards, not cleanup.**
+
+Implemented in `io-boards/src/IODevices/PioAllocation.h`. Both consumers now
+claim at program-load time; nothing is hardcoded to `pio0` or to a state
+machine index. Two things fell out of the work that were not in the original
+description:
+
+- **Both matrix state machines must stay on one PIO block.** A GPIO's function
+  select can only point at one block, and the matrix drives the column pins
+  from one state machine while the other waits on those same pins. The
+  allocator therefore places a device's slots together or not at all.
+- **Reconfiguration leaked instruction space.** When polarity or row count
+  changed, the old code added the new programs without removing the old ones.
+  Release now happens before the re-claim.
+
+Verified on the host with a PIO model in `test/stubs/hardware/pio.h`
+(10 cases): co-location, all-or-nothing rollback, release, and no leak across
+repeated reconfiguration. Both properties were mutation-tested. **Not yet
+validated on hardware** — the firmware compiles and the allocation logic is
+covered, but no board has run it.
 
 PIO resources are currently assigned by hand. `SwitchMatrix` takes state
 machines 0 and 1, and `Switches.h` hardcodes `int sm = 2` with the comment
