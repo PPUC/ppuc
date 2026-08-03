@@ -109,11 +109,19 @@ Implemented in `libppuc`: the two fields are accepted, and a solenoid with
 stdout with its path, description and YAML location. The `KNOWN GAP` test has
 become a rejection test as it asked to.
 
-Scoped to solenoids, motors and shakers. Lamps are excluded — no such failure
-mode. **Flashers are excluded too, which is a judgement call worth revisiting**:
-a flasher left energised will cook its bulb, but they are routinely configured
-without a pulse bound today, so warning on every one would bury the coils that
-matter.
+Applies to every `pwmOutput` type **except lamps**, which are meant to sit on
+indefinitely. That includes flashers: a flasher driven from a PWM output is an
+incandescent bulb behind a driver transistor, and holding it on cooks the bulb
+and its socket.
+
+A flasher mapped to a WS2812 needs no such protection and is unaffected —
+addressable LEDs are configured as a *role* inside a `ledStripes` entry and
+never appear in `pwmOutput`. A test pins that boundary, so if the two sections
+ever converge it shows up there.
+
+Unknown types are treated as needing protection, matching `ResolvePwmType`'s
+own fallback to solenoid: the safe default for an unrecognised load is to
+assume it can burn.
 
 Two things surfaced while testing:
 
