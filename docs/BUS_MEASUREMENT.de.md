@@ -76,11 +76,30 @@ dieses Board den Bus für die Dauer des ISR weiter** — und zwar genau in dem
 Moment, in dem das nächste Board, das den gerade empfangenen Frame ausgewertet
 hat, mit dem Senden beginnen will.
 
-Dieser eine Mechanismus erklärt sämtliche Beobachtungen: er betrifft nur
-dedizierte Schalter, tritt nur auf, wenn sich tatsächlich einer *ändert*, wird
-mit mehr Boards wahrscheinlicher (mehr Übergaben pro Zyklus) und wird von einem
-großen `switchReplyDelayUs` vollständig verdeckt, weil das nächste Board es
-einfach abwartet.
+**Wie groß dieses Fenster wirklich ist — eine Korrektur.** In einer früheren
+Fassung stand hier, dieser Mechanismus erkläre sämtliche Beobachtungen. Ein
+genauerer Blick in den Code trägt das nicht, und der Unterschied ist für die
+Messung wichtig.
+
+`delayMicroseconds()` ist `sleep_us()` und wartet auf einen absoluten Zeitpunkt.
+Ein Interrupt *während* der Wartezeit hat sie also nie verlängert — auch vor
+diesem Fix nicht. Das offene Fenster sind nur die wenigen Instruktionen zwischen
+dem Ablauf der Wartezeit und dem Schreiben von DE auf LOW. Ein Interrupt muss
+also in eine Lücke von deutlich unter einer Mikrosekunde fallen, um zu schaden.
+
+Der unten beschriebene Überhang von 200 µs war dagegen **bedingungslos**: jedes
+Board hat die Leitung bei jedem Frame zu lange gehalten, mit oder ohne
+Interrupt. Das ist um zwei Größenordnungen der größere Fehler — und der, der
+jetzt behoben ist.
+
+Damit bleibt eine echte offene Frage: Wenn der Überhang bedingungslos auftrat,
+warum sollten die Fehler dann überhaupt mit Schalteränderungen korrelieren?
+Entweder ist der Interrupt der letzte Tropfen auf einen Überhang, der die
+Reserve ohnehin schon aufgezehrt hat — oder am Pfad für Schalteränderungen ist
+etwas anderes anders, das wir noch nicht gefunden haben.
+
+**Genau deshalb lohnt sich der Vergleich 1a/1b weiter unten.** Er prüft jetzt
+eine offene Frage und bestätigt nicht bloß eine schon feststehende Erklärung.
 
 **Das erklärt vermutlich auch, warum Runde 1 sauber aussah.** Eine abgespeckte
 YAML auf dem Testsetup bedeutet einen ruhigen Bus — wurde während der Aufnahme

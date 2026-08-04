@@ -73,10 +73,28 @@ So if the switch ISR fires in the window between that delay expiring and
 the duration of the ISR** — exactly while the next board, which has just
 received the frame naming it, is deciding to transmit.
 
-That single mechanism explains every symptom we have: it only involves dedicated
-switches, only fires when one actually *changes*, gets more likely with more
-boards (more handoffs per cycle), and is completely masked by a large
-`switchReplyDelayUs` because the next board waits it out.
+**How big that window really is — a correction.** An earlier version of this
+section claimed the interrupt "explains every symptom". Checking the code
+properly does not support that, and the difference matters for what you are
+looking for.
+
+`delayMicroseconds()` is `sleep_us()`, which waits on an absolute deadline. An
+interrupt *during* the wait therefore never extended it — not before this fix
+either. The exposed window is only the handful of instructions between the wait
+expiring and the DE-low write, so an interrupt has to land in a gap of well
+under a microsecond to do damage.
+
+Meanwhile the 200 µs overrun described below was **unconditional**: every board
+held the line late on every frame, interrupts or not. That is the larger defect
+by two orders of magnitude, and it is the one now fixed.
+
+Which leaves a genuine open question: if the overrun was unconditional, why
+would failures correlate with switch changes at all? Either the interrupt is the
+last straw on top of an overrun that was already eating the margin, or something
+else about the switch-change path differs and we have not found it yet.
+
+**That is exactly why the 1a/1b comparison below is worth doing.** It is now
+testing an open question rather than confirming a settled story.
 
 **It also suggests why round 1 looked clean.** A stripped-down YAML on the bench
 is a quiet bus — if no switch was toggled during the capture, the ISR never ran.
