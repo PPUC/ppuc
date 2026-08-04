@@ -2,6 +2,11 @@
 
 **For Michael.** One question, three measurements. Should be a single session.
 
+> **Deutsche Fassung:** [`BUS_MEASUREMENT.de.md`](BUS_MEASUREMENT.de.md) covers
+> everything up to the appendix. The appendix below is English only. If the two
+> ever disagree, this file is the source — the German version is a translation
+> of the working part, not a separate document.
+
 The previous version of this document was five times this length and led with
 electrical analysis. That was the wrong shape for someone fitting the work
 around their own time, and it cost a session — see below. The background is
