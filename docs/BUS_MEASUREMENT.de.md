@@ -87,6 +87,32 @@ YAML auf dem Testsetup bedeutet einen ruhigen Bus — wurde während der Aufnahm
 kein Schalter betätigt, ist der ISR nie gelaufen. Bitte kurz prüfen: waren
 überhaupt Schalter angeschlossen und wurden sie bedient?
 
+### Ein Fix ist bereits drin, und die Messung kann ihn überprüfen
+
+Die oben genannte Schätzung läuft rund 200 µs ab, *nachdem* der Frame die
+Leitung längst verlassen hat — `write()` muss nur bis in den 32 Byte großen
+TX-FIFO kommen. Jedes Board hat den Bus also bei jedem Frame 200 µs länger
+gehalten als nötig.
+
+Die Firmware gibt den Treiber jetzt frei, sobald der UART meldet, dass das
+letzte Bit draußen ist (BUSY-Flag von `uart0`); die alte Schätzung dient nur
+noch als Timeout. Zusätzlich werden während der Freigabe selbst die Interrupts
+maskiert. Daraus ergibt sich eine Zahl, die sich am Oszilloskop prüfen lässt:
+
+| | DE high, pro Schalter-Antwort |
+|---|---|
+| vorher | ~1154 µs (955 µs Frame + 200 µs Reserve) |
+| nachher | ~955 µs |
+
+**Läuft eine Firmware, die nach dieser Änderung gebaut wurde, sollte DE pro
+Antwort rund 200 µs kürzer aktiv sein.** Das ist eine einfache Kontrolle, ob der
+neue Stand läuft — und 200 µs pro Board und Zyklus sind zurückgewonnene Buszeit.
+
+Das ist **nicht** auf Hardware getestet. Es compiliert und die Host-Tests laufen
+durch, aber bestätigen kann es nur die Messung. Falls die Frames auf CH2 nicht
+mehr sauber decodieren: bitte zuerst diese Änderung verdächtigen und Bescheid
+geben — dann wird der Treiber zu früh freigegeben.
+
 ---
 
 ## Vorab: das Delay explizit setzen

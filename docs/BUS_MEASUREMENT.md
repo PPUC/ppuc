@@ -82,6 +82,31 @@ boards (more handoffs per cycle), and is completely masked by a large
 is a quiet bus — if no switch was toggled during the capture, the ISR never ran.
 Worth confirming: were any switches actually wired and operated?
 
+### A fix is already in, and the capture can check it
+
+The estimate above expires roughly 200 µs *after* the frame has actually gone,
+because `write()` only has to reach the 32-byte TX FIFO. So every board was
+holding the bus 200 µs longer than necessary on every single frame.
+
+The firmware now releases the driver when the UART reports the last bit is out
+(`uart0`'s BUSY flag), with the old estimate kept only as a timeout, and masks
+interrupts across the release itself. That gives a number worth checking on the
+scope:
+
+| | DE high, per switch reply |
+|---|---|
+| Before | ~1154 µs (955 µs frame + 200 µs guard) |
+| After | ~955 µs |
+
+**If you are running firmware built after this change, DE-high per reply should
+be about 200 µs shorter.** That is an easy sanity check that you are on the new
+build — and 200 µs per board per cycle is bus time given back.
+
+This has **not** been tested on hardware. It compiles and the host suite passes,
+but the measurement is what confirms it. If the frames stop decoding cleanly on
+CH2, suspect this change first and say so — it would mean the driver is being
+released too early.
+
 ---
 
 ## Before you start: force the delay explicitly
