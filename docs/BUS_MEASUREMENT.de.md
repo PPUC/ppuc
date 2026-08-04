@@ -45,6 +45,48 @@ Sonst nichts. Überlappen sich zwei Treiber, haben wir die Ursache. Überlappen
 sie sich auch bei Delay 0 nie, liegt die Ursache woanders und wir hören hier auf
 zu suchen.
 
+### Präzisierung: die Fehler traten bei Schalteränderungen auf
+
+Markus erinnert sich, dass die Fehler auftraten, wenn sich **dedizierte
+Schalter** geändert haben. Das passt unangenehm gut zum Code — und es ändert,
+wie die Aufnahme gemacht werden sollte.
+
+Eine Änderung an einem dedizierten Schalter ist das Einzige auf dem Board, das
+einen **Interrupt** auslöst. `Switches::onSwitchChanges` läuft im PIO-IRQ und
+geht dabei über bis zu 16 registrierte Schalter. Das RS485-Sendefenster läuft
+durchgehend **mit freigegebenen Interrupts** — ein
+`save_and_disable_interrupts()` gibt es dort nirgends:
+
+```c
+digitalWrite(rs485Pin, HIGH);                    // DE an
+delayMicroseconds(RS485_MODE_SWITCH_DELAY);      // 50 µs
+hwSerial->write(frame, frameBytes);              // in den UART-FIFO schreiben
+delayMicroseconds(FrameWireTimeUs(frameBytes));  // geschätzte Sendezeit + 200 µs
+digitalWrite(rs485Pin, LOW);                     // DE aus
+```
+
+DE wird also anhand einer **Schätzung** zurückgenommen, nicht anhand einer
+Sendebestätigung — `flush()` wird bewusst vermieden, weil es sich im
+Antwortpfad Board → Host offenbar aufhängt. Die 200 µs Reserve in
+`FrameWireTimeUs()` sind der gesamte Puffer für alles, was nicht modelliert ist.
+
+Feuert der Schalter-ISR nun genau in dem Fenster zwischen dem Ablauf dieser
+Wartezeit und der Ausführung von `digitalWrite(rs485Pin, LOW)`, dann **treibt
+dieses Board den Bus für die Dauer des ISR weiter** — und zwar genau in dem
+Moment, in dem das nächste Board, das den gerade empfangenen Frame ausgewertet
+hat, mit dem Senden beginnen will.
+
+Dieser eine Mechanismus erklärt sämtliche Beobachtungen: er betrifft nur
+dedizierte Schalter, tritt nur auf, wenn sich tatsächlich einer *ändert*, wird
+mit mehr Boards wahrscheinlicher (mehr Übergaben pro Zyklus) und wird von einem
+großen `switchReplyDelayUs` vollständig verdeckt, weil das nächste Board es
+einfach abwartet.
+
+**Das erklärt vermutlich auch, warum Runde 1 sauber aussah.** Eine abgespeckte
+YAML auf dem Testsetup bedeutet einen ruhigen Bus — wurde während der Aufnahme
+kein Schalter betätigt, ist der ISR nie gelaufen. Bitte kurz prüfen: waren
+überhaupt Schalter angeschlossen und wurden sie bedient?
+
 ---
 
 ## Vorab: das Delay explizit setzen
@@ -74,6 +116,12 @@ Wert aktiv war.
   *verschiedener* Boards nicht zeigen — und genau darum geht es. Playfield oder
   echte Lasten sind nicht nötig, die Boards müssen nur angesprochen werden und
   antworten.
+- **Mindestens ein dedizierter Schalter, angeschlossen und konfiguriert, den du
+  wiederholt betätigen kannst.** Nach der Präzisierung oben ist das fast so
+  wichtig wie die Anzahl der Boards. Ein Mikroschalter, ein Taster oder einfach
+  ein Draht, den du von Hand auf Masse legst, reicht völlig — es müssen nur
+  echte Flanken an einem Schaltereingang entstehen, und zwar auf dem Board,
+  dessen DE du beobachtest.
 - Abschluss und Vorspannung so, wie du sie normalerweise betreibst. Du hast
   gesagt, dass das korrekt aufgebaut ist, und ich bitte nicht darum, das erneut
   zu prüfen.
@@ -91,7 +139,15 @@ RP2040-Pins, laut `io-boards/src/main.cpp` und `io-boards/src/PPUC.h`:
 | CH0 | **DE** (Sendefreigabe) | GPIO 2 | Board **A** |
 | CH1 | **DE** (Sendefreigabe) | GPIO 2 | Board **B** |
 | CH2 | RS485 **RX** | GPIO 1 | eines von beiden — führt den gesamten Busverkehr |
+| CH3 | *falls verfügbar:* ein **Schaltereingang** | GPIO 3–18 | Board **A** |
 | GND | Masse | — | erforderlich |
+
+CH3 ist optional, macht M1 aber deutlich leichter lesbar: Schalterflanke, der
+dadurch ausgelöste ISR und das Zurücknehmen von DE auf Board A liegen dann auf
+einem Bild. Stehen nur drei Kanäle zur Verfügung, lieber CH2 weglassen als CH3 —
+der Zusammenhang Schalter → DE ist hier wichtiger als der decodierte Verkehr.
+Welcher GPIO das ist, hängt vom verwendeten Port ab; auf dem IO_16_8_1 gilt
+Port *n* → GPIO *n+2*.
 
 **Die beiden DE-Kanäle sind die eigentliche Messung.** Letztes Mal war die
 Aufnahme eine einkanalige UART-Messung. Die zeigt den Ablauf sehr schön, kann
@@ -124,12 +180,31 @@ Für mehrere Übergaben notieren:
   DE-Leitungen gleichzeitig HIGH, und sei es nur kurz?
 - Ob der darauf folgende Frame auf CH2 sauber decodiert.
 
-Zuerst mit `--switch-reply-delay-us 2000`, danach mit `0`. Interessant ist, wie
-sich der Abstand verändert und ob dabei eine Überlappung auftritt.
+**Bitte zweimal durchführen — der Unterschied zwischen beiden Durchläufen ist
+das eigentliche Experiment:**
+
+| Durchlauf | Bedingung |
+|-----------|-----------|
+| **1a — ruhig** | Kein Schalter wird betätigt. Sollte Runde 1 reproduzieren: sauber, keine Überlappung. |
+| **1b — aktiv** | Der dedizierte Schalter wird während der gesamten Aufnahme dauernd betätigt. |
+
+Bricht der Abstand nur in 1b ein oder wird negativ, ist die Interrupt-Hypothese
+bestätigt und wir wissen, was zu reparieren ist. Sehen 1a und 1b gleich aus, ist
+sie falsch — was genauso wertvoll ist.
+
+Beides jeweils mit `--switch-reply-delay-us 2000` und mit `0`. Das Delay sollte
+den Effekt verdecken, deshalb ist **1b bei Delay 0 der Durchlauf, der ihn am
+ehesten zeigt** — bei knapper Zeit dort anfangen.
 
 **Jede Überlappung, egal wie kurz, ist bereits die Antwort.** Ein einziger
 Abtastpunkt mit beiden DE-Leitungen HIGH genügt — sie muss nicht weiter
 charakterisiert werden.
+
+Den Schalter von Hand in unregelmäßigem Takt zu betätigen ist völlig in Ordnung
+und vermutlich sogar besser als ein regelmäßiger Takt: der ISR muss in ein
+Fenster von einigen hundert Mikrosekunden fallen, das ist eher eine Frage der
+Anzahl der Versuche als der genauen Zeitpunkte. Einfach über die Dauer der
+Aufnahme stetig weiterbetätigen.
 
 ## M2 — Delay-Messreihe
 
@@ -166,6 +241,7 @@ Kurz genügt — eine Zeile pro Durchlauf plus Screenshots:
 |------|----------|
 | Boards am Bus | 4 |
 | `switchReplyDelayUs` | 2000 |
+| Schalter wird betätigt? | ja, dauernd / nein |
 | Host | Pi-Breakout / USB-Adapter |
 | Kleinster DE-zu-DE-Abstand | 82 µs |
 | Überlappung beobachtet | nein |

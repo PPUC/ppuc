@@ -45,6 +45,43 @@ Two things follow, and both are useful:
 Nothing else. If two drivers overlap, that is the cause. If they never overlap
 even at delay 0, the cause is elsewhere and we stop looking here.
 
+### Refinement: the errors are remembered as happening on switch changes
+
+Markus recalls the failures occurring when **dedicated switches changed state**.
+That fits the code uncomfortably well, and it changes how to run the capture.
+
+A dedicated switch change is the one thing on the board that raises an
+**interrupt**. `Switches::onSwitchChanges` runs on the PIO IRQ and walks up to
+16 registered switches. The RS485 transmit window runs with interrupts enabled
+throughout — there is no `save_and_disable_interrupts()` anywhere in it:
+
+```c
+digitalWrite(rs485Pin, HIGH);                    // DE on
+delayMicroseconds(RS485_MODE_SWITCH_DELAY);      // 50 µs
+hwSerial->write(frame, frameBytes);              // queue into the UART FIFO
+delayMicroseconds(FrameWireTimeUs(frameBytes));  // estimated wire time + 200 µs
+digitalWrite(rs485Pin, LOW);                     // DE off
+```
+
+DE is dropped on an **estimate**, not on transmit-complete — `flush()` is
+deliberately avoided because it "appears to hang in the board-to-host switch
+reply path". The 200 µs guard in `FrameWireTimeUs()` is the entire margin
+covering everything unmodelled.
+
+So if the switch ISR fires in the window between that delay expiring and
+`digitalWrite(rs485Pin, LOW)` executing, **this board keeps driving the bus for
+the duration of the ISR** — exactly while the next board, which has just
+received the frame naming it, is deciding to transmit.
+
+That single mechanism explains every symptom we have: it only involves dedicated
+switches, only fires when one actually *changes*, gets more likely with more
+boards (more handoffs per cycle), and is completely masked by a large
+`switchReplyDelayUs` because the next board waits it out.
+
+**It also suggests why round 1 looked clean.** A stripped-down YAML on the bench
+is a quiet bus — if no switch was toggled during the capture, the ISR never ran.
+Worth confirming: were any switches actually wired and operated?
+
 ---
 
 ## Before you start: force the delay explicitly
@@ -72,6 +109,11 @@ With neither, it is **0**. Please note which you used for each capture.
   cannot show contention between different boards' turnarounds, which is the
   entire hypothesis. No playfield or real loads needed — the boards only have to
   be addressed and reply.
+- **At least one dedicated switch, wired and configured, that you can operate
+  repeatedly.** Given the refinement above this is nearly as important as the
+  board count. A microswitch, a button, or just a wire you short to ground by
+  hand is fine — it needs to generate real edges on a switch input, on the board
+  whose DE you are watching.
 - Termination and bias as you normally run them. You have said this is correct
   and I am not asking you to re-check it.
 - Note the host: Raspberry Pi breakout or USB adapter.
@@ -87,7 +129,14 @@ RP2040 pins, from `io-boards/src/main.cpp` and `io-boards/src/PPUC.h`:
 | CH0 | **DE** (driver enable) | GPIO 2 | board **A** |
 | CH1 | **DE** (driver enable) | GPIO 2 | board **B** |
 | CH2 | RS485 **RX** | GPIO 1 | either — carries all bus traffic |
+| CH3 | *if available:* a **switch input** | GPIO 3–18 | board **A** |
 | GND | ground | — | required |
+
+CH3 is optional but makes M1 far easier to read: it puts the switch edge, the
+ISR it triggers and board A's DE release on the same screen. If you only have
+three channels, drop CH2 rather than CH3 — the switch-to-DE relationship matters
+more here than the decoded traffic. Which GPIO depends on which port the switch
+is on; port *n* maps to GPIO *n+2* on IO_16_8_1.
 
 **The two DE channels are the measurement.** Last time the capture was
 single-ended UART, which shows the conversation but cannot show two drivers
@@ -115,11 +164,28 @@ Record, for several handoffs:
 - **Overlap**: does it ever go negative — both DE high at once, even briefly?
 - Whether the frame that follows decodes cleanly on CH2.
 
-Do this at `--switch-reply-delay-us 2000` first, then at `0`. The interesting
-comparison is how the gap changes and whether overlap appears.
+**Run it twice, and the difference between the two runs is the experiment:**
+
+| Run | Condition |
+|-----|-----------|
+| **1a — quiet** | No switch touched. This should reproduce round 1: clean, no overlap. |
+| **1b — active** | Operate the dedicated switch continuously throughout the capture. |
+
+If the gap collapses or goes negative only in 1b, the interrupt hypothesis is
+confirmed and we know what to fix. If 1a and 1b look identical, it is wrong and
+that is equally worth knowing.
+
+Do both at `--switch-reply-delay-us 2000` and at `0`. The delay is expected to
+mask the effect, so **1b at delay 0 is the run most likely to show it** — start
+there if time is short.
 
 **Any overlap at all, however brief, is the answer.** A single sample with both
 DE lines high is enough — no need to characterise it further.
+
+Toggling the switch by hand at a random rate is fine and arguably better than a
+regular one: the ISR has to land inside a window of a couple of hundred
+microseconds, so hitting it is a matter of enough attempts rather than precise
+timing. Operate it steadily for the length of the capture.
 
 ## M2 — Delay sweep
 
@@ -151,6 +217,7 @@ Short is fine — a line per run plus screenshots:
 |-------|---------|
 | Boards on bus | 4 |
 | `switchReplyDelayUs` | 2000 |
+| Switch being operated? | yes, continuously / no |
 | Host | Pi breakout / USB adapter |
 | Min DE-to-DE gap | 82 µs |
 | Any DE overlap seen | no |
