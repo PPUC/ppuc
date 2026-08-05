@@ -47,6 +47,29 @@ constexpr uint32_t kUf2FlagNotMainFlash = 0x00000001u;
 // something to discover on a board.
 Uf2Image ParseUf2(const uint8_t* bytes, size_t length);
 
+// What a firmware filename says about the image inside it.
+//
+//   <BoardType>-<major>.<minor>.<patch>[+<buildid>].uf2
+//
+// The board type is how an image is paired with a board; the version is how
+// release images are compared; the optional build id is how two snapshots of
+// the same version are told apart, because the firmware version is maintained
+// by hand and does not move between them.
+//
+// Parsed here rather than inline so the rules can be tested without a
+// directory of files, and so a name that does not fit is rejected rather than
+// half-understood.
+struct FirmwareFileName {
+  bool valid = false;
+  std::string boardTypeName;  // the text before the version, unresolved
+  uint32_t versionOrdinal = 0;
+  std::string version;
+  bool hasBuildId = false;
+  uint32_t buildId = 0;
+};
+
+FirmwareFileName ParseFirmwareFileName(const std::string& fileName);
+
 // Reads a UF2 file from disk and parses it.
 Uf2Image LoadUf2File(const std::string& path);
 

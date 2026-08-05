@@ -2194,8 +2194,42 @@ struct FirmwareImage
     uint32_t ordinal = 0;
     std::string version;
     uint8_t boardType = 0;
+    bool hasBuildId = false;
+    uint32_t buildId = 0;
     bool found = false;
 };
+
+// Whether this image should replace what the board is running.
+//
+// A higher version always wins - that is the rule for releases and it does not
+// change. The rest exists because the firmware version is maintained by hand
+// and does not move between snapshots: two materially different images
+// routinely call themselves the same version, so version alone cannot answer
+// the question for anything built between releases.
+//
+// Same version with a different build id counts as out of date, but only when
+// explicitly allowed. "Different" is not "newer", and without the opt-in a
+// snapshot pointed at a machine running a release would quietly replace it.
+//
+// A build id of zero means "not recorded" on either side and is never treated
+// as a difference, or a locally built board would look perpetually out of
+// date and be reflashed on every start.
+static bool FirmwareIsOutOfDate(const PPUCBoardVersion& board, const FirmwareImage& image, bool allowDev)
+{
+    if (board.FirmwareOrdinal() < image.ordinal)
+    {
+        return true;
+    }
+    if (!allowDev || board.FirmwareOrdinal() != image.ordinal)
+    {
+        return false;
+    }
+    if (!image.hasBuildId || image.buildId == 0 || board.buildId == 0)
+    {
+        return false;
+    }
+    return board.buildId != image.buildId;
+}
 
 // Newest image for one board type.
 //
@@ -2221,33 +2255,30 @@ static FirmwareImage FindNewestFirmwareImage(const char* directory, uint8_t boar
 
     while (struct dirent* entry = readdir(dir))
     {
-        unsigned major = 0, minor = 0, patch = 0;
-        const char* name = entry->d_name;
-        const char* dash = strrchr(name, '-');
-        if (!dash)
+        const uf2::FirmwareFileName parsed = uf2::ParseFirmwareFileName(entry->d_name);
+        if (!parsed.valid)
         {
             continue;
         }
-        if (sscanf(dash + 1, "%u.%u.%u.uf2", &major, &minor, &patch) != 3)
-        {
-            continue;
-        }
-
-        const std::string prefix(name, static_cast<size_t>(dash - name));
-        const uint8_t fileType = ppuc::v2::BoardTypeFromName(prefix.c_str());
-        if (fileType != boardType)
+        if (ppuc::v2::BoardTypeFromName(parsed.boardTypeName.c_str()) != boardType)
         {
             continue;
         }
 
-        const uint32_t ordinal = (major << 16) | (minor << 8) | patch;
-        if (!best.found || ordinal > best.ordinal)
+        // Ordered by version, then by whether a build id is present: given a
+        // release and a snapshot of the same version, the snapshot is the more
+        // specific answer and the one a dev run means to use.
+        const bool better = !best.found || parsed.versionOrdinal > best.ordinal ||
+                            (parsed.versionOrdinal == best.ordinal && parsed.hasBuildId && !best.hasBuildId);
+        if (better)
         {
             best.found = true;
-            best.ordinal = ordinal;
-            best.boardType = fileType;
-            best.version = std::to_string(major) + "." + std::to_string(minor) + "." + std::to_string(patch);
-            best.path = std::string(directory) + "/" + name;
+            best.ordinal = parsed.versionOrdinal;
+            best.boardType = boardType;
+            best.version = parsed.version;
+            best.hasBuildId = parsed.hasBuildId;
+            best.buildId = parsed.buildId;
+            best.path = std::string(directory) + "/" + entry->d_name;
         }
     }
     closedir(dir);
@@ -2282,7 +2313,7 @@ static void FirmwareProgress(uint8_t board, size_t sent, size_t total, void*)
 // and in both cases we would be sending an image to something that cannot
 // have agreed to receive it. Those are flashed over USB instead.
 static void PerformFirmwareUpdates(PPUC* pPpuc, const std::vector<PPUCBoardVersion>& versions,
-                                   const char* firmwarePath)
+                                   const char* firmwarePath, bool allowDev)
 {
     // The runtime loop must not transmit into the middle of a transfer.
     pPpuc->StopUpdates();
@@ -2296,7 +2327,7 @@ static void PerformFirmwareUpdates(PPUC* pPpuc, const std::vector<PPUCBoardVersi
         }
 
         const FirmwareImage meta = FindNewestFirmwareImage(firmwarePath, v.boardType);
-        if (!meta.found || v.FirmwareOrdinal() >= meta.ordinal)
+        if (!meta.found || !FirmwareIsOutOfDate(v, meta, allowDev))
         {
             continue;
         }
@@ -2350,7 +2381,7 @@ static void PerformFirmwareUpdates(PPUC* pPpuc, const std::vector<PPUCBoardVersi
     }
 }
 
-static void ReportBoardFirmware(PPUC* pPpuc, const char* firmwarePath, bool allowUpdate)
+static void ReportBoardFirmware(PPUC* pPpuc, const char* firmwarePath, bool allowUpdate, bool allowDev)
 {
     const std::vector<PPUCBoardVersion> versions = pPpuc->QueryBoardVersions();
     if (versions.empty())
@@ -2399,7 +2430,7 @@ static void ReportBoardFirmware(PPUC* pPpuc, const char* firmwarePath, bool allo
             continue;
         }
 
-        if (v.FirmwareOrdinal() < image.ordinal)
+        if (FirmwareIsOutOfDate(v, image, allowDev))
         {
             ++outdated;
             printf("PPUC: board %u (%s) is out of date: %s -> %s\n", v.board, typeName ? typeName : "?",
@@ -2417,7 +2448,7 @@ static void ReportBoardFirmware(PPUC* pPpuc, const char* firmwarePath, bool allo
     }
     else
     {
-        PerformFirmwareUpdates(pPpuc, versions, firmwarePath);
+        PerformFirmwareUpdates(pPpuc, versions, firmwarePath, allowDev);
     }
 }
 
@@ -2858,6 +2889,9 @@ static struct cag_option options[] = {
      .access_name = "firmware-path",
      .value_name = "PATH",
      .description = "Directory holding board firmware images (<controller>-<version>.uf2)"},
+    {.identifier = ')',
+     .access_name = "allow-dev-firmware-update",
+     .description = "Also update a board whose firmware matches by version but was built from a different commit"},
     {.identifier = '#',
      .access_name = "allow-firmware-update",
      .description = "Permit flashing boards whose firmware is older than the image in --firmware-path"},
@@ -3555,6 +3589,7 @@ int main(int argc, char** argv)
   const char* opt_skip_boards = NULL;
   const char* opt_firmware_path = NULL;
   bool opt_allow_firmware_update = false;
+  bool opt_allow_dev_firmware_update = false;
   const char* opt_switch_reply_delay_us_arg = NULL;
   uint32_t opt_switch_reply_delay_us = 0;
   const char* opt_switch_refresh_idle_ms_arg = NULL;
@@ -3791,6 +3826,8 @@ int main(int argc, char** argv)
           opt_firmware_path = DuplicateOptionalIniString(value);
         else if (key == "AllowFirmwareUpdate")
           opt_allow_firmware_update = ParseIniBool(value);
+        else if (key == "AllowDevFirmwareUpdate")
+          opt_allow_dev_firmware_update = ParseIniBool(value);
         else if (key == "SwitchReplyDelayUs")
           opt_switch_reply_delay_us_arg = DuplicateOptionalIniString(value);
         else if (key == "SwitchRefreshIdleMs")
@@ -4039,6 +4076,9 @@ int main(int argc, char** argv)
         break;
       case '#':
         opt_allow_firmware_update = true;
+        break;
+      case ')':
+        opt_allow_dev_firmware_update = true;
         break;
       case '7':
         opt_switch_reply_delay_us_arg = cag_option_get_value(&cag_context);
@@ -4879,7 +4919,7 @@ int main(int argc, char** argv)
   }
   if (!opt_no_serial)
   {
-    ReportBoardFirmware(pPpuc, opt_firmware_path, opt_allow_firmware_update);
+    ReportBoardFirmware(pPpuc, opt_firmware_path, opt_allow_firmware_update, opt_allow_dev_firmware_update);
   }
 
   BallSearchRunner ballSearchRunner =

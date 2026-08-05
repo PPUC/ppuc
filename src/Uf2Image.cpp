@@ -93,6 +93,67 @@ Uf2Image ParseUf2(const uint8_t* bytes, size_t length) {
   return image;
 }
 
+FirmwareFileName ParseFirmwareFileName(const std::string& fileName) {
+  FirmwareFileName result;
+
+  if (fileName.size() < 5 ||
+      fileName.compare(fileName.size() - 4, 4, ".uf2") != 0) {
+    return result;
+  }
+  std::string stem = fileName.substr(0, fileName.size() - 4);
+
+  // Optional +<hex> build id, taken off the end first so the version parse
+  // below does not have to know about it.
+  const size_t plus = stem.rfind('+');
+  if (plus != std::string::npos) {
+    const std::string idText = stem.substr(plus + 1);
+    if (idText.empty() || idText.size() > 8) {
+      return result;
+    }
+    uint32_t id = 0;
+    for (char c : idText) {
+      uint32_t digit;
+      if (c >= '0' && c <= '9') {
+        digit = static_cast<uint32_t>(c - '0');
+      } else if (c >= 'a' && c <= 'f') {
+        digit = static_cast<uint32_t>(c - 'a' + 10);
+      } else if (c >= 'A' && c <= 'F') {
+        digit = static_cast<uint32_t>(c - 'A' + 10);
+      } else {
+        return result;  // not hex: refuse rather than guess
+      }
+      id = (id << 4) | digit;
+    }
+    result.hasBuildId = true;
+    result.buildId = id;
+    stem = stem.substr(0, plus);
+  }
+
+  // The board type may itself contain dashes and digits, so the version is
+  // taken from the last dash and must parse completely.
+  const size_t dash = stem.rfind('-');
+  if (dash == std::string::npos || dash == 0) {
+    return result;
+  }
+
+  unsigned major = 0, minor = 0, patch = 0;
+  char trailing = 0;
+  const std::string versionText = stem.substr(dash + 1);
+  if (sscanf(versionText.c_str(), "%u.%u.%u%c", &major, &minor, &patch,
+             &trailing) != 3) {
+    return result;
+  }
+  if (major > 255 || minor > 255 || patch > 255) {
+    return result;
+  }
+
+  result.boardTypeName = stem.substr(0, dash);
+  result.version = versionText;
+  result.versionOrdinal = (major << 16) | (minor << 8) | patch;
+  result.valid = true;
+  return result;
+}
+
 Uf2Image LoadUf2File(const std::string& path) {
   FILE* file = fopen(path.c_str(), "rb");
   if (!file) {

@@ -252,12 +252,24 @@ jobs:
           FW_VERSION=$(grep -Eo "FIRMWARE_VERSION_MAJOR\s+[0-9]+" src/PPUC.h | grep -Eo "[0-9]+").$(grep -Eo "FIRMWARE_VERSION_MINOR\s+[0-9]+" src/PPUC.h | grep -Eo "[0-9]+").$(grep -Eo "FIRMWARE_VERSION_PATCH\s+[0-9]+" src/PPUC.h | grep -Eo "[0-9]+")
           echo "firmware version ${FW_VERSION}"
           mkdir -p ../firmware
+          BUILD_ID=$(echo "${{ steps.pin.outputs.sha }}" | cut -c1-8)
+          # A tagged ppuc build ships release firmware, named by version alone
+          # so the plain "newer version wins" rule applies. Anything else is a
+          # snapshot: the firmware version does not move between snapshots, so
+          # the build id is what distinguishes them and it goes in both the
+          # image and its name.
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            SUFFIX=""
+          else
+            SUFFIX="+${BUILD_ID}"
+          fi
           for ENV in $(python3 -c "import re;print(' '.join(e for e in re.findall(r'\[env:([^\]]+)\]', open('platformio.ini').read()) if e != 'native'))"); do
             echo "building ${ENV}"
-            pio run -e "${ENV}"
-            # Named <board type>-<version>.uf2, which is what ppuc-pinmame
-            # matches against a board's reported type and version.
-            cp ".pio/build/${ENV}/firmware.uf2" "../firmware/${ENV}-${FW_VERSION}.uf2"
+            PLATFORMIO_BUILD_FLAGS="-DPPUC_BUILD_ID=0x${BUILD_ID}UL" pio run -e "${ENV}"
+            # Named <board type>-<version>[+<build id>].uf2, which is what
+            # ppuc-pinmame matches against a board's reported type, version and
+            # build.
+            cp ".pio/build/${ENV}/firmware.uf2" "../firmware/${ENV}-${FW_VERSION}${SUFFIX}.uf2"
           done
           ls -l ../firmware
 

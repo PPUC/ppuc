@@ -160,3 +160,74 @@ TEST_CASE("a short final block is allowed") {
   REQUIRE(image.valid);
   CHECK(image.data.size() == 273);
 }
+
+// --- firmware file names -----------------------------------------------------
+//
+// The name is how an image is paired with a board and how two builds are
+// compared. A name that does not fit must be refused rather than
+// half-understood: a misparsed board type flashes the wrong hardware.
+
+using uf2::ParseFirmwareFileName;
+
+TEST_CASE("a release name parses to type and version") {
+  const auto n = ParseFirmwareFileName("IO_16_8_1-0.3.0.uf2");
+  REQUIRE(n.valid);
+  CHECK(n.boardTypeName == "IO_16_8_1");
+  CHECK(n.version == "0.3.0");
+  CHECK(n.versionOrdinal == ((0u << 16) | (3u << 8) | 0u));
+  CHECK_FALSE(n.hasBuildId);
+}
+
+TEST_CASE("a snapshot name also carries a build id") {
+  const auto n = ParseFirmwareFileName("IO_16_8_1-0.3.0+a1b2c3d4.uf2");
+  REQUIRE(n.valid);
+  CHECK(n.boardTypeName == "IO_16_8_1");
+  CHECK(n.versionOrdinal == ((0u << 16) | (3u << 8) | 0u));
+  REQUIRE(n.hasBuildId);
+  CHECK(n.buildId == 0xa1b2c3d4);
+}
+
+TEST_CASE("board type names containing dashes and digits survive") {
+  // The version is taken from the *last* dash, so a type name is free to
+  // contain them.
+  const auto n = ParseFirmwareFileName("IO_16x8_matrix-1.2.3.uf2");
+  REQUIRE(n.valid);
+  CHECK(n.boardTypeName == "IO_16x8_matrix");
+  CHECK(n.versionOrdinal == ((1u << 16) | (2u << 8) | 3u));
+}
+
+TEST_CASE("a short build id is accepted") {
+  const auto n = ParseFirmwareFileName("Opto_16-0.1.0+abc.uf2");
+  REQUIRE(n.valid);
+  REQUIRE(n.hasBuildId);
+  CHECK(n.buildId == 0xabc);
+}
+
+TEST_CASE("a non-hex build id is refused rather than guessed at") {
+  CHECK_FALSE(ParseFirmwareFileName("Opto_16-0.1.0+zzzz.uf2").valid);
+  CHECK_FALSE(ParseFirmwareFileName("Opto_16-0.1.0+.uf2").valid);
+  CHECK_FALSE(ParseFirmwareFileName("Opto_16-0.1.0+aabbccdde.uf2").valid);
+}
+
+TEST_CASE("names that are not firmware are refused") {
+  CHECK_FALSE(ParseFirmwareFileName("notes.txt").valid);
+  CHECK_FALSE(ParseFirmwareFileName("firmware.uf2").valid);
+  CHECK_FALSE(ParseFirmwareFileName("-1.2.3.uf2").valid);
+  CHECK_FALSE(ParseFirmwareFileName("IO_16_8_1-1.2.uf2").valid);
+  CHECK_FALSE(ParseFirmwareFileName("IO_16_8_1-1.2.3.4.uf2").valid);
+  CHECK_FALSE(ParseFirmwareFileName("IO_16_8_1-x.y.z.uf2").valid);
+}
+
+TEST_CASE("a version component that cannot fit a byte is refused") {
+  // The ordinal packs each component into 8 bits; accepting 256 would make
+  // two different versions compare equal.
+  CHECK_FALSE(ParseFirmwareFileName("IO_16_8_1-0.256.0.uf2").valid);
+}
+
+TEST_CASE("version ordering is by component, not lexicographic") {
+  const auto nine = ParseFirmwareFileName("IO_16_8_1-0.9.0.uf2");
+  const auto ten = ParseFirmwareFileName("IO_16_8_1-0.10.0.uf2");
+  REQUIRE(nine.valid);
+  REQUIRE(ten.valid);
+  CHECK(ten.versionOrdinal > nine.versionOrdinal);
+}
