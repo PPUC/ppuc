@@ -4990,6 +4990,19 @@ int main(int argc, char** argv)
 
   if (!opt_no_serial)
   {
+    // Report how often the bus needed its recovery mechanisms before tearing
+    // it down. Several host-side timeouts and retries were tuned by trial
+    // against a bus that misbehaved for reasons since addressed, and there was
+    // no way to tell which of them still earn their keep. A session that ends
+    // with zeros here is evidence one can be tightened or removed; anything
+    // non-zero says it is still load-bearing, and where to look next.
+    const PPUCBusHealth health = ppuc->GetBusHealth();
+    printf("PPUC: bus health: %u switch reply chains, %u clean, %u missed, "
+           "%u session resync(s), %u config ack retries, %u config ack timeouts\n",
+           health.switchReplyChains, health.switchReplyChainsClean,
+           health.switchReplyMisses, health.sessionResyncs,
+           health.configAckRetries, health.configAckTimeouts);
+
     // Close the serial device
     ppuc->Disconnect();
   }
