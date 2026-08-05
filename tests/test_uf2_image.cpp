@@ -10,14 +10,14 @@
 #include "Uf2Image.h"
 #include "doctest.h"
 
-using ppuc::kUf2BlockBytes;
-using ppuc::kUf2FamilyRp2040;
-using ppuc::kUf2FlagFamilyIdPresent;
-using ppuc::kUf2FlagNotMainFlash;
-using ppuc::kUf2Magic0;
-using ppuc::kUf2Magic1;
-using ppuc::kUf2MagicEnd;
-using ppuc::ParseUf2;
+using uf2::kUf2BlockBytes;
+using uf2::kUf2FamilyRp2040;
+using uf2::kUf2FlagFamilyIdPresent;
+using uf2::kUf2FlagNotMainFlash;
+using uf2::kUf2Magic0;
+using uf2::kUf2Magic1;
+using uf2::kUf2MagicEnd;
+using uf2::ParseUf2;
 
 namespace {
 
