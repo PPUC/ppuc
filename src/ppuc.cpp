@@ -2192,10 +2192,18 @@ struct FirmwareImage
     std::string path;
     uint32_t ordinal = 0;
     std::string version;
+    uint8_t boardType = 0;
     bool found = false;
 };
 
-static FirmwareImage FindNewestFirmwareImage(const char* directory)
+// Newest image for one board type.
+//
+// Matching on type is not tidiness: firmware is board-specific, and a
+// directory holding images for several boards would otherwise hand every board
+// whichever file happened to carry the highest version. The name before the
+// version must be a board type the protocol knows; anything else is ignored
+// rather than guessed at.
+static FirmwareImage FindNewestFirmwareImage(const char* directory, uint8_t boardType)
 {
     FirmwareImage best;
     if (!directory)
@@ -2224,11 +2232,19 @@ static FirmwareImage FindNewestFirmwareImage(const char* directory)
             continue;
         }
 
+        const std::string prefix(name, static_cast<size_t>(dash - name));
+        const uint8_t fileType = PPUCBoardTypeFromName(prefix.c_str());
+        if (fileType != boardType)
+        {
+            continue;
+        }
+
         const uint32_t ordinal = (major << 16) | (minor << 8) | patch;
         if (!best.found || ordinal > best.ordinal)
         {
             best.found = true;
             best.ordinal = ordinal;
+            best.boardType = fileType;
             best.version = std::to_string(major) + "." + std::to_string(minor) + "." + std::to_string(patch);
             best.path = std::string(directory) + "/" + name;
         }
@@ -2265,7 +2281,7 @@ static void FirmwareProgress(uint8_t board, size_t sent, size_t total, void*)
 // and in both cases we would be sending an image to something that cannot
 // have agreed to receive it. Those are flashed over USB instead.
 static void PerformFirmwareUpdates(PPUC* ppuc, const std::vector<PPUCBoardVersion>& versions,
-                                   const FirmwareImage& meta, const uf2::Uf2Image& image)
+                                   const char* firmwarePath)
 {
     // The runtime loop must not transmit into the middle of a transfer.
     ppuc->StopUpdates();
@@ -2273,16 +2289,39 @@ static void PerformFirmwareUpdates(PPUC* ppuc, const std::vector<PPUCBoardVersio
     size_t updated = 0, failed = 0;
     for (const PPUCBoardVersion& v : versions)
     {
-        if (!v.responded || v.FirmwareOrdinal() >= meta.ordinal)
+        if (!v.responded)
         {
             continue;
         }
 
-        printf("PPUC: updating board %u from %s to %s\n", v.board, v.FirmwareVersion().c_str(),
-               meta.version.c_str());
+        const FirmwareImage meta = FindNewestFirmwareImage(firmwarePath, v.boardType);
+        if (!meta.found || v.FirmwareOrdinal() >= meta.ordinal)
+        {
+            continue;
+        }
+
+        // Parsed per board, since each type has its own image. An unusable
+        // file stops that board rather than the whole run.
+        const uf2::Uf2Image parsed = uf2::LoadUf2File(meta.path);
+        if (!parsed.valid)
+        {
+            ++failed;
+            printf("PPUC: board %u: firmware image is unusable: %s\n", v.board, parsed.error.c_str());
+            continue;
+        }
+        if (parsed.familyId != 0 && parsed.familyId != uf2::kUf2FamilyRp2040)
+        {
+            ++failed;
+            printf("PPUC: board %u: image is not for an RP2040 (family 0x%08x)\n", v.board, parsed.familyId);
+            continue;
+        }
+
+        const char* tn = PPUCBoardTypeName(v.boardType);
+        printf("PPUC: updating board %u (%s) from %s to %s\n", v.board, tn ? tn : "?",
+               v.FirmwareVersion().c_str(), meta.version.c_str());
 
         const PPUCFirmwareUpdateResult result = ppuc->UpdateBoardFirmware(
-            v.board, image.data.data(), image.data.size(), FirmwareProgress, nullptr);
+            v.board, meta.boardType, parsed.data.data(), parsed.data.size(), FirmwareProgress, nullptr);
 
         if (result.ok)
         {
@@ -2338,23 +2377,32 @@ static void ReportBoardFirmware(PPUC* ppuc, const char* firmwarePath, bool allow
         return;
     }
 
-    const FirmwareImage image = FindNewestFirmwareImage(firmwarePath);
-    if (!image.found)
-    {
-        printf("PPUC: no firmware image matching <name>-<version>.uf2 in '%s'\n", firmwarePath);
-        return;
-    }
-
-    printf("PPUC: firmware image available: %s (%s)\n", image.version.c_str(), image.path.c_str());
-
+    // One image per board type, selected per board: a directory holding
+    // firmware for several boards has no single "newest image", and treating
+    // it as if it did would hand every board whichever file carried the
+    // highest version.
     size_t outdated = 0;
     for (const PPUCBoardVersion& v : versions)
     {
-        if (v.responded && v.FirmwareOrdinal() < image.ordinal)
+        if (!v.responded)
+        {
+            continue;
+        }
+
+        const char* typeName = PPUCBoardTypeName(v.boardType);
+        const FirmwareImage image = FindNewestFirmwareImage(firmwarePath, v.boardType);
+        if (!image.found)
+        {
+            printf("PPUC: no %s image in '%s' for board %u\n", typeName ? typeName : "(unknown type)",
+                   firmwarePath, v.board);
+            continue;
+        }
+
+        if (v.FirmwareOrdinal() < image.ordinal)
         {
             ++outdated;
-            printf("PPUC: board %u is out of date: %s -> %s\n", v.board, v.FirmwareVersion().c_str(),
-                   image.version.c_str());
+            printf("PPUC: board %u (%s) is out of date: %s -> %s\n", v.board, typeName ? typeName : "?",
+                   v.FirmwareVersion().c_str(), image.version.c_str());
         }
     }
 
@@ -2368,19 +2416,7 @@ static void ReportBoardFirmware(PPUC* ppuc, const char* firmwarePath, bool allow
     }
     else
     {
-        const uf2::Uf2Image parsed = uf2::LoadUf2File(image.path);
-        if (!parsed.valid)
-        {
-            // Refused here rather than partway through a board's flash.
-            printf("PPUC: firmware image is unusable: %s\n", parsed.error.c_str());
-            return;
-        }
-        if (parsed.familyId != 0 && parsed.familyId != uf2::kUf2FamilyRp2040)
-        {
-            printf("PPUC: firmware image is not for an RP2040 (family 0x%08x)\n", parsed.familyId);
-            return;
-        }
-        PerformFirmwareUpdates(ppuc, versions, image, parsed);
+        PerformFirmwareUpdates(ppuc, versions, firmwarePath);
     }
 }
 
