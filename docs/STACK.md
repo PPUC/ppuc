@@ -37,9 +37,10 @@ Companion documents in this directory:
 - [`BUS_MEASUREMENT.md`](BUS_MEASUREMENT.md) — logic-analyzer brief for
   establishing real RS485 cycle timing and what the switch-reply delay
   compensates for.
-- [`V2_RESYNC_PROPOSAL.md`](V2_RESYNC_PROPOSAL.md) — design rationale for
-  epoch-based session resync. Largely implemented; see its status block for what
-  shipped, what did not, and what was superseded.
+- [`V2_PROTOCOL.md`](V2_PROTOCOL.md) — reference for the V2 wire protocol:
+  framing, frame types, payload layouts, session lifecycle and timing, plus a
+  section recording missing features and future work.
+  `io-boards/src/PPUCProtocolV2.h` is the authoritative definition.
 
 - [`RULES_AND_EFFECTS.md`](RULES_AND_EFFECTS.md) — what Lua rules can do and the
   `ppuc.*` API.

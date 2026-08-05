@@ -21,8 +21,9 @@ documentation:
   **all** PPUC repositories. Read this first for anything cross-repo.
 - `docs/ASSESSMENT.md`: independent architecture review, current state, and the
   prioritized stabilization backlog.
-- `docs/V2_RESYNC_PROPOSAL.md`: design rationale for epoch-based session resync,
-  with a status block covering what shipped and what did not.
+- `docs/V2_PROTOCOL.md`: reference for the V2 wire protocol - framing, frame
+  types, payload layouts, session lifecycle, timing, and a section recording
+  known gaps. `io-boards/src/PPUCProtocolV2.h` remains authoritative.
 - `tools/check-pins.sh`: resolves the transitive dependency pin chain, verifies
   each pin is on its repository's `main`, and reports local checkouts that drift
   from what is pinned. Run it before concluding that a cross-repo change took
