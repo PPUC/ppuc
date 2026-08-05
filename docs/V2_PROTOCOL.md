@@ -24,11 +24,12 @@ is what tells you.
 4. [Frame types](#4-frame-types)
 5. [Flags, status and sizing](#5-flags-status-and-sizing)
 6. [Payload layouts](#6-payload-layouts)
-7. [Session lifecycle](#7-session-lifecycle)
-8. [Runtime loop](#8-runtime-loop)
-9. [Configuration topics](#9-configuration-topics)
-10. [Timing](#10-timing)
-11. [Missing features and future work](#11-missing-features-and-future-work)
+7. [Admin channel and firmware update](#7-admin-channel-and-firmware-update)
+8. [Session lifecycle](#8-session-lifecycle)
+9. [Runtime loop](#9-runtime-loop)
+10. [Configuration topics](#10-configuration-topics)
+11. [Timing](#11-timing)
+12. [Missing features and future work](#12-missing-features-and-future-work)
 
 ---
 
@@ -86,7 +87,7 @@ Every frame is a 5-byte header, an optional payload, and a 2-byte CRC:
 | `typeAndFlags` | 1 | Low nibble = frame type, high nibble = flags. |
 | `nextBoard` | 1 | Board that may transmit after this frame, or `0xFF`. |
 | `sequence` | 1 | Sender's frame counter, wraps at 256. |
-| `epoch` | 1 | Session generation. See [§7](#7-session-lifecycle). |
+| `epoch` | 1 | Session generation. See [§8](#8-session-lifecycle). |
 | `payload` | 0…n | Type-dependent, see [§6](#6-payload-layouts). |
 | `crc` | 2 | CRC-16/CCITT-FALSE over header **and** payload, big-endian. |
 
@@ -154,10 +155,15 @@ deployed board.
 | `0x0B` | `kFrameRestart` | host → boards | none | 7 |
 | `0x0C` | `kFrameTrigger` | host → boards | `TriggerPayload` | 11 |
 | `0x0D` | `kFrameSwitchRefresh` | host → boards | none | 7 |
+| `0x0E` | `kFrameAdmin` | both | `AdminPayload`, or an update body | 21, or see [§7](#7-admin-channel-and-firmware-update) |
+
+`0x0F` is the **only free type value left**. The type field is a nibble, so
+there is no room to grow: anything further has to go inside an existing
+envelope, which is what `kFrameAdmin` is for.
 
 `kFrameHeartbeat` and `kFrameError` are **defined and parsed but never sent by
 either side.** Both parsers accept and skip them. See
-[§11](#11-missing-features-and-future-work).
+[§12](#12-missing-features-and-future-work).
 
 ### Reset versus Restart
 
@@ -262,7 +268,7 @@ the frame.
 | Offset | Size | Field |
 |---|---|---|
 | 0 | 1 | `boardId` |
-| 1 | 1 | `topic` — see [§9](#9-configuration-topics) |
+| 1 | 1 | `topic` — see [§10](#10-configuration-topics) |
 | 2 | 1 | `index` |
 | 3 | 1 | `key` |
 | 4 | 4 | `value` |
@@ -293,6 +299,17 @@ the frame.
 | 3 | 1 | reserved |
 | 4 | n | switch bitmap (absent on `kFrameSwitchNoChange`) |
 
+**`AdminPayload` — 14 bytes**
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 1 | `command` — see [§7](#7-admin-channel-and-firmware-update) |
+| 1 | 1 | `boardId` — the board this concerns |
+| 2 | 12 | `data`, interpreted per command |
+
+The update commands reuse only the first two bytes and then carry a body of
+their own size, so an `AdminFrame` and an update frame are not the same length.
+
 **`OutputPayload`**
 
 Coil bitmap, then lamp bitmap, then 3 GI bytes. Only
@@ -302,7 +319,162 @@ size.
 
 ---
 
-## 7. Session lifecycle
+## 7. Admin channel and firmware update
+
+`kFrameAdmin` (`0x0E`) is an envelope, not a single message. Its first two
+payload bytes are always `command` and `boardId`; everything after that is the
+command's own. This exists because the type nibble was nearly exhausted — see
+[§4](#4-frame-types) — so anything added from here on shares one type value.
+
+Admin frames are addressed to a single board by `boardId` in the payload, not
+by the header's `nextBoard`, which stays `kNoBoard`. Boards that are not
+addressed ignore the frame and pass it on. Addressing matters here more than
+elsewhere: administration happens outside the switch chain, so no token decides
+who may transmit, and a broadcast query would put every board on the wire at
+once.
+
+Admin handling is deliberately **not** gated on a valid runtime config or a
+matching epoch. The point of a version query is to work before a session
+exists — that is exactly when the host needs to know what it is talking to.
+
+| Value | Command | Direction | Frame size |
+|---|---|---|---|
+| `0x01` | `kAdminVersionQuery` | host → board | 21 |
+| `0x02` | `kAdminVersionReport` | board → host | 21 |
+| `0x03` | `kAdminUpdateBegin` | host → board | 15 |
+| `0x04` | `kAdminUpdateBeginAck` | board → host | 14 |
+| `0x05` | `kAdminUpdateChunk` | host → board | 15 + chunk, max 271 |
+| `0x06` | `kAdminUpdateChunkAck` | board → host | 14 |
+| `0x07` | `kAdminUpdateCommit` | host → board | 9 |
+| `0x08` | `kAdminUpdateResult` | board → host | 14 |
+
+The chunk frame at 271 bytes is by a wide margin the largest frame on this bus;
+the next largest is an output frame at maximum device counts, 50 bytes.
+`kMaxFrameBytes` is 271 for this reason, and any receive buffer that is not is
+an overrun waiting for the first update.
+
+### Version report
+
+The 12-byte data area of `kAdminVersionReport`:
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 1 | firmware major |
+| 1 | 1 | firmware minor |
+| 2 | 1 | firmware patch |
+| 3 | 1 | admin protocol major |
+| 4 | 1 | admin protocol minor |
+| 5 | 1 | capabilities — `0x01` can report, `0x02` can self-update |
+| 6 | 1 | board type — see below |
+| 7 | 1 | reserved |
+| 8 | 4 | build id |
+
+The **board type** is on the wire because firmware is board-specific. The same
+GPIO is a coil output on one board and an input on another, so an image flashed
+to the wrong type does not merely misbehave, it drives an output into an input.
+The host matches type before it sends a byte.
+
+| Value | Name |
+|---|---|
+| `0x00` | unknown |
+| `0x01` | `IO_16_8_1` |
+| `0x02` | `IO_16x8_matrix` |
+| `0x03` | `Out_8x10` |
+| `0x04` | `Opto_16` |
+
+The names are not decoration: they are the PlatformIO environment names, the CI
+artefact names and the firmware filenames, all from one definition
+(`BoardTypeName()`), so the three cannot drift apart.
+
+The **build id** is the first 32 bits of the commit the firmware was built
+from, or 0 when it was not recorded — a local build, say. The firmware version
+is maintained by hand and does not move between releases, so it cannot
+distinguish two dev snapshots; the build id is what can. Zero on either side
+means "unknown" and never counts as a difference, so a hand-built board is not
+reflashed on every start.
+
+### Update sequence
+
+    host                                board
+     |-- UpdateBegin (size, CRC-16) ----->|   erase/prepare staging
+     |<------------- UpdateBeginAck ------|   status + bytes staged
+     |-- UpdateChunk (offset, len, ...) ->|   append at offset
+     |<------------- UpdateChunkAck ------|   status + offset accepted
+     |            ... repeated ...        |
+     |-- UpdateCommit ------------------->|   verify CRC, then install
+     |<------------- UpdateResult --------|   status
+
+Bodies, after the two-byte `command`/`boardId` prefix:
+
+| Command | Body |
+|---|---|
+| `UpdateBegin` | image size (4), image CRC-16 (2) |
+| `UpdateBeginAck`, `UpdateChunkAck`, `UpdateResult` | status (1), offset (4) |
+| `UpdateChunk` | offset (4), length (2), then `length` bytes, max 256 |
+| `UpdateCommit` | none |
+
+Chunks carry exactly one UF2 block's payload, which is what an image is made
+of, so neither side repacks.
+
+Every step is acknowledged with an explicit status rather than being inferred
+from silence, so a refusal is distinguishable from a board that is not
+answering:
+
+| Value | Status | Meaning |
+|---|---|---|
+| `0x00` | `kUpdateOk` | |
+| `0x01` | `kUpdateBusy` | an update is already in progress |
+| `0x02` | `kUpdateTooLarge` | image will not fit the staging area |
+| `0x03` | `kUpdateBadOffset` | chunk out of order or out of range |
+| `0x04` | `kUpdateCrcMismatch` | staged image does not match the announced CRC |
+| `0x05` | `kUpdateNotStaged` | commit without a complete transfer |
+| `0x06` | `kUpdateWriteFailed` | flash refused the write |
+| `0x07` | `kUpdateUnsupported` | this board cannot self-update |
+
+### What the board does with the image
+
+A board that accepts an `UpdateBegin` first turns its outputs off, by
+dispatching the same restart it would on `kFrameRestart`. It is about to spend
+some seconds not running the game and may reboot at the end of it, and the host
+has no way to know what it was driving; a coil left energised through that
+would burn.
+
+Nothing irreversible until commit. Chunks are staged to a file in LittleFS and
+the CRC is verified by reading that file back; only then is it handed to the
+framework's OTA stage, which is what actually writes the application area on
+the next boot. A power cut before commit loses the staged file and nothing
+else; a power cut during the OTA write is what that bootloader is built to
+survive.
+
+This is deliberately a convenience path. Flashing over USB is always available
+and is the fallback whenever the bus route is unavailable or refuses.
+
+### Host behaviour
+
+`ppuc-pinmame` queries every board's version at startup and prints what it
+finds. Updating is opt-in:
+
+| Option | Effect |
+|---|---|
+| `--firmware-path` | directory of `.uf2` images to compare against |
+| `--allow-firmware-update` | update a board whose version is older than the image |
+| `--allow-dev-firmware-update` | additionally, update when the version matches but the build id differs |
+
+The second flag is separate because *different* is not *newer*. Without it, a
+dev snapshot pointed at a machine running a release would quietly replace it.
+
+Images are named `<board type>-<version>.uf2`, or
+`<board type>-<version>+<build id>.uf2` for a snapshot. A name that cannot be
+parsed in full is ignored rather than half-understood — a misread board type
+would flash the wrong hardware.
+
+A board that does not answer a version query is **left alone**: no type, no
+version, no update. Those can still be flashed over USB, which is a far better
+outcome than guessing at what an unresponsive board is.
+
+---
+
+## 8. Session lifecycle
 
 ### Epoch
 
@@ -333,7 +505,7 @@ chains.
 
 ---
 
-## 8. Runtime loop
+## 9. Runtime loop
 
 ### Outputs, host → boards
 
@@ -359,7 +531,7 @@ activity.
 
 ---
 
-## 9. Configuration topics
+## 10. Configuration topics
 
 `ConfigPayload.topic` selects what a `ConfigFrame` sets. Topics are defined in
 `io-boards/src/EventDispatcher/Event.h`. Values are mostly ASCII letters, which
@@ -385,7 +557,7 @@ Field topics include `NUMBER` 78, `PORT` 80, `POWER` 87, `TYPE` 89,
 
 ---
 
-## 10. Timing
+## 11. Timing
 
 ### Board side
 
@@ -452,7 +624,7 @@ is what shows whether the margin is being used.
 
 ---
 
-## 11. Missing features and future work
+## 12. Missing features and future work
 
 Recorded so the gaps are known rather than rediscovered.
 
