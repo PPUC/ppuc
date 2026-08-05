@@ -1,11 +1,18 @@
 # Stabilization Plan — Measurement-Independent Work
 
-**Status: proposed, awaiting approval.**
+**Status: in progress.** Sections carrying **done** have landed; the rest is
+still proposal.
 
-Everything in this plan can proceed **without** the RS485 bus measurement
-described in [`BUS_MEASUREMENT.md`](BUS_MEASUREMENT.md). Nothing here changes
-transport timing, frame layout, or the runtime protocol, so none of it can
-invalidate or be invalidated by those results.
+Most of this plan proceeds **without** the RS485 bus measurement described in
+[`BUS_MEASUREMENT.md`](BUS_MEASUREMENT.md), and nothing here changes frame
+layout or the runtime protocol.
+
+Phase 2.4 is the exception, and deliberately so. The measurement needs hardware
+built to attach a logic analyser and has not been possible to complete, while
+two transport defects turned out to be identifiable from the code alone and
+independent of whatever it will show. Those have been fixed. What remains in
+that phase is what genuinely needs the measurement, or at least one session of
+the bus health counters, and is marked as such.
 
 Rationale and priorities come from [`ASSESSMENT.md`](ASSESSMENT.md).
 
@@ -13,7 +20,9 @@ Rationale and priorities come from [`ASSESSMENT.md`](ASSESSMENT.md).
 
 ## Guiding constraints
 
-1. **No transport timing changes.** Not until the measurement is in.
+1. **Transport timing changes only where the defect is identifiable without
+   the measurement**, and only one at a time so a regression has one candidate
+   cause. Anything resting on a guess about the bus still waits.
 2. **No protocol changes on the wire.** Sequence validation, heartbeat and error
    frames all wait — they need the bandwidth picture first.
 3. **Tests must not require hardware.** Everything below runs on a laptop and in
@@ -248,7 +257,7 @@ after driver release, which is exactly what bias strength governs. That gives
 the falsifiable prediction in the measurement brief — strengthen the bias and
 the required pre-TX delay should drop.
 
-### DE is dropped on an estimate, not a completion signal
+### DE is dropped on an estimate, not a completion signal — **done**
 
 ```c
 hwSerial->write(frame, frameBytes);              // returns after queueing
@@ -287,6 +296,48 @@ real turnaround behaviour.
 **Validation:** both changes need the logic analyzer to confirm on hardware —
 DE must fall after the last stop bit, never before. Implement now, verify when
 the analyzer is available.
+
+### Frame reads blocked the board for 8 ms — **done**
+
+`EventDispatcher::readBytes()` busy-waited a flat 8000 µs for a frame. At
+115200 a byte takes 87 µs, so that is 92 byte times spent waiting for one — and
+it is a busy wait in the main loop, so nothing else runs while it spins. Not
+`PwmDevices::update()`, which enforces `maxPulseTime`, and not the switch event
+dispatch. A single false sync byte cost the board 8 ms of blindness.
+
+A sender transmits a frame continuously, so waiting longer than its wire time
+cannot recover a frame already lost. The timeout is now wire time + 500 µs.
+
+| | before | after |
+|---|---|---|
+| header read | 8000 µs | 1134 µs |
+| payload read | 8000 µs | 2089 µs |
+| worst case per frame | 16.0 ms | 3.2 ms |
+
+**This is where the host's 40 ms switch reply window came from.** Per board:
+reply on the wire (1.65 ms at 64 switches) + blind time + turnaround.
+
+- with the 8 ms timeout: 9.85 ms per board → **39.4 ms** for four boards
+- after this change: 2.98 ms per board → **11.9 ms** for four boards
+
+39.4 ms against a 40 ms window. The two constants were tuned against each other
+and the relationship was never recorded, which is why the window looked
+arbitrary and reducing it looked reckless.
+
+### Still open in this phase
+
+- The pre-TX and post-TX delays remain coupled (`postTxSettleUs =
+  switchReplyDelayUs / 4`), so they still cannot be swept independently.
+- `SwitchReplyWindowUs()` is unchanged at 40 ms. It now carries ~3.4× headroom
+  rather than being exactly matched. Reducing it wants one session of
+  `PPUCBusHealth::switchReplyMisses` first — the figures above cover wire time
+  and known timeouts but not the board's main-loop latency, which is not
+  measured.
+- `ReceiveSwitchStateChain()` blocks the output path for the length of the
+  window, so a slow chain delays coil and lamp updates. Fast-flip coils are
+  handled board-locally and are not affected.
+
+---
 
 ## Phase 3 — Protocol conformance
 
@@ -343,6 +394,39 @@ an unexpected value.
 *This one touches the wire and should wait for the measurement, unless it can
 ride inside an existing config-ack field. Flagged here so it is not forgotten;
 **not** proposed for immediate implementation.*
+
+### 4.2c Host-side diagnostics — **done**
+
+The same problem as 4.2b, on the other side of the bus, and fixed the same way:
+observe without perturbing.
+
+Every anomaly the host could detect — CRC failures, missed switch reply chains,
+missing and rejected config acks, serial writes that failed or truncated, epoch
+mismatches, dropped output snapshots, session resyncs, board status flags — was
+silent unless `--debug` or `--debug-errors` was passed. A fault only visible
+with tracing on is a fault nobody sees, and enabling tracing changes the timing
+being diagnosed.
+
+Now:
+
+- **`PPUCBusHealth`** carries lifetime counts: chains attempted, clean, missed,
+  session resyncs, config-ack retries and timeouts, serial write failures, CRC
+  errors. Always collected. The pre-existing `m_switchReplyMisses` could not
+  serve — it resets on any success, so it only ever caught three *consecutive*
+  misses and an intermittent fault was invisible.
+- **A 32-entry ring in RAM** holds the most recent anomalies with their text.
+  `ppuc-pinmame` runs on a read-only Raspberry Pi with no console, so there is
+  nowhere to log and nobody reading stdout; printing stays behind the debug
+  flags, and `PPUC::GetRecentAnomalies()` retrieves the ring over ssh.
+- Both are dumped at shutdown alongside the health counters.
+
+Rate limited per anomaly kind: a broken bus raises the same fault every cycle,
+and neither a terminal nor a 32-entry ring is served by a hundred identical
+lines a second. The repeat count rides along on the next entry, so the
+frequency survives the summarising.
+
+**This is what makes the remaining Phase 2.4 items decidable.** Whether the
+40 ms window is load-bearing is now a question one session answers.
 
 ### 4.2b Non-intrusive runtime diagnostics (`io-boards`)
 

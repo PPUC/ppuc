@@ -394,11 +394,23 @@ Field topics include `NUMBER` 78, `PORT` 80, `POWER` 87, `TYPE` 89,
 | `RS485_MODE_SWITCH_DELAY` | 50 µs | Between asserting DE and the first bit, and around releasing. |
 | `switchReplyDelayUs` | **0** by default | Wait before asserting DE. Set via `--switch-reply-delay-us` or `SwitchReplyDelayUs` in the INI — **never** in the game YAML. |
 | post-TX settle | `switchReplyDelayUs / 4`, capped 2000 µs | Stalls the board after it has already gone high-Z. |
+| frame read timeout | frame wire time + 500 µs | How long `readBytes()` waits for a frame it has started reading. |
 
 DE is released when the UART reports the last bit has left the shift register
 (`uart0` BUSY clear), so the line is handed over as soon as the frame is
 actually gone. The wait is bounded by a timeout derived from the estimated wire
 time, so a stalled UART releases the bus rather than holding it.
+
+The frame read timeout is the board's worst-case **blind time**: `readBytes()`
+is a busy wait in the middle of the main loop, so while it spins nothing else
+runs — not `PwmDevices::update()`, which enforces `maxPulseTime`, and not the
+switch event dispatch. A sender transmits a frame continuously, so waiting
+materially longer than its wire time cannot recover a frame already lost; it
+only blocks the board. Worst case for one frame, with both the header and
+payload reads timing out, is about 3.2 ms.
+
+That figure is what sizes the host's switch reply window below — see the note
+there.
 
 ### Host side
 
@@ -417,6 +429,24 @@ time, so a stalled UART releases the bus rather than holding it.
 Note that `switchReplyDelayUs` adds `delay × boards` to the board-side chain
 **and** the same amount to the host's window, so with respect to that window the
 two roughly cancel.
+
+**Where the 40 ms comes from.** It is not arbitrary, though it reads that way.
+A board occupies the chain for its reply on the wire, plus its blind time, plus
+turnaround — and the chain is serial, so the window has to cover every board in
+it:
+
+| | per board | four-board chain |
+|---|---|---|
+| reply on the wire (64 switches) | 1.65 ms | |
+| board blind time (frame read timeout) | ~1.1 ms | |
+| turnaround | ~0.2 ms | |
+| **total** | **~2.98 ms** | **~11.9 ms** |
+
+The window therefore carries roughly 3.4× headroom over a four-board chain. It
+is deliberately not tuned down to the calculation: the figures above are wire
+time and known timeouts, and do not account for the board's own main-loop
+latency, which is not currently measured. `PPUCBusHealth::switchReplyMisses`
+is what shows whether the margin is being used.
 
 `PPUC::GetBusHealth()` reports how often these recovery paths actually fire.
 
