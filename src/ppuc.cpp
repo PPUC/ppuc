@@ -5005,6 +5005,19 @@ int main(int argc, char** argv)
            health.configAckRetries, health.configAckTimeouts,
            health.serialWriteFailures, health.frameCrcErrors);
 
+    // Recorded in RAM rather than logged: the target has a read-only root and
+    // no console. If this run was started by hand over ssh, this is where the
+    // detail of anything that went wrong comes out.
+    const std::vector<std::string> anomalies = ppuc->GetRecentAnomalies();
+    if (!anomalies.empty())
+    {
+      printf("PPUC: last %zu unexpected condition(s):\n", anomalies.size());
+      for (const std::string& line : anomalies)
+      {
+        printf("PPUC:   %s\n", line.c_str());
+      }
+    }
+
     // Close the serial device
     ppuc->Disconnect();
   }
