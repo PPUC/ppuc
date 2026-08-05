@@ -5,8 +5,8 @@ and the RP2040 IO boards.
 
 **`io-boards/src/PPUCProtocolV2.h` is the authoritative definition.** This
 document describes what that header specifies and why; where the two disagree,
-the header is right and this file is stale. Every constant below was read out of
-the header rather than remembered.
+the header is right and this file is stale. Every constant below is taken from
+the header and can be checked against it.
 
 The format is pinned by a conformance suite in
 `io-boards/test/conformance/ProtocolConformance.cpp`, which is compiled into
@@ -120,18 +120,16 @@ size, so a padding compiler fails the build instead of silently emitting
 wrong-length frames:
 
 ```
-FrameHeader        == 5      ConfigPayload    == 8
-SetupPayload       == 6      ConfigAckPayload == 8
-MappingPayload     == 6      TriggerPayload   == 4
+FrameHeader          == 5    ConfigPayload    == 8
+SetupPayload         == 6    ConfigAckPayload == 8
+MappingPayload       == 6    TriggerPayload   == 4
 switch status prefix == 4    kGiBytes         == 3
 ```
 
 The single definition of the byte order lives in the header's **wire codec**
 section (`WriteU16`/`ReadU16`, `WriteU32`/`ReadU32`, `WriteHeader`/`ReadHeader`,
-`AppendCrc`/`VerifyCrc`, and the `Build*Frame` helpers). Both sides use it. They
-previously open-coded the same format twice — the host shifting bytes by hand,
-the firmware reassembling them with `word()` — which is exactly where two
-implementations of one format drift apart.
+`AppendCrc`/`VerifyCrc`, and the `Build*Frame` helpers). Both sides use it, so
+the byte order has one implementation rather than two that can drift apart.
 
 ---
 
@@ -312,9 +310,9 @@ size.
 Boards record the epoch they last accepted and report it back as `epochSeen`.
 
 A board that sees a new epoch treats the session as restarted: it discards
-session state and expects a fresh `SetupFrame`. This is what allows recovery
-**without** rebooting boards or dropping coil power — the concern that motivated
-it originally, since ordinary transport desync must not depower a live playfield.
+session state and expects a fresh `SetupFrame`. This allows recovery **without**
+rebooting boards or dropping coil power, which matters because ordinary
+transport desync must not depower a live playfield.
 
 The host bumps the epoch after
 `RS485_COMM_SWITCH_REPLY_MISS_THRESHOLD` (3) consecutive missed switch-reply
@@ -365,7 +363,7 @@ activity.
 
 `ConfigPayload.topic` selects what a `ConfigFrame` sets. Topics are defined in
 `io-boards/src/EventDispatcher/Event.h`. Values are mostly ASCII letters, which
-is a historical convenience for reading traces.
+makes traces easier to read.
 
 **Note:** several topics deliberately share a value because they apply to
 different device types and can never appear in the same context — for example
@@ -397,10 +395,10 @@ Field topics include `NUMBER` 78, `PORT` 80, `POWER` 87, `TYPE` 89,
 | `switchReplyDelayUs` | **0** by default | Wait before asserting DE. Set via `--switch-reply-delay-us` or `SwitchReplyDelayUs` in the INI — **never** in the game YAML. |
 | post-TX settle | `switchReplyDelayUs / 4`, capped 2000 µs | Stalls the board after it has already gone high-Z. |
 
-DE is released when the UART reports the last bit has left
-(`uart0` BUSY clear), bounded by a timeout derived from the estimated wire time.
-It previously dropped on that estimate alone, which held the line roughly 200 µs
-too long on every frame.
+DE is released when the UART reports the last bit has left the shift register
+(`uart0` BUSY clear), so the line is handed over as soon as the frame is
+actually gone. The wait is bounded by a timeout derived from the estimated wire
+time, so a stalled UART releases the bus rather than holding it.
 
 ### Host side
 
@@ -432,8 +430,7 @@ Recorded so the gaps are known rather than rediscovered.
 
 `sequence` is written into every frame and parsed on receipt, but **never
 checked** for advance, loss or duplication. `kStatusSequenceGap` exists as a
-status flag with nothing to set it on the host side. This was specified in the
-original resync design and is the main piece of it that never landed.
+status flag with nothing to set it on the host side.
 
 Consequence: a lost or duplicated frame is only caught by the CRC and by
 higher-level effects, not by the sequence number that exists to catch it. For
@@ -482,13 +479,3 @@ By design — state is snapshot driven and the next frame corrects any loss. Not
 because it is a reasonable thing to look for and not find: there is no
 `OutputAck`, and adding one would trade the property that makes recovery cheap.
 
----
-
-## History
-
-This file replaces `V2_RESYNC_PROPOSAL.md`, which specified the epoch and
-switch-status mechanisms described in §5 and §7. Everything in that proposal has
-shipped except sequence validation, carried forward above. The proposal also
-referenced a UART DMA RX path that has since been removed from the firmware
-entirely, and predated `kFrameRestart`, which became the normal-path recovery it
-was reaching for.
