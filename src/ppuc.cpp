@@ -57,6 +57,7 @@
 #include "SpeechService.h"
 #include "cargs.h"
 #include "io-boards/Event.h"
+#include "io-boards/PPUCProtocolV2.h"
 #include "io-boards/PPUCPlatforms.h"
 #include "libpinmame.h"
 
@@ -77,7 +78,7 @@ constexpr uint32_t kDefaultBallSearchRoundDelayMs = 5000;
 constexpr uint32_t kBallSearchCoilPulseMs = 200;
 
 DMDUtil::DMD* pDmd;
-PPUC* ppuc;
+PPUC* pPpuc;
 std::unique_ptr<LuaRulesEngine> pLuaRulesEngine;
 std::unique_ptr<AudioOutput> pAudioOutput;
 std::unique_ptr<MediaPluginHost> pMediaPluginHost;
@@ -1496,14 +1497,14 @@ static void PrintMaybeStruckLine(bool struck, const char* format, ...)
   va_end(args);
 }
 
-static bool IsVirtualizedBenchSwitch(PPUC* ppuc, const PPUCSwitch& vswitch)
+static bool IsVirtualizedBenchSwitch(PPUC* pPpuc, const PPUCSwitch& vswitch)
 {
-  return ppuc->IsBoardVirtualized(vswitch.board) || ppuc->IsSwitchVirtualized(vswitch.number);
+  return pPpuc->IsBoardVirtualized(vswitch.board) || pPpuc->IsSwitchVirtualized(vswitch.number);
 }
 
-static bool IsVirtualizedBenchCoil(PPUC* ppuc, const PPUCCoil& coil) { return ppuc->IsBoardVirtualized(coil.board); }
+static bool IsVirtualizedBenchCoil(PPUC* pPpuc, const PPUCCoil& coil) { return pPpuc->IsBoardVirtualized(coil.board); }
 
-static bool IsVirtualizedBenchLamp(PPUC* ppuc, const PPUCLamp& lamp) { return ppuc->IsBoardVirtualized(lamp.board); }
+static bool IsVirtualizedBenchLamp(PPUC* pPpuc, const PPUCLamp& lamp) { return pPpuc->IsBoardVirtualized(lamp.board); }
 
 enum class BenchTestMode
 {
@@ -1558,7 +1559,7 @@ struct BenchTestRunner
   std::string interactiveInput;
 };
 
-static void ApplyBenchOutput(PPUC* ppuc, const BenchOutputStep& step, bool on);
+static void ApplyBenchOutput(PPUC* pPpuc, const BenchOutputStep& step, bool on);
 
 struct BallSearchRunner
 {
@@ -1572,10 +1573,10 @@ struct BallSearchRunner
   bool runningRound = false;
 };
 
-static std::vector<BenchOutputStep> BuildBallSearchSteps(PPUC* ppuc)
+static std::vector<BenchOutputStep> BuildBallSearchSteps(PPUC* pPpuc)
 {
   std::vector<BenchOutputStep> steps;
-  for (const auto& coil : ppuc->GetCoils())
+  for (const auto& coil : pPpuc->GetCoils())
   {
     if (!coil.ballSearch)
     {
@@ -1586,7 +1587,7 @@ static std::vector<BenchOutputStep> BuildBallSearchSteps(PPUC* ppuc)
     {
       continue;
     }
-    if (IsVirtualizedBenchCoil(ppuc, coil))
+    if (IsVirtualizedBenchCoil(pPpuc, coil))
     {
       continue;
     }
@@ -1596,11 +1597,11 @@ static std::vector<BenchOutputStep> BuildBallSearchSteps(PPUC* ppuc)
   return steps;
 }
 
-static BallSearchRunner CreateBallSearchRunner(PPUC* ppuc, uint32_t delayMs)
+static BallSearchRunner CreateBallSearchRunner(PPUC* pPpuc, uint32_t delayMs)
 {
   BallSearchRunner runner;
-  runner.steps = BuildBallSearchSteps(ppuc);
-  for (const auto& ppucSwitch : ppuc->GetSwitches())
+  runner.steps = BuildBallSearchSteps(pPpuc);
+  for (const auto& ppucSwitch : pPpuc->GetSwitches())
   {
     if (ppucSwitch.button)
     {
@@ -1616,11 +1617,11 @@ static void ResetBallSearchIdle(BallSearchRunner& runner, uint32_t delayMs)
   runner.nextSearchAt = std::chrono::steady_clock::now() + std::chrono::milliseconds(delayMs);
 }
 
-static void CancelActiveBallSearch(PPUC* ppuc, BallSearchRunner& runner)
+static void CancelActiveBallSearch(PPUC* pPpuc, BallSearchRunner& runner)
 {
   if (runner.outputActive && runner.index < runner.steps.size())
   {
-    ApplyBenchOutput(ppuc, runner.steps[runner.index], false);
+    ApplyBenchOutput(pPpuc, runner.steps[runner.index], false);
   }
   runner.outputActive = false;
   runner.runningRound = false;
@@ -1640,7 +1641,7 @@ static bool IsAnyBallSearchButtonPressed(const BallSearchRunner& runner)
   return false;
 }
 
-static void NoteBallSearchSwitchUpdate(PPUC* ppuc, BallSearchRunner& runner, int switchNumber, uint8_t state,
+static void NoteBallSearchSwitchUpdate(PPUC* pPpuc, BallSearchRunner& runner, int switchNumber, uint8_t state,
                                        uint32_t delayMs)
 {
   runner.currentSwitchStates[switchNumber] = state;
@@ -1648,11 +1649,11 @@ static void NoteBallSearchSwitchUpdate(PPUC* ppuc, BallSearchRunner& runner, int
   {
     return;
   }
-  CancelActiveBallSearch(ppuc, runner);
+  CancelActiveBallSearch(pPpuc, runner);
   ResetBallSearchIdle(runner, delayMs);
 }
 
-static void ServiceBallSearchRunner(PPUC* ppuc, BallSearchRunner& runner, bool gameRunning, uint32_t delayMs,
+static void ServiceBallSearchRunner(PPUC* pPpuc, BallSearchRunner& runner, bool gameRunning, uint32_t delayMs,
                                     uint32_t roundDelayMs)
 {
   if (runner.steps.empty())
@@ -1663,14 +1664,14 @@ static void ServiceBallSearchRunner(PPUC* ppuc, BallSearchRunner& runner, bool g
   const auto now = std::chrono::steady_clock::now();
   if (!gameRunning)
   {
-    CancelActiveBallSearch(ppuc, runner);
+    CancelActiveBallSearch(pPpuc, runner);
     runner.nextSearchAt = now + std::chrono::milliseconds(delayMs);
     return;
   }
 
   if (IsAnyBallSearchButtonPressed(runner))
   {
-    CancelActiveBallSearch(ppuc, runner);
+    CancelActiveBallSearch(pPpuc, runner);
     runner.nextSearchAt = now + std::chrono::milliseconds(delayMs);
     return;
   }
@@ -1693,7 +1694,7 @@ static void ServiceBallSearchRunner(PPUC* ppuc, BallSearchRunner& runner, bool g
     {
       return;
     }
-    ApplyBenchOutput(ppuc, runner.steps[runner.index], false);
+    ApplyBenchOutput(pPpuc, runner.steps[runner.index], false);
     runner.outputActive = false;
     ++runner.index;
   }
@@ -1706,7 +1707,7 @@ static void ServiceBallSearchRunner(PPUC* ppuc, BallSearchRunner& runner, bool g
     return;
   }
 
-  ApplyBenchOutput(ppuc, runner.steps[runner.index], true);
+  ApplyBenchOutput(pPpuc, runner.steps[runner.index], true);
   runner.outputActive = true;
   runner.phaseDeadline = now + std::chrono::milliseconds(kBallSearchCoilPulseMs);
 }
@@ -1762,9 +1763,9 @@ static bool ComputeSwitchFeedbackGiOn(const BenchTestRunner& runner, std::chrono
   return now >= runner.switchFeedbackOffUntil;
 }
 
-static void UpdateSwitchFeedbackGi(PPUC* ppuc, BenchTestRunner& runner)
+static void UpdateSwitchFeedbackGi(PPUC* pPpuc, BenchTestRunner& runner)
 {
-  if (runner.mode != BenchTestMode::SWITCHES || ppuc->GetPlatform() == PLATFORM_WPC)
+  if (runner.mode != BenchTestMode::SWITCHES || pPpuc->GetPlatform() == PLATFORM_WPC)
   {
     return;
   }
@@ -1776,7 +1777,7 @@ static void UpdateSwitchFeedbackGi(PPUC* ppuc, BenchTestRunner& runner)
     return;
   }
 
-  ppuc->SetGIState(/* string */ 1, giOn ? 8 : 0);
+  pPpuc->SetGIState(/* string */ 1, giOn ? 8 : 0);
   runner.switchFeedbackGiState = giOn;
 }
 
@@ -1829,33 +1830,33 @@ static void PrintInteractiveBenchMenu(const BenchTestRunner& runner)
   PrintInteractiveBenchPrompt(runner);
 }
 
-static void ApplyBenchOutput(PPUC* ppuc, const BenchOutputStep& step, bool on)
+static void ApplyBenchOutput(PPUC* pPpuc, const BenchOutputStep& step, bool on)
 {
   switch (step.kind)
   {
     case BenchOutputKind::SOLENOID:
-      ppuc->SetSolenoidState(step.number, on ? 1 : 0);
+      pPpuc->SetSolenoidState(step.number, on ? 1 : 0);
       break;
     case BenchOutputKind::LAMP:
       if (step.type == LED_TYPE_LAMP)
       {
-        ppuc->SetLampState(step.number, on ? 1 : 0);
+        pPpuc->SetLampState(step.number, on ? 1 : 0);
       }
       else
       {
-        ppuc->SetSolenoidState(step.number, on ? 1 : 0);
+        pPpuc->SetSolenoidState(step.number, on ? 1 : 0);
       }
       break;
     case BenchOutputKind::GI:
-      ppuc->SetGIState(step.number, on ? step.value : 0);
+      pPpuc->SetGIState(step.number, on ? step.value : 0);
       break;
   }
 }
 
-static std::vector<BenchOutputStep> BuildCoilTestSteps(PPUC* ppuc, uint8_t number)
+static std::vector<BenchOutputStep> BuildCoilTestSteps(PPUC* pPpuc, uint8_t number)
 {
   std::vector<BenchOutputStep> steps;
-  for (const auto& coil : ppuc->GetCoils())
+  for (const auto& coil : pPpuc->GetCoils())
   {
     if (coil.type != PWM_TYPE_SOLENOID && coil.type != PWM_TYPE_FLASHER)
     {
@@ -1865,7 +1866,7 @@ static std::vector<BenchOutputStep> BuildCoilTestSteps(PPUC* ppuc, uint8_t numbe
     {
       continue;
     }
-    if (IsVirtualizedBenchCoil(ppuc, coil))
+    if (IsVirtualizedBenchCoil(pPpuc, coil))
     {
       continue;
     }
@@ -1875,10 +1876,10 @@ static std::vector<BenchOutputStep> BuildCoilTestSteps(PPUC* ppuc, uint8_t numbe
   return steps;
 }
 
-static std::vector<BenchOutputStep> BuildLampTestSteps(PPUC* ppuc, uint8_t number)
+static std::vector<BenchOutputStep> BuildLampTestSteps(PPUC* pPpuc, uint8_t number)
 {
   std::vector<BenchOutputStep> steps;
-  for (const auto& lamp : ppuc->GetLamps())
+  for (const auto& lamp : pPpuc->GetLamps())
   {
     if (lamp.type != LED_TYPE_LAMP)
     {
@@ -1888,7 +1889,7 @@ static std::vector<BenchOutputStep> BuildLampTestSteps(PPUC* ppuc, uint8_t numbe
     {
       continue;
     }
-    if (IsVirtualizedBenchLamp(ppuc, lamp))
+    if (IsVirtualizedBenchLamp(pPpuc, lamp))
     {
       continue;
     }
@@ -1896,7 +1897,7 @@ static std::vector<BenchOutputStep> BuildLampTestSteps(PPUC* ppuc, uint8_t numbe
                      lamp.color, number != 0 ? 10000 : 2000, number != 0 ? 0 : 1000});
   }
 
-  for (const auto& coil : ppuc->GetCoils())
+  for (const auto& coil : pPpuc->GetCoils())
   {
     if (coil.type != PWM_TYPE_LAMP)
     {
@@ -1906,7 +1907,7 @@ static std::vector<BenchOutputStep> BuildLampTestSteps(PPUC* ppuc, uint8_t numbe
     {
       continue;
     }
-    if (IsVirtualizedBenchCoil(ppuc, coil))
+    if (IsVirtualizedBenchCoil(pPpuc, coil))
     {
       continue;
     }
@@ -1917,10 +1918,10 @@ static std::vector<BenchOutputStep> BuildLampTestSteps(PPUC* ppuc, uint8_t numbe
   return steps;
 }
 
-static std::vector<BenchOutputStep> BuildFlasherTestSteps(PPUC* ppuc, uint8_t number)
+static std::vector<BenchOutputStep> BuildFlasherTestSteps(PPUC* pPpuc, uint8_t number)
 {
   std::vector<BenchOutputStep> steps;
-  for (const auto& lamp : ppuc->GetLamps())
+  for (const auto& lamp : pPpuc->GetLamps())
   {
     if (lamp.type != LED_TYPE_FLASHER)
     {
@@ -1930,7 +1931,7 @@ static std::vector<BenchOutputStep> BuildFlasherTestSteps(PPUC* ppuc, uint8_t nu
     {
       continue;
     }
-    if (IsVirtualizedBenchLamp(ppuc, lamp))
+    if (IsVirtualizedBenchLamp(pPpuc, lamp))
     {
       continue;
     }
@@ -1941,7 +1942,7 @@ static std::vector<BenchOutputStep> BuildFlasherTestSteps(PPUC* ppuc, uint8_t nu
     }
   }
 
-  for (const auto& coil : ppuc->GetCoils())
+  for (const auto& coil : pPpuc->GetCoils())
   {
     if (coil.type != PWM_TYPE_FLASHER)
     {
@@ -1951,7 +1952,7 @@ static std::vector<BenchOutputStep> BuildFlasherTestSteps(PPUC* ppuc, uint8_t nu
     {
       continue;
     }
-    if (IsVirtualizedBenchCoil(ppuc, coil))
+    if (IsVirtualizedBenchCoil(pPpuc, coil))
     {
       continue;
     }
@@ -1965,10 +1966,10 @@ static std::vector<BenchOutputStep> BuildFlasherTestSteps(PPUC* ppuc, uint8_t nu
   return steps;
 }
 
-static std::vector<BenchOutputStep> BuildGiTestSteps(PPUC* ppuc, uint8_t number)
+static std::vector<BenchOutputStep> BuildGiTestSteps(PPUC* pPpuc, uint8_t number)
 {
   std::vector<BenchOutputStep> steps;
-  const uint8_t maxStrings = ppuc->GetPlatform() == PLATFORM_WPC ? 8 : 1;
+  const uint8_t maxStrings = pPpuc->GetPlatform() == PLATFORM_WPC ? 8 : 1;
   for (uint8_t i = 1; i <= maxStrings; ++i)
   {
     if (number != 0 && number != i)
@@ -1980,18 +1981,18 @@ static std::vector<BenchOutputStep> BuildGiTestSteps(PPUC* ppuc, uint8_t number)
   return steps;
 }
 
-static void PrintSwitchTestHeader(PPUC* ppuc)
+static void PrintSwitchTestHeader(PPUC* pPpuc)
 {
   printf("Switch Test\n");
   printf("=========\n");
 
-  const auto switches = ppuc->GetSwitches();
+  const auto switches = pPpuc->GetSwitches();
   if (!switches.empty())
   {
     printf("Configured switches:\n");
     for (const auto& vswitch : switches)
     {
-      PrintMaybeStruckLine(IsVirtualizedBenchSwitch(ppuc, vswitch), "  #%d  board=%d port=%d  %s", vswitch.number,
+      PrintMaybeStruckLine(IsVirtualizedBenchSwitch(pPpuc, vswitch), "  #%d  board=%d port=%d  %s", vswitch.number,
                            vswitch.board, vswitch.port, vswitch.description.c_str());
     }
     printf("\nWaiting for switch activity...\n");
@@ -1999,12 +2000,12 @@ static void PrintSwitchTestHeader(PPUC* ppuc)
   }
 }
 
-static void PrintCoilTestHeader(PPUC* ppuc, uint8_t number)
+static void PrintCoilTestHeader(PPUC* pPpuc, uint8_t number)
 {
   printf("Coil Test\n");
   printf("=========\n");
   printf("Configured coils/flashers:\n");
-  for (const auto& coil : ppuc->GetCoils())
+  for (const auto& coil : pPpuc->GetCoils())
   {
     if (coil.type != PWM_TYPE_SOLENOID && coil.type != PWM_TYPE_FLASHER)
     {
@@ -2014,18 +2015,18 @@ static void PrintCoilTestHeader(PPUC* ppuc, uint8_t number)
     {
       continue;
     }
-    PrintMaybeStruckLine(IsVirtualizedBenchCoil(ppuc, coil), "  #%d  board=%d port=%d  %s", coil.number, coil.board,
+    PrintMaybeStruckLine(IsVirtualizedBenchCoil(pPpuc, coil), "  #%d  board=%d port=%d  %s", coil.number, coil.board,
                          coil.port, coil.description.c_str());
   }
   printf("\n");
 }
 
-static void PrintLampTestHeader(PPUC* ppuc, uint8_t number)
+static void PrintLampTestHeader(PPUC* pPpuc, uint8_t number)
 {
   printf("Lamp Test\n");
   printf("=========\n");
   printf("Configured lamps:\n");
-  for (const auto& lamp : ppuc->GetLamps())
+  for (const auto& lamp : pPpuc->GetLamps())
   {
     if (lamp.type != LED_TYPE_LAMP)
     {
@@ -2035,10 +2036,10 @@ static void PrintLampTestHeader(PPUC* ppuc, uint8_t number)
     {
       continue;
     }
-    PrintMaybeStruckLine(IsVirtualizedBenchLamp(ppuc, lamp), "  #%d  board=%d port=%d  %s", lamp.number, lamp.board,
+    PrintMaybeStruckLine(IsVirtualizedBenchLamp(pPpuc, lamp), "  #%d  board=%d port=%d  %s", lamp.number, lamp.board,
                          lamp.port, lamp.description.c_str());
   }
-  for (const auto& coil : ppuc->GetCoils())
+  for (const auto& coil : pPpuc->GetCoils())
   {
     if (coil.type != PWM_TYPE_LAMP)
     {
@@ -2048,18 +2049,18 @@ static void PrintLampTestHeader(PPUC* ppuc, uint8_t number)
     {
       continue;
     }
-    PrintMaybeStruckLine(IsVirtualizedBenchCoil(ppuc, coil), "  #%d  board=%d port=%d  %s", coil.number, coil.board,
+    PrintMaybeStruckLine(IsVirtualizedBenchCoil(pPpuc, coil), "  #%d  board=%d port=%d  %s", coil.number, coil.board,
                          coil.port, coil.description.c_str());
   }
   printf("\n");
 }
 
-static void PrintFlasherTestHeader(PPUC* ppuc, uint8_t number)
+static void PrintFlasherTestHeader(PPUC* pPpuc, uint8_t number)
 {
   printf("\nFlasher Test\n");
   printf("=========\n");
   printf("Configured flashers:\n");
-  for (const auto& lamp : ppuc->GetLamps())
+  for (const auto& lamp : pPpuc->GetLamps())
   {
     if (lamp.type != LED_TYPE_FLASHER)
     {
@@ -2069,10 +2070,10 @@ static void PrintFlasherTestHeader(PPUC* ppuc, uint8_t number)
     {
       continue;
     }
-    PrintMaybeStruckLine(IsVirtualizedBenchLamp(ppuc, lamp), "  #%d  board=%d port=%d  %s", lamp.number, lamp.board,
+    PrintMaybeStruckLine(IsVirtualizedBenchLamp(pPpuc, lamp), "  #%d  board=%d port=%d  %s", lamp.number, lamp.board,
                          lamp.port, lamp.description.c_str());
   }
-  for (const auto& coil : ppuc->GetCoils())
+  for (const auto& coil : pPpuc->GetCoils())
   {
     if (coil.type != PWM_TYPE_FLASHER)
     {
@@ -2082,13 +2083,13 @@ static void PrintFlasherTestHeader(PPUC* ppuc, uint8_t number)
     {
       continue;
     }
-    PrintMaybeStruckLine(IsVirtualizedBenchCoil(ppuc, coil), "  #%d  board=%d port=%d  %s", coil.number, coil.board,
+    PrintMaybeStruckLine(IsVirtualizedBenchCoil(pPpuc, coil), "  #%d  board=%d port=%d  %s", coil.number, coil.board,
                          coil.port, coil.description.c_str());
   }
   printf("\n");
 }
 
-static BenchTestRunner CreateBenchTestRunner(PPUC* ppuc, BenchTestMode mode, uint8_t number)
+static BenchTestRunner CreateBenchTestRunner(PPUC* pPpuc, BenchTestMode mode, uint8_t number)
 {
   BenchTestRunner runner;
   runner.mode = mode;
@@ -2098,27 +2099,27 @@ static BenchTestRunner CreateBenchTestRunner(PPUC* ppuc, BenchTestMode mode, uin
   switch (mode)
   {
     case BenchTestMode::SWITCHES:
-      PrintSwitchTestHeader(ppuc);
+      PrintSwitchTestHeader(pPpuc);
       runner.printedSwitchHeader = true;
       break;
     case BenchTestMode::COILS:
-      PrintCoilTestHeader(ppuc, number);
-      runner.steps = BuildCoilTestSteps(ppuc, number);
+      PrintCoilTestHeader(pPpuc, number);
+      runner.steps = BuildCoilTestSteps(pPpuc, number);
       break;
     case BenchTestMode::LAMPS:
-      PrintLampTestHeader(ppuc, number);
-      ppuc->SetGIState(/* string */ 1, 0);
-      runner.restoreGiOnExit = ppuc->GetPlatform() != PLATFORM_WPC;
-      runner.steps = BuildLampTestSteps(ppuc, number);
+      PrintLampTestHeader(pPpuc, number);
+      pPpuc->SetGIState(/* string */ 1, 0);
+      runner.restoreGiOnExit = pPpuc->GetPlatform() != PLATFORM_WPC;
+      runner.steps = BuildLampTestSteps(pPpuc, number);
       break;
     case BenchTestMode::GI:
       printf("\nGI Test\n");
       printf("=========\n");
-      runner.steps = BuildGiTestSteps(ppuc, number);
+      runner.steps = BuildGiTestSteps(pPpuc, number);
       break;
     case BenchTestMode::FLASHERS:
-      PrintFlasherTestHeader(ppuc, number);
-      runner.steps = BuildFlasherTestSteps(ppuc, number);
+      PrintFlasherTestHeader(pPpuc, number);
+      runner.steps = BuildFlasherTestSteps(pPpuc, number);
       break;
   }
 
@@ -2158,20 +2159,20 @@ static BenchTestRunner CreateBenchTestRunner(PPUC* ppuc, BenchTestMode mode, uin
   return runner;
 }
 
-static void PrimeBenchSwitchStates(PPUC* ppuc, BenchTestRunner& runner)
+static void PrimeBenchSwitchStates(PPUC* pPpuc, BenchTestRunner& runner)
 {
   if (runner.mode != BenchTestMode::SWITCHES)
   {
     return;
   }
 
-  const auto switches = ppuc->GetSwitches();
+  const auto switches = pPpuc->GetSwitches();
   PPUCSwitchState* switchState = nullptr;
-  while ((switchState = ppuc->GetNextSwitchState()) != nullptr)
+  while ((switchState = pPpuc->GetNextSwitchState()) != nullptr)
   {
     auto it = std::find_if(switches.begin(), switches.end(),
                            [switchState](const PPUCSwitch& vswitch) { return vswitch.number == switchState->number; });
-    if (it != switches.end() && IsVirtualizedBenchSwitch(ppuc, *it))
+    if (it != switches.end() && IsVirtualizedBenchSwitch(pPpuc, *it))
     {
       continue;
     }
@@ -2233,7 +2234,7 @@ static FirmwareImage FindNewestFirmwareImage(const char* directory, uint8_t boar
         }
 
         const std::string prefix(name, static_cast<size_t>(dash - name));
-        const uint8_t fileType = PPUCBoardTypeFromName(prefix.c_str());
+        const uint8_t fileType = ppuc::v2::BoardTypeFromName(prefix.c_str());
         if (fileType != boardType)
         {
             continue;
@@ -2280,11 +2281,11 @@ static void FirmwareProgress(uint8_t board, size_t sent, size_t total, void*)
 // either absent or running firmware from before the admin envelope existed,
 // and in both cases we would be sending an image to something that cannot
 // have agreed to receive it. Those are flashed over USB instead.
-static void PerformFirmwareUpdates(PPUC* ppuc, const std::vector<PPUCBoardVersion>& versions,
+static void PerformFirmwareUpdates(PPUC* pPpuc, const std::vector<PPUCBoardVersion>& versions,
                                    const char* firmwarePath)
 {
     // The runtime loop must not transmit into the middle of a transfer.
-    ppuc->StopUpdates();
+    pPpuc->StopUpdates();
 
     size_t updated = 0, failed = 0;
     for (const PPUCBoardVersion& v : versions)
@@ -2316,11 +2317,11 @@ static void PerformFirmwareUpdates(PPUC* ppuc, const std::vector<PPUCBoardVersio
             continue;
         }
 
-        const char* tn = PPUCBoardTypeName(v.boardType);
+        const char* tn = ppuc::v2::BoardTypeName(v.boardType);
         printf("PPUC: updating board %u (%s) from %s to %s\n", v.board, tn ? tn : "?",
                v.FirmwareVersion().c_str(), meta.version.c_str());
 
-        const PPUCFirmwareUpdateResult result = ppuc->UpdateBoardFirmware(
+        const PPUCFirmwareUpdateResult result = pPpuc->UpdateBoardFirmware(
             v.board, meta.boardType, parsed.data.data(), parsed.data.size(), FirmwareProgress, nullptr);
 
         if (result.ok)
@@ -2349,9 +2350,9 @@ static void PerformFirmwareUpdates(PPUC* ppuc, const std::vector<PPUCBoardVersio
     }
 }
 
-static void ReportBoardFirmware(PPUC* ppuc, const char* firmwarePath, bool allowUpdate)
+static void ReportBoardFirmware(PPUC* pPpuc, const char* firmwarePath, bool allowUpdate)
 {
-    const std::vector<PPUCBoardVersion> versions = ppuc->QueryBoardVersions();
+    const std::vector<PPUCBoardVersion> versions = pPpuc->QueryBoardVersions();
     if (versions.empty())
     {
         return;
@@ -2389,7 +2390,7 @@ static void ReportBoardFirmware(PPUC* ppuc, const char* firmwarePath, bool allow
             continue;
         }
 
-        const char* typeName = PPUCBoardTypeName(v.boardType);
+        const char* typeName = ppuc::v2::BoardTypeName(v.boardType);
         const FirmwareImage image = FindNewestFirmwareImage(firmwarePath, v.boardType);
         if (!image.found)
         {
@@ -2416,20 +2417,20 @@ static void ReportBoardFirmware(PPUC* ppuc, const char* firmwarePath, bool allow
     }
     else
     {
-        PerformFirmwareUpdates(ppuc, versions, firmwarePath);
+        PerformFirmwareUpdates(pPpuc, versions, firmwarePath);
     }
 }
 
-static void WaitForCleanSwitchReplyCycle(PPUC* ppuc, uint32_t baselineCount)
+static void WaitForCleanSwitchReplyCycle(PPUC* pPpuc, uint32_t baselineCount)
 {
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
   while (std::chrono::steady_clock::now() < deadline)
   {
-    while (ppuc->GetNextSwitchState() != nullptr)
+    while (pPpuc->GetNextSwitchState() != nullptr)
     {
     }
 
-    if (ppuc->GetCleanSwitchReplyChainCount() > baselineCount)
+    if (pPpuc->GetCleanSwitchReplyChainCount() > baselineCount)
     {
       return;
     }
@@ -2438,23 +2439,23 @@ static void WaitForCleanSwitchReplyCycle(PPUC* ppuc, uint32_t baselineCount)
   }
 }
 
-static void DrainSwitchUpdatesForTest(PPUC* ppuc, BenchTestRunner& runner)
+static void DrainSwitchUpdatesForTest(PPUC* pPpuc, BenchTestRunner& runner)
 {
   if (runner.mode != BenchTestMode::SWITCHES)
   {
-    while (ppuc->GetNextSwitchState() != nullptr)
+    while (pPpuc->GetNextSwitchState() != nullptr)
     {
     }
     return;
   }
 
-  const auto switches = ppuc->GetSwitches();
+  const auto switches = pPpuc->GetSwitches();
   PPUCSwitchState* switchState = nullptr;
-  while ((switchState = ppuc->GetNextSwitchState()) != nullptr)
+  while ((switchState = pPpuc->GetNextSwitchState()) != nullptr)
   {
     auto it = std::find_if(switches.begin(), switches.end(),
                            [switchState](const PPUCSwitch& vswitch) { return vswitch.number == switchState->number; });
-    if (it != switches.end() && IsVirtualizedBenchSwitch(ppuc, *it))
+    if (it != switches.end() && IsVirtualizedBenchSwitch(pPpuc, *it))
     {
       continue;
     }
@@ -2504,7 +2505,7 @@ static void DrainSwitchUpdatesForTest(PPUC* ppuc, BenchTestRunner& runner)
     fflush(stdout);
   }
 
-  UpdateSwitchFeedbackGi(ppuc, runner);
+  UpdateSwitchFeedbackGi(pPpuc, runner);
 }
 
 static bool PollInteractiveBenchInput(BenchTestRunner& runner)
@@ -2585,13 +2586,13 @@ static bool PollInteractiveBenchInput(BenchTestRunner& runner)
 #endif
 }
 
-static bool ServiceBenchTestRunner(PPUC* ppuc, BenchTestRunner& runner)
+static bool ServiceBenchTestRunner(PPUC* pPpuc, BenchTestRunner& runner)
 {
-  DrainSwitchUpdatesForTest(ppuc, runner);
+  DrainSwitchUpdatesForTest(pPpuc, runner);
 
   if (runner.mode == BenchTestMode::SWITCHES)
   {
-    UpdateSwitchFeedbackGi(ppuc, runner);
+    UpdateSwitchFeedbackGi(pPpuc, runner);
     return true;
   }
 
@@ -2621,7 +2622,7 @@ static bool ServiceBenchTestRunner(PPUC* ppuc, BenchTestRunner& runner)
 
       const BenchOutputStep& step = runner.pendingInteractiveSteps.front();
       PrintBenchStepDetails(step);
-      ApplyBenchOutput(ppuc, step, true);
+      ApplyBenchOutput(pPpuc, step, true);
       runner.outputActive = true;
       runner.phaseDeadline = now + std::chrono::milliseconds(step.onDurationMs);
       return true;
@@ -2633,7 +2634,7 @@ static bool ServiceBenchTestRunner(PPUC* ppuc, BenchTestRunner& runner)
     }
 
     const BenchOutputStep step = runner.pendingInteractiveSteps.front();
-    ApplyBenchOutput(ppuc, step, false);
+    ApplyBenchOutput(pPpuc, step, false);
     runner.outputActive = false;
     runner.pendingInteractiveSteps.pop_front();
     if (!runner.pendingInteractiveSteps.empty() && step.offDurationMs > 0)
@@ -2664,7 +2665,7 @@ static bool ServiceBenchTestRunner(PPUC* ppuc, BenchTestRunner& runner)
   if (!runner.outputActive)
   {
     PrintBenchStepDetails(step);
-    ApplyBenchOutput(ppuc, step, true);
+    ApplyBenchOutput(pPpuc, step, true);
     runner.outputActive = true;
     runner.phaseDeadline = now + std::chrono::milliseconds(step.onDurationMs);
     return true;
@@ -2675,7 +2676,7 @@ static bool ServiceBenchTestRunner(PPUC* ppuc, BenchTestRunner& runner)
     return true;
   }
 
-  ApplyBenchOutput(ppuc, step, false);
+  ApplyBenchOutput(pPpuc, step, false);
   runner.outputActive = false;
   ++runner.index;
   if (runner.index < runner.steps.size() && step.offDurationMs > 0)
@@ -2686,21 +2687,21 @@ static bool ServiceBenchTestRunner(PPUC* ppuc, BenchTestRunner& runner)
   return runner.index < runner.steps.size();
 }
 
-static void CleanupBenchTestRunner(PPUC* ppuc, const BenchTestRunner& runner)
+static void CleanupBenchTestRunner(PPUC* pPpuc, const BenchTestRunner& runner)
 {
   for (const auto& step : runner.steps)
   {
-    ApplyBenchOutput(ppuc, step, false);
+    ApplyBenchOutput(pPpuc, step, false);
   }
 
   if (runner.restoreGiOnExit)
   {
     printf("\nRestoring GI String 1 to brightness %d\n", 8);
-    ppuc->SetGIState(/* string */ 1, /* full brightness */ 8);
+    pPpuc->SetGIState(/* string */ 1, /* full brightness */ 8);
   }
-  else if (runner.mode == BenchTestMode::SWITCHES && ppuc->GetPlatform() != PLATFORM_WPC)
+  else if (runner.mode == BenchTestMode::SWITCHES && pPpuc->GetPlatform() != PLATFORM_WPC)
   {
-    ppuc->SetGIState(/* string */ 1, /* full brightness */ 8);
+    pPpuc->SetGIState(/* string */ 1, /* full brightness */ 8);
   }
 }
 
@@ -3369,7 +3370,7 @@ int PINMAMECALLBACK OnAudioUpdated(void* p_buffer, int samples, const void* p_us
 void PINMAMECALLBACK OnSolenoidUpdated(PinmameSolenoidState* p_solenoidState, const void* p_userData)
 {
   const uint8_t coilState = p_solenoidState->state == 0 ? 0 : 1;
-  const bool isGameOnCoil = p_solenoidState->solNo == ppuc->GetGameOnSolenoid();
+  const bool isGameOnCoil = p_solenoidState->solNo == pPpuc->GetGameOnSolenoid();
 
   if (opt_debug || opt_debug_coils)
   {
@@ -3381,9 +3382,9 @@ void PINMAMECALLBACK OnSolenoidUpdated(PinmameSolenoidState* p_solenoidState, co
     pMediaPluginHost->QueueEvent('S', p_solenoidState->solNo, coilState);
   }
 
-  g_interceptorOutputs.ApplyPinmameCoil(ppuc, p_solenoidState->solNo, coilState);
+  g_interceptorOutputs.ApplyPinmameCoil(pPpuc, p_solenoidState->solNo, coilState);
 
-  for (const PPUCCoilGiMapping& mapping : ppuc->GetCoilGiMappings())
+  for (const PPUCCoilGiMapping& mapping : pPpuc->GetCoilGiMappings())
   {
     if (mapping.coil != p_solenoidState->solNo)
     {
@@ -3395,7 +3396,7 @@ void PINMAMECALLBACK OnSolenoidUpdated(PinmameSolenoidState* p_solenoidState, co
       printf("Coil GI mapping: solenoid=%d, state=%d, gi=%u, brightness=%u\n", p_solenoidState->solNo, coilState,
              mapping.gi, brightness);
     }
-    ppuc->SetGIState(mapping.gi, brightness);
+    pPpuc->SetGIState(mapping.gi, brightness);
   }
 
   if (isGameOnCoil)
@@ -4248,12 +4249,12 @@ int main(int argc, char** argv)
     return 1;
   }
 
-  ppuc = new PPUC();
+  pPpuc = new PPUC();
 
   // Load config file. But options set via command line are preferred.
   try
   {
-    ppuc->LoadConfiguration(config_file);
+    pPpuc->LoadConfiguration(config_file);
   }
   catch (const std::exception& e)
   {
@@ -4263,16 +4264,16 @@ int main(int argc, char** argv)
 
   if (!opt_debug)
   {
-    opt_debug = ppuc->GetDebug();
+    opt_debug = pPpuc->GetDebug();
   }
 
   if (opt_rom)
   {
-    ppuc->SetRom(opt_rom);
+    pPpuc->SetRom(opt_rom);
   }
   else
   {
-    opt_rom = ppuc->GetRom();
+    opt_rom = pPpuc->GetRom();
   }
 
   if (HasOptionValue(opt_game_folder))
@@ -4515,15 +4516,15 @@ int main(int argc, char** argv)
     // SDLDMD now owns the SDL window/renderer lifecycle.
   }
 
-  ppuc->SetDebug(opt_debug);
-  ppuc->SetDebugErrors(opt_debug_errors);
-  ppuc->SetForceHardReset(opt_hard_reset);
-  ppuc->SetSkippedBoardsCsv(opt_skip_boards);
-  ppuc->SetCoilHoldFrames(opt_coil_hold_frames);
-  ppuc->SetSwitchReplyDelayUs(opt_switch_reply_delay_us);
-  ppuc->SetSwitchRefreshIdleMs(opt_switch_refresh_idle_ms);
-  ppuc->SetOutputFrameIntervalMs(opt_output_frame_interval_ms);
-  ppuc->SetDisableFastFlipForTests(opt_switch_test || opt_coil_test || opt_lamp_test || opt_gi_test ||
+  pPpuc->SetDebug(opt_debug);
+  pPpuc->SetDebugErrors(opt_debug_errors);
+  pPpuc->SetForceHardReset(opt_hard_reset);
+  pPpuc->SetSkippedBoardsCsv(opt_skip_boards);
+  pPpuc->SetCoilHoldFrames(opt_coil_hold_frames);
+  pPpuc->SetSwitchReplyDelayUs(opt_switch_reply_delay_us);
+  pPpuc->SetSwitchRefreshIdleMs(opt_switch_refresh_idle_ms);
+  pPpuc->SetOutputFrameIntervalMs(opt_output_frame_interval_ms);
+  pPpuc->SetDisableFastFlipForTests(opt_switch_test || opt_coil_test || opt_lamp_test || opt_gi_test ||
                                    opt_flasher_test);
 
   if (opt_debug || opt_debug_errors)
@@ -4535,17 +4536,17 @@ int main(int argc, char** argv)
 
   if (opt_serial)
   {
-    ppuc->SetSerial(opt_serial);
+    pPpuc->SetSerial(opt_serial);
   }
   else
   {
     // opt_serial will be ignored by ZeDMD later.
-    opt_serial = ppuc->GetSerial();
+    opt_serial = pPpuc->GetSerial();
   }
 
   if (opt_switch_test || opt_coil_test || opt_lamp_test || opt_gi_test || opt_flasher_test)
   {
-    if (!ppuc->Connect())
+    if (!pPpuc->Connect())
     {
       printf("Unable to open serial communication to PPUC boards on %s.\n", opt_serial ? opt_serial : "(null)");
       return 1;
@@ -4556,16 +4557,16 @@ int main(int argc, char** argv)
       return 1;
     }
 
-    ppuc->StartUpdates();
+    pPpuc->StartUpdates();
     const bool testRequiresHighPower = opt_coil_test || opt_flasher_test;
     const bool closeVirtualCoinDoorForTest =
-        testRequiresHighPower && opt_close_coin_door && ppuc->IsSwitchVirtualized(ppuc->GetCoinDoorClosedSwitch());
+        testRequiresHighPower && opt_close_coin_door && pPpuc->IsSwitchVirtualized(pPpuc->GetCoinDoorClosedSwitch());
 
     if (closeVirtualCoinDoorForTest)
     {
-      ppuc->SetSwitchState(ppuc->GetCoinDoorClosedSwitch(), 1);
+      pPpuc->SetSwitchState(pPpuc->GetCoinDoorClosedSwitch(), 1);
     }
-    ppuc->SetSolenoidState(ppuc->GetGameOnSolenoid(), testRequiresHighPower ? 1 : 0);
+    pPpuc->SetSolenoidState(pPpuc->GetGameOnSolenoid(), testRequiresHighPower ? 1 : 0);
 
     BenchTestMode testMode = BenchTestMode::SWITCHES;
     if (opt_lamp_test)
@@ -4585,7 +4586,7 @@ int main(int argc, char** argv)
       testMode = BenchTestMode::COILS;
     }
 
-    BenchTestRunner testRunner = CreateBenchTestRunner(ppuc, testMode, opt_number);
+    BenchTestRunner testRunner = CreateBenchTestRunner(pPpuc, testMode, opt_number);
     if (testRunner.mode != BenchTestMode::SWITCHES && testRunner.steps.empty())
     {
       printf("No matching test items configured.\n");
@@ -4596,24 +4597,24 @@ int main(int argc, char** argv)
       ScopedRawTerminalMode rawTerminal(testRunner.interactive);
       if (testRunner.mode == BenchTestMode::SWITCHES)
       {
-        const uint32_t cleanChainBaseline = ppuc->GetCleanSwitchReplyChainCount();
-        WaitForCleanSwitchReplyCycle(ppuc, cleanChainBaseline);
+        const uint32_t cleanChainBaseline = pPpuc->GetCleanSwitchReplyChainCount();
+        WaitForCleanSwitchReplyCycle(pPpuc, cleanChainBaseline);
       }
-      PrimeBenchSwitchStates(ppuc, testRunner);
-      while (running && ServiceBenchTestRunner(ppuc, testRunner))
+      PrimeBenchSwitchStates(pPpuc, testRunner);
+      while (running && ServiceBenchTestRunner(pPpuc, testRunner))
       {
         std::this_thread::sleep_for(std::chrono::microseconds(MAIN_LOOP_SLEEP_US));
       }
-      CleanupBenchTestRunner(ppuc, testRunner);
+      CleanupBenchTestRunner(pPpuc, testRunner);
     }
 
-    ppuc->SetSolenoidState(ppuc->GetGameOnSolenoid(), 0);
+    pPpuc->SetSolenoidState(pPpuc->GetGameOnSolenoid(), 0);
     if (closeVirtualCoinDoorForTest)
     {
-      ppuc->SetSwitchState(ppuc->GetCoinDoorClosedSwitch(), 0);
+      pPpuc->SetSwitchState(pPpuc->GetCoinDoorClosedSwitch(), 0);
     }
-    ppuc->StopUpdates();
-    ppuc->Disconnect();
+    pPpuc->StopUpdates();
+    pPpuc->Disconnect();
 
     return 0;
   }
@@ -4634,13 +4635,13 @@ int main(int argc, char** argv)
   {
     pLuaRulesEngine = std::make_unique<LuaRulesEngine>();
     pLuaRulesEngine->SetDebug(opt_debug || opt_debug_effects);
-    pLuaRulesEngine->SetSwitchGroups(ppuc->GetSwitchGroups());
+    pLuaRulesEngine->SetSwitchGroups(pPpuc->GetSwitchGroups());
     pLuaRulesEngine->SetActionCallback(
         [](const RulesAction& action)
         {
-          if (ppuc != nullptr)
+          if (pPpuc != nullptr)
           {
-            g_interceptorOutputs.HandleAction(ppuc, action);
+            g_interceptorOutputs.HandleAction(pPpuc, action);
           }
         });
     pLuaRulesEngine->SetSpeechCallback(
@@ -4660,9 +4661,9 @@ int main(int argc, char** argv)
             {
               printf("Effect trigger emitted: id=%u value=%u\n", id, value);
             }
-            if (ppuc != nullptr)
+            if (pPpuc != nullptr)
             {
-              ppuc->TriggerEvent(EVENT_SOURCE_EFFECT, id, value);
+              pPpuc->TriggerEvent(EVENT_SOURCE_EFFECT, id, value);
             }
             return;
           }
@@ -4871,18 +4872,18 @@ int main(int argc, char** argv)
 
   while (pDmd->IsFinding()) std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-  if (!opt_no_serial && !ppuc->Connect())
+  if (!opt_no_serial && !pPpuc->Connect())
   {
     printf("Unable to open serial communication to PPUC boards on %s.\n", opt_serial ? opt_serial : "(null)");
     return 1;
   }
   if (!opt_no_serial)
   {
-    ReportBoardFirmware(ppuc, opt_firmware_path, opt_allow_firmware_update);
+    ReportBoardFirmware(pPpuc, opt_firmware_path, opt_allow_firmware_update);
   }
 
   BallSearchRunner ballSearchRunner =
-      opt_no_serial || !opt_ball_search ? BallSearchRunner{} : CreateBallSearchRunner(ppuc, opt_ball_search_delay_ms);
+      opt_no_serial || !opt_ball_search ? BallSearchRunner{} : CreateBallSearchRunner(pPpuc, opt_ball_search_delay_ms);
   if ((opt_debug || opt_debug_coils) && !opt_no_serial && !ballSearchRunner.steps.empty())
   {
     printf("Ball search configured: coils=%zu delayMs=%u roundDelayMs=%u\n", ballSearchRunner.steps.size(),
@@ -4938,10 +4939,10 @@ int main(int argc, char** argv)
     PinmameTrackingConfig trackingConfig;
 
     ball_search_game_running.store(false, std::memory_order_release);
-    ppuc->StartUpdates();
+    pPpuc->StartUpdates();
     if (opt_close_coin_door)
     {
-      ppuc->SetSwitchState(ppuc->GetCoinDoorClosedSwitch(), 1);
+      pPpuc->SetSwitchState(pPpuc->GetCoinDoorClosedSwitch(), 1);
     }
 
     while (running)
@@ -4999,7 +5000,7 @@ int main(int argc, char** argv)
             running = false;
           }
         }
-        g_interceptorOutputs.Service(ppuc);
+        g_interceptorOutputs.Service(pPpuc);
         PollPinmameSoundCommands(soundCommands);
         if (pMediaPluginHost != nullptr)
         {
@@ -5044,10 +5045,10 @@ int main(int argc, char** argv)
       }
 
       PPUCSwitchState* switchState;
-      while ((switchState = ppuc->GetNextSwitchState()) != nullptr)
+      while ((switchState = pPpuc->GetNextSwitchState()) != nullptr)
       {
         const uint8_t newSwitchState = switchState->state == 0 ? 0 : 1;
-        NoteBallSearchSwitchUpdate(ppuc, ballSearchRunner, switchState->number, newSwitchState,
+        NoteBallSearchSwitchUpdate(pPpuc, ballSearchRunner, switchState->number, newSwitchState,
                                    opt_ball_search_delay_ms);
 
         LuaRulesEngine::SwitchProcessResult switchProcess;
@@ -5081,7 +5082,7 @@ int main(int argc, char** argv)
         delete switchState;
       }
 
-      ServiceBallSearchRunner(ppuc, ballSearchRunner,
+      ServiceBallSearchRunner(pPpuc, ballSearchRunner,
                               ball_search_game_running.load(std::memory_order_acquire),
                               opt_ball_search_delay_ms, opt_ball_search_round_delay_ms);
 
@@ -5101,7 +5102,7 @@ int main(int argc, char** argv)
           pMediaPluginHost->QueueEvent('L', lampNo, lampState);
         }
 
-        g_interceptorOutputs.ApplyPinmameLamp(ppuc, static_cast<int>(lampNo), lampState);
+        g_interceptorOutputs.ApplyPinmameLamp(pPpuc, static_cast<int>(lampNo), lampState);
 
         if (pLuaRulesEngine)
         {
@@ -5114,7 +5115,7 @@ int main(int argc, char** argv)
         }
       }
 
-      if (ppuc->GetPlatform() == PLATFORM_WPC)
+      if (pPpuc->GetPlatform() == PLATFORM_WPC)
       {
         count = PinmameGetChangedGIs(changedGIStates);
         for (int c = 0; c < count; c++)
@@ -5132,7 +5133,7 @@ int main(int argc, char** argv)
             pMediaPluginHost->QueueEvent('G', giNo, giState);
           }
 
-          ppuc->SetGIState(giNo, giState);
+          pPpuc->SetGIState(giNo, giState);
         }
       }
 
@@ -5145,7 +5146,7 @@ int main(int argc, char** argv)
           running = false;
         }
       }
-      g_interceptorOutputs.Service(ppuc);
+      g_interceptorOutputs.Service(pPpuc);
 
       if (pMediaPluginHost != nullptr)
       {
@@ -5236,18 +5237,18 @@ int main(int argc, char** argv)
       // Emergency shutdown path:
       // Serum/libdmdutil teardown can race across worker threads when interrupted by signal.
       // Exit the process before Pinmame/DMD teardown runs to avoid use-after-free in external code.
-      CancelActiveBallSearch(ppuc, ballSearchRunner);
-      ppuc->StopUpdates();
+      CancelActiveBallSearch(pPpuc, ballSearchRunner);
+      pPpuc->StopUpdates();
       if (!opt_no_serial)
       {
-        ppuc->Disconnect();
+        pPpuc->Disconnect();
       }
       fflush(stdout);
       _Exit(0);
     }
 
-    CancelActiveBallSearch(ppuc, ballSearchRunner);
-    ppuc->StopUpdates();
+    CancelActiveBallSearch(pPpuc, ballSearchRunner);
+    pPpuc->StopUpdates();
     PinmameStop();
   }
 
@@ -5259,7 +5260,7 @@ int main(int argc, char** argv)
     // no way to tell which of them still earn their keep. A session that ends
     // with zeros here is evidence one can be tightened or removed; anything
     // non-zero says it is still load-bearing, and where to look next.
-    const PPUCBusHealth health = ppuc->GetBusHealth();
+    const PPUCBusHealth health = pPpuc->GetBusHealth();
     printf("PPUC: bus health: %u switch reply chains, %u clean, %u missed, "
            "%u session resync(s), %u config ack retries, %u config ack timeouts, "
            "%u serial write failures, %u CRC errors\n",
@@ -5271,7 +5272,7 @@ int main(int argc, char** argv)
     // Recorded in RAM rather than logged: the target has a read-only root and
     // no console. If this run was started by hand over ssh, this is where the
     // detail of anything that went wrong comes out.
-    const std::vector<std::string> anomalies = ppuc->GetRecentAnomalies();
+    const std::vector<std::string> anomalies = pPpuc->GetRecentAnomalies();
     if (!anomalies.empty())
     {
       printf("PPUC: last %zu unexpected condition(s):\n", anomalies.size());
@@ -5282,7 +5283,7 @@ int main(int argc, char** argv)
     }
 
     // Close the serial device
-    ppuc->Disconnect();
+    pPpuc->Disconnect();
   }
 
   bool quitSDL = false;
