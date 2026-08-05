@@ -253,6 +253,7 @@ endif()
 
 add_executable(ppuc-pinmame
    src/AudioOutput.cpp
+   src/Uf2Image.cpp
    src/LuaRulesEngine.cpp
    src/MediaPluginHost.cpp
    "${PPUC_VPINBALL_DIR}/plugins/plugins/MsgPluginManager.cpp"
@@ -666,11 +667,13 @@ if(PPUC_BUILD_TESTS)
    # PPUC or the serial transport.
    add_executable(ppuc_tests
       src/LuaRulesEngine.cpp
+      src/Uf2Image.cpp
       ${PPUC_LUA_SOURCES}
       tests/main.cpp
       tests/RulesFixture.h
       tests/test_lua_rules_engine.cpp
       tests/test_lua_rules_timing.cpp
+      tests/test_uf2_image.cpp
    )
 
    target_include_directories(ppuc_tests PRIVATE ${PPUC_INCLUDE_DIRS} tests)
