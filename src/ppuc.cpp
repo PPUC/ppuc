@@ -4998,10 +4998,12 @@ int main(int argc, char** argv)
     // non-zero says it is still load-bearing, and where to look next.
     const PPUCBusHealth health = ppuc->GetBusHealth();
     printf("PPUC: bus health: %u switch reply chains, %u clean, %u missed, "
-           "%u session resync(s), %u config ack retries, %u config ack timeouts\n",
+           "%u session resync(s), %u config ack retries, %u config ack timeouts, "
+           "%u serial write failures, %u CRC errors\n",
            health.switchReplyChains, health.switchReplyChainsClean,
            health.switchReplyMisses, health.sessionResyncs,
-           health.configAckRetries, health.configAckTimeouts);
+           health.configAckRetries, health.configAckTimeouts,
+           health.serialWriteFailures, health.frameCrcErrors);
 
     // Close the serial device
     ppuc->Disconnect();
