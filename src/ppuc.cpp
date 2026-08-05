@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <dirent.h>
 #include <deque>
 #include <exception>
 #include <filesystem>
@@ -2181,6 +2182,129 @@ static void PrimeBenchSwitchStates(PPUC* ppuc, BenchTestRunner& runner)
   runner.initialSwitchStatesPrimed = true;
 }
 
+
+// Firmware image found in --firmware-path, named <controller>-<major>.<minor>.<patch>.uf2,
+// which is what the io-boards CI produces.
+struct FirmwareImage
+{
+    std::string path;
+    uint32_t ordinal = 0;
+    std::string version;
+    bool found = false;
+};
+
+static FirmwareImage FindNewestFirmwareImage(const char* directory)
+{
+    FirmwareImage best;
+    if (!directory)
+    {
+        return best;
+    }
+
+    DIR* dir = opendir(directory);
+    if (!dir)
+    {
+        printf("PPUC: firmware path '%s' cannot be opened; no update will be attempted\n", directory);
+        return best;
+    }
+
+    while (struct dirent* entry = readdir(dir))
+    {
+        unsigned major = 0, minor = 0, patch = 0;
+        const char* name = entry->d_name;
+        const char* dash = strrchr(name, '-');
+        if (!dash)
+        {
+            continue;
+        }
+        if (sscanf(dash + 1, "%u.%u.%u.uf2", &major, &minor, &patch) != 3)
+        {
+            continue;
+        }
+
+        const uint32_t ordinal = (major << 16) | (minor << 8) | patch;
+        if (!best.found || ordinal > best.ordinal)
+        {
+            best.found = true;
+            best.ordinal = ordinal;
+            best.version = std::to_string(major) + "." + std::to_string(minor) + "." + std::to_string(patch);
+            best.path = std::string(directory) + "/" + name;
+        }
+    }
+    closedir(dir);
+    return best;
+}
+
+// Asks every board what it is running and says what would change.
+//
+// Flashing is not implemented yet, so this reports intent rather than acting
+// on it. Reporting first is deliberate: the decision of which boards are out
+// of date is the part worth getting visibly right before anything writes to
+// one.
+static void ReportBoardFirmware(PPUC* ppuc, const char* firmwarePath, bool allowUpdate)
+{
+    const std::vector<PPUCBoardVersion> versions = ppuc->QueryBoardVersions();
+    if (versions.empty())
+    {
+        return;
+    }
+
+    for (const PPUCBoardVersion& v : versions)
+    {
+        if (v.responded)
+        {
+            printf("PPUC: board %u firmware %s (admin protocol %u.%u)\n", v.board, v.FirmwareVersion().c_str(),
+                   v.adminProtocolMajor, v.adminProtocolMinor);
+        }
+        else
+        {
+            // Either absent, or running firmware from before the admin
+            // envelope existed. Both are worth saying out loud.
+            printf("PPUC: board %u did not report a firmware version\n", v.board);
+        }
+    }
+
+    if (!firmwarePath)
+    {
+        return;
+    }
+
+    const FirmwareImage image = FindNewestFirmwareImage(firmwarePath);
+    if (!image.found)
+    {
+        printf("PPUC: no firmware image matching <name>-<version>.uf2 in '%s'\n", firmwarePath);
+        return;
+    }
+
+    printf("PPUC: firmware image available: %s (%s)\n", image.version.c_str(), image.path.c_str());
+
+    size_t outdated = 0;
+    for (const PPUCBoardVersion& v : versions)
+    {
+        if (v.responded && v.FirmwareOrdinal() < image.ordinal)
+        {
+            ++outdated;
+            printf("PPUC: board %u is out of date: %s -> %s\n", v.board, v.FirmwareVersion().c_str(),
+                   image.version.c_str());
+        }
+    }
+
+    if (outdated == 0)
+    {
+        printf("PPUC: all boards are up to date\n");
+    }
+    else if (!allowUpdate)
+    {
+        printf("PPUC: %zu board(s) would be updated; pass --allow-firmware-update to permit it\n", outdated);
+    }
+    else
+    {
+        // The transfer itself is the next slice. Saying so beats appearing to
+        // have flashed something.
+        printf("PPUC: %zu board(s) would be updated, but firmware transfer is not implemented yet\n", outdated);
+    }
+}
+
 static void WaitForCleanSwitchReplyCycle(PPUC* ppuc, uint32_t baselineCount)
 {
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
@@ -2614,6 +2738,13 @@ static struct cag_option options[] = {
      .access_name = "skip-boards",
      .value_name = "VALUE",
      .description = "Skip configured boards by CSV list without editing the game YAML"},
+    {.identifier = '(',
+     .access_name = "firmware-path",
+     .value_name = "PATH",
+     .description = "Directory holding board firmware images (<controller>-<version>.uf2)"},
+    {.identifier = '#',
+     .access_name = "allow-firmware-update",
+     .description = "Permit flashing boards whose firmware is older than the image in --firmware-path"},
     {.identifier = '7',
      .access_name = "switch-reply-delay-us",
      .value_name = "VALUE",
@@ -3306,6 +3437,8 @@ int main(int argc, char** argv)
   uint16_t opt_backbox_port = 6789;
   const char* opt_serial = NULL;
   const char* opt_skip_boards = NULL;
+  const char* opt_firmware_path = NULL;
+  bool opt_allow_firmware_update = false;
   const char* opt_switch_reply_delay_us_arg = NULL;
   uint32_t opt_switch_reply_delay_us = 0;
   const char* opt_switch_refresh_idle_ms_arg = NULL;
@@ -3538,6 +3671,10 @@ int main(int argc, char** argv)
           opt_dump = ParseIniBool(value);
         else if (key == "SkipBoards")
           opt_skip_boards = DuplicateOptionalIniString(value);
+        else if (key == "FirmwarePath")
+          opt_firmware_path = DuplicateOptionalIniString(value);
+        else if (key == "AllowFirmwareUpdate")
+          opt_allow_firmware_update = ParseIniBool(value);
         else if (key == "SwitchReplyDelayUs")
           opt_switch_reply_delay_us_arg = DuplicateOptionalIniString(value);
         else if (key == "SwitchRefreshIdleMs")
@@ -3780,6 +3917,12 @@ int main(int argc, char** argv)
         break;
       case '6':
         opt_skip_boards = cag_option_get_value(&cag_context);
+        break;
+      case '(':
+        opt_firmware_path = cag_option_get_value(&cag_context);
+        break;
+      case '#':
+        opt_allow_firmware_update = true;
         break;
       case '7':
         opt_switch_reply_delay_us_arg = cag_option_get_value(&cag_context);
@@ -4618,6 +4761,11 @@ int main(int argc, char** argv)
     printf("Unable to open serial communication to PPUC boards on %s.\n", opt_serial ? opt_serial : "(null)");
     return 1;
   }
+  if (!opt_no_serial)
+  {
+    ReportBoardFirmware(ppuc, opt_firmware_path, opt_allow_firmware_update);
+  }
+
   BallSearchRunner ballSearchRunner =
       opt_no_serial || !opt_ball_search ? BallSearchRunner{} : CreateBallSearchRunner(ppuc, opt_ball_search_delay_ms);
   if ((opt_debug || opt_debug_coils) && !opt_no_serial && !ballSearchRunner.steps.empty())
