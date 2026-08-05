@@ -194,9 +194,82 @@ jobs:
           name: ppuc-${{ needs.version.outputs.tag }}-${{ matrix.platform }}-${{ matrix.arch }}
           path: ppuc
 
+  firmware:
+    name: Build board firmware
+    runs-on: ubuntu-24.04
+    needs: [ version ]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Resolve the pinned io-boards revision
+        id: pin
+        # Firmware shipped with a release has to be the firmware this release
+        # was built against, so it comes from the pin chain rather than from
+        # whatever io-boards main happens to be. ppuc pins libppuc, libppuc
+        # pins io-boards.
+        run: |
+          LIBPPUC_SHA=$(grep -oE '^LIBPPUC_SHA=.*' platforms/config.sh | cut -d= -f2)
+          IO_BOARDS_SHA=$(curl -sfL \
+            "https://raw.githubusercontent.com/PPUC/libppuc/${LIBPPUC_SHA}/platforms/config.sh" \
+            | grep -oE '^IO_BOARDS_SHA=.*' | cut -d= -f2)
+          if [ -z "${IO_BOARDS_SHA}" ]; then
+            echo "::error::could not resolve IO_BOARDS_SHA through libppuc ${LIBPPUC_SHA}"
+            exit 1
+          fi
+          echo "libppuc   ${LIBPPUC_SHA}"
+          echo "io-boards ${IO_BOARDS_SHA}"
+          echo "sha=${IO_BOARDS_SHA}" >> $GITHUB_OUTPUT
+
+      - name: Fetch io-boards at the pinned revision
+        run: |
+          curl -sfL "https://github.com/PPUC/io-boards/archive/${{ steps.pin.outputs.sha }}.tar.gz" -o io-boards.tar.gz
+          mkdir io-boards
+          tar xzf io-boards.tar.gz --strip-components=1 -C io-boards
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v5
+        with:
+          path: ~/.platformio
+          key: ${{ runner.os }}-platformio-firmware-${{ steps.pin.outputs.sha }}
+          restore-keys: |
+            ${{ runner.os }}-platformio-firmware-
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+
+      - name: Install PlatformIO
+        run: |
+          python -m pip install --upgrade pip
+          pip install --upgrade platformio
+
+      - name: Build every board type
+        working-directory: io-boards
+        # Every environment, because a release that ships firmware for some
+        # boards and not others is worse than one that ships none: the update
+        # path silently skips the boards it has no image for.
+        run: |
+          FW_VERSION=$(grep -Eo "FIRMWARE_VERSION_MAJOR\s+[0-9]+" src/PPUC.h | grep -Eo "[0-9]+").$(grep -Eo "FIRMWARE_VERSION_MINOR\s+[0-9]+" src/PPUC.h | grep -Eo "[0-9]+").$(grep -Eo "FIRMWARE_VERSION_PATCH\s+[0-9]+" src/PPUC.h | grep -Eo "[0-9]+")
+          echo "firmware version ${FW_VERSION}"
+          mkdir -p ../firmware
+          for ENV in $(python3 -c "import re;print(' '.join(e for e in re.findall(r'\[env:([^\]]+)\]', open('platformio.ini').read()) if e != 'native'))"); do
+            echo "building ${ENV}"
+            pio run -e "${ENV}"
+            # Named <board type>-<version>.uf2, which is what ppuc-pinmame
+            # matches against a board's reported type and version.
+            cp ".pio/build/${ENV}/firmware.uf2" "../firmware/${ENV}-${FW_VERSION}.uf2"
+          done
+          ls -l ../firmware
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v7
+        with:
+          name: ppuc-${{ needs.version.outputs.tag }}-firmware
+          path: firmware
+
   post-build:
     runs-on: macos-latest
-    needs: [ version, build ]
+    needs: [ version, build, firmware ]
     name: Release ppuc
     permissions:
       contents: write
@@ -205,12 +278,24 @@ jobs:
       - name: Package artifacts
         run: |
           mkdir release
+          FIRMWARE_DIR="ppuc-${{ needs.version.outputs.tag }}-firmware"
           for artifact in ppuc-${{ needs.version.outputs.tag }}-*; do
+            [ "${artifact}" = "${FIRMWARE_DIR}" ] && continue
+            # Ship the board firmware inside every platform archive, so a
+            # --firmware-path can point at the unpacked release directly.
+            if [ -d "${FIRMWARE_DIR}" ]; then
+              cp -a "${FIRMWARE_DIR}" "${artifact}/firmware"
+            fi
             zip -r "release/${artifact}.zip" "${artifact}"
           done
+          # And alongside, for flashing over USB without unpacking a platform
+          # build.
+          cp "${FIRMWARE_DIR}"/*.uf2 release/ 2>/dev/null || true
       - name: Release
         uses: softprops/action-gh-release@v3
         if: startsWith(github.ref, 'refs/tags/v')
         with:
           draft: true
-          files: release/*.zip
+          files: |
+            release/*.zip
+            release/*.uf2
