@@ -17,7 +17,7 @@
 #include <string>
 #include <vector>
 
-namespace ppuc {
+namespace uf2 {
 
 struct Uf2Image {
   bool valid = false;
@@ -50,4 +50,4 @@ Uf2Image ParseUf2(const uint8_t* bytes, size_t length);
 // Reads a UF2 file from disk and parses it.
 Uf2Image LoadUf2File(const std::string& path);
 
-}  // namespace ppuc
+}  // namespace uf2

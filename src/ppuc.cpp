@@ -20,6 +20,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <dirent.h>
+
+#include "Uf2Image.h"
 #include <deque>
 #include <exception>
 #include <filesystem>
@@ -2241,6 +2243,73 @@ static FirmwareImage FindNewestFirmwareImage(const char* directory)
 // on it. Reporting first is deliberate: the decision of which boards are out
 // of date is the part worth getting visibly right before anything writes to
 // one.
+
+static void FirmwareProgress(uint8_t board, size_t sent, size_t total, void*)
+{
+    // One line per 10%, so a two-minute transfer says something without
+    // scrolling a log nobody can read.
+    static size_t lastDecile = 0;
+    const size_t decile = total ? (sent * 10 / total) : 10;
+    if (decile != lastDecile || sent == total)
+    {
+        printf("PPUC: board %u firmware %zu%% (%zu/%zu bytes)\n", board, decile * 10, sent, total);
+        fflush(stdout);
+        lastDecile = decile;
+    }
+}
+
+// Flashes every board older than the supplied image.
+//
+// Boards that did not report a version are skipped deliberately: they are
+// either absent or running firmware from before the admin envelope existed,
+// and in both cases we would be sending an image to something that cannot
+// have agreed to receive it. Those are flashed over USB instead.
+static void PerformFirmwareUpdates(PPUC* ppuc, const std::vector<PPUCBoardVersion>& versions,
+                                   const FirmwareImage& meta, const uf2::Uf2Image& image)
+{
+    // The runtime loop must not transmit into the middle of a transfer.
+    ppuc->StopUpdates();
+
+    size_t updated = 0, failed = 0;
+    for (const PPUCBoardVersion& v : versions)
+    {
+        if (!v.responded || v.FirmwareOrdinal() >= meta.ordinal)
+        {
+            continue;
+        }
+
+        printf("PPUC: updating board %u from %s to %s\n", v.board, v.FirmwareVersion().c_str(),
+               meta.version.c_str());
+
+        const PPUCFirmwareUpdateResult result = ppuc->UpdateBoardFirmware(
+            v.board, image.data.data(), image.data.size(), FirmwareProgress, nullptr);
+
+        if (result.ok)
+        {
+            ++updated;
+            printf("PPUC: board %u updated; it is rebooting into the new firmware\n", v.board);
+        }
+        else
+        {
+            ++failed;
+            printf("PPUC: board %u update failed after %zu bytes: %s (status %u)\n", v.board, result.bytesSent,
+                   result.error.c_str(), result.status);
+        }
+    }
+
+    if (updated > 0)
+    {
+        // Boards reboot and re-enumerate; configuration happens from scratch
+        // afterwards, so the game must not start against half-configured
+        // hardware.
+        printf("PPUC: %zu board(s) updated, %zu failed. Restart ppuc-pinmame to run the game.\n", updated, failed);
+    }
+    else if (failed > 0)
+    {
+        printf("PPUC: no boards were updated; %zu attempt(s) failed\n", failed);
+    }
+}
+
 static void ReportBoardFirmware(PPUC* ppuc, const char* firmwarePath, bool allowUpdate)
 {
     const std::vector<PPUCBoardVersion> versions = ppuc->QueryBoardVersions();
@@ -2299,9 +2368,19 @@ static void ReportBoardFirmware(PPUC* ppuc, const char* firmwarePath, bool allow
     }
     else
     {
-        // The transfer itself is the next slice. Saying so beats appearing to
-        // have flashed something.
-        printf("PPUC: %zu board(s) would be updated, but firmware transfer is not implemented yet\n", outdated);
+        const uf2::Uf2Image parsed = uf2::LoadUf2File(image.path);
+        if (!parsed.valid)
+        {
+            // Refused here rather than partway through a board's flash.
+            printf("PPUC: firmware image is unusable: %s\n", parsed.error.c_str());
+            return;
+        }
+        if (parsed.familyId != 0 && parsed.familyId != uf2::kUf2FamilyRp2040)
+        {
+            printf("PPUC: firmware image is not for an RP2040 (family 0x%08x)\n", parsed.familyId);
+            return;
+        }
+        PerformFirmwareUpdates(ppuc, versions, image, parsed);
     }
 }
 

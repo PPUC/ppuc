@@ -3,7 +3,7 @@
 #include <cstdio>
 #include <cstring>
 
-namespace ppuc {
+namespace uf2 {
 
 namespace {
 
@@ -110,4 +110,4 @@ Uf2Image LoadUf2File(const std::string& path) {
   return ParseUf2(bytes.data(), bytes.size());
 }
 
-}  // namespace ppuc
+}  // namespace uf2
