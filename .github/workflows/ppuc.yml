@@ -29,7 +29,10 @@ jobs:
   build:
     name: Build ppuc-${{ matrix.platform }}-${{ matrix.arch }}
     runs-on: ${{ matrix.os }}
-    needs: [ version ]
+    # The firmware is part of a ppuc build, not a separate download, so this
+    # waits for it. It is a short, heavily cached job; the platform builds are
+    # the long pole either way.
+    needs: [ version, firmware ]
     strategy:
       fail-fast: false
       matrix:
@@ -188,6 +191,14 @@ jobs:
             exit 1
           fi
           echo "Rebuild recompiled nothing, as expected."
+      - name: Add the board firmware
+        uses: actions/download-artifact@v7
+        with:
+          name: ppuc-${{ needs.version.outputs.tag }}-firmware
+          # Alongside plugins/ and pinmame-nvram-maps/ in the staged tree, so
+          # every artifact of this run carries the firmware its own version was
+          # built against and --firmware-path can point straight at it.
+          path: ppuc/firmware
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -292,15 +303,17 @@ jobs:
           mkdir release
           FIRMWARE_DIR="ppuc-${{ needs.version.outputs.tag }}-firmware"
           for artifact in ppuc-${{ needs.version.outputs.tag }}-*; do
+            # The platform artifacts already contain firmware/ - the build job
+            # stages it before uploading, so what is released is exactly what a
+            # CI run produced.
             [ "${artifact}" = "${FIRMWARE_DIR}" ] && continue
-            # Ship the board firmware inside every platform archive, so a
-            # --firmware-path can point at the unpacked release directly.
-            if [ -d "${FIRMWARE_DIR}" ]; then
-              cp -a "${FIRMWARE_DIR}" "${artifact}/firmware"
+            if [ ! -d "${artifact}/firmware" ]; then
+              echo "::error::${artifact} has no firmware/ directory"
+              exit 1
             fi
             zip -r "release/${artifact}.zip" "${artifact}"
           done
-          # And alongside, for flashing over USB without unpacking a platform
+          # Loose as well, for flashing over USB without unpacking a platform
           # build.
           cp "${FIRMWARE_DIR}"/*.uf2 release/ 2>/dev/null || true
       - name: Release

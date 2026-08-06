@@ -463,6 +463,10 @@ finds. Updating is opt-in:
 The second flag is separate because *different* is not *newer*. Without it, a
 dev snapshot pointed at a machine running a release would quietly replace it.
 
+A ppuc build ships the images it was built against in a `firmware/` directory
+next to `plugins/`, so `--firmware-path firmware` on an unpacked release is the
+normal case and the versions cannot disagree with the host binary.
+
 Images are named `<board type>-<version>.uf2`, or
 `<board type>-<version>+<build id>.uf2` for a snapshot. A name that cannot be
 parsed in full is ignored rather than half-understood — a misread board type
