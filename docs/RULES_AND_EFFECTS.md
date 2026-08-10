@@ -208,3 +208,25 @@ The board effect trigger source is `F` internally. In YAML effect definitions,
 use matching `trigger.source: F` plus `trigger.name` or `trigger.number` when a
 simple board-side trigger is needed. For new rule-driven behavior, prefer Lua
 logic and named effects.
+
+### Triggering from lamp state
+
+A board effect can also be triggered by a lamp rather than by a rule, with
+`trigger.source: L`. No frame is sent for this. The board compares each output
+frame's lamp bitmap against the previous one and raises a light event for every
+bit that changed, which the effects controller matches against the triggers
+configured at startup.
+
+Two things about that matching are easy to get wrong:
+
+- The number a trigger matches is the **logical lamp number**, the one in the
+  YAML — not the bitmap position. The board translates via the mapping it was
+  sent during configuration.
+- The match is exact on source, number *and* value. `value: 1` fires when the
+  lamp turns on and never when it turns off; a trigger that should do both
+  needs two entries.
+
+Effects are stacked per device, and for an LED strip the segment is part of
+that key. Effects on different segments of one strip therefore run
+independently and do not terminate or suspend each other, while two effects on
+the same segment resolve by priority.
