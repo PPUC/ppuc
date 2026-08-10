@@ -681,6 +681,12 @@ not be built on top of it.
 
 ### 4.8 Support the remaining hardware (`io-boards`)
 
+*Until a board type has actually driven its outputs, mark it unvalidated in
+`BoardTypeValidatedOnHardware()`. The host will report an available image for
+it but refuse to install it unattended, so an untested pin map cannot reach a
+board on its own.*
+
+
 Three further boards exist in hardware and are intended to be supported. They
 are recorded here because they change what counts as dead code and because they
 drive the PIO work above.

@@ -2312,8 +2312,25 @@ static void FirmwareProgress(uint8_t board, size_t sent, size_t total, void*)
 // either absent or running firmware from before the admin envelope existed,
 // and in both cases we would be sending an image to something that cannot
 // have agreed to receive it. Those are flashed over USB instead.
+// Why this board must not be flashed unattended, or nullptr when it may be.
+//
+// Firmware for a board type nobody has run drives pins whose direction has
+// only ever been read off a schematic. On this hardware that is not a
+// misbehaving output, it is an output pushed into an input - the same hazard
+// that put board type on the wire to begin with. Someone flashing over USB has
+// chosen that; an update that happens by itself while the machine boots has
+// not.
+static const char* FirmwareUpdateBlockedReason(const PPUCBoardVersion& board, bool allowUnvalidated)
+{
+    if (allowUnvalidated || ppuc::v2::BoardTypeValidatedOnHardware(board.boardType))
+    {
+        return nullptr;
+    }
+    return "firmware for this board type has never been run on real hardware";
+}
+
 static void PerformFirmwareUpdates(PPUC* pPpuc, const std::vector<PPUCBoardVersion>& versions,
-                                   const char* firmwarePath, bool allowDev)
+                                   const char* firmwarePath, bool allowDev, bool allowUnvalidated)
 {
     // The runtime loop must not transmit into the middle of a transfer.
     pPpuc->StopUpdates();
@@ -2328,6 +2345,10 @@ static void PerformFirmwareUpdates(PPUC* pPpuc, const std::vector<PPUCBoardVersi
 
         const FirmwareImage meta = FindNewestFirmwareImage(firmwarePath, v.boardType);
         if (!meta.found || !FirmwareIsOutOfDate(v, meta, allowDev))
+        {
+            continue;
+        }
+        if (FirmwareUpdateBlockedReason(v, allowUnvalidated) != nullptr)
         {
             continue;
         }
@@ -2381,7 +2402,8 @@ static void PerformFirmwareUpdates(PPUC* pPpuc, const std::vector<PPUCBoardVersi
     }
 }
 
-static void ReportBoardFirmware(PPUC* pPpuc, const char* firmwarePath, bool allowUpdate, bool allowDev)
+static void ReportBoardFirmware(PPUC* pPpuc, const char* firmwarePath, bool allowUpdate, bool allowDev,
+                                bool allowUnvalidated)
 {
     const std::vector<PPUCBoardVersion> versions = pPpuc->QueryBoardVersions();
     if (versions.empty())
@@ -2393,7 +2415,14 @@ static void ReportBoardFirmware(PPUC* pPpuc, const char* firmwarePath, bool allo
     {
         if (v.responded)
         {
-            printf("PPUC: board %u firmware %s (admin protocol %u.%u)\n", v.board, v.FirmwareVersion().c_str(),
+            const char* name = ppuc::v2::BoardTypeName(v.boardType);
+            char build[24] = "";
+            if (v.buildId != 0)
+            {
+                snprintf(build, sizeof(build), "+%08x", v.buildId);
+            }
+            printf("PPUC: board %u is %s, firmware %s%s (admin protocol %u.%u)\n", v.board,
+                   name ? name : "an unknown board type", v.FirmwareVersion().c_str(), build,
                    v.adminProtocolMajor, v.adminProtocolMinor);
         }
         else
@@ -2413,7 +2442,7 @@ static void ReportBoardFirmware(PPUC* pPpuc, const char* firmwarePath, bool allo
     // firmware for several boards has no single "newest image", and treating
     // it as if it did would hand every board whichever file carried the
     // highest version.
-    size_t outdated = 0;
+    size_t outdated = 0, blocked = 0;
     for (const PPUCBoardVersion& v : versions)
     {
         if (!v.responded)
@@ -2430,12 +2459,30 @@ static void ReportBoardFirmware(PPUC* pPpuc, const char* firmwarePath, bool allo
             continue;
         }
 
-        if (FirmwareIsOutOfDate(v, image, allowDev))
+        if (!FirmwareIsOutOfDate(v, image, allowDev))
         {
-            ++outdated;
-            printf("PPUC: board %u (%s) is out of date: %s -> %s\n", v.board, typeName ? typeName : "?",
-                   v.FirmwareVersion().c_str(), image.version.c_str());
+            continue;
         }
+
+        const char* blockedReason = FirmwareUpdateBlockedReason(v, allowUnvalidated);
+        if (blockedReason != nullptr)
+        {
+            ++blocked;
+            printf("PPUC: board %u (%s) has a newer image (%s -> %s) but will not be updated: %s\n", v.board,
+                   typeName ? typeName : "?", v.FirmwareVersion().c_str(), image.version.c_str(), blockedReason);
+            continue;
+        }
+
+        ++outdated;
+        printf("PPUC: board %u (%s) is out of date: %s -> %s\n", v.board, typeName ? typeName : "?",
+               v.FirmwareVersion().c_str(), image.version.c_str());
+    }
+
+    if (blocked > 0)
+    {
+        printf("PPUC: %zu board(s) skipped; flash them over USB, or pass "
+               "--allow-unvalidated-firmware-update to accept the risk\n",
+               blocked);
     }
 
     if (outdated == 0)
@@ -2448,7 +2495,7 @@ static void ReportBoardFirmware(PPUC* pPpuc, const char* firmwarePath, bool allo
     }
     else
     {
-        PerformFirmwareUpdates(pPpuc, versions, firmwarePath, allowDev);
+        PerformFirmwareUpdates(pPpuc, versions, firmwarePath, allowDev, allowUnvalidated);
     }
 }
 
@@ -2889,6 +2936,9 @@ static struct cag_option options[] = {
      .access_name = "firmware-path",
      .value_name = "PATH",
      .description = "Directory holding board firmware images (<board type>-<version>[+<build id>].uf2)"},
+    {.identifier = '|',
+     .access_name = "allow-unvalidated-firmware-update",
+     .description = "Update boards whose type has never been validated on hardware (USB flashing is safer)"},
     {.identifier = ')',
      .access_name = "allow-dev-firmware-update",
      .description = "Also update a board whose firmware matches by version but was built from a different commit"},
@@ -3590,6 +3640,7 @@ int main(int argc, char** argv)
   const char* opt_firmware_path = NULL;
   bool opt_allow_firmware_update = false;
   bool opt_allow_dev_firmware_update = false;
+  bool opt_allow_unvalidated_firmware_update = false;
   const char* opt_switch_reply_delay_us_arg = NULL;
   uint32_t opt_switch_reply_delay_us = 0;
   const char* opt_switch_refresh_idle_ms_arg = NULL;
@@ -3828,6 +3879,8 @@ int main(int argc, char** argv)
           opt_allow_firmware_update = ParseIniBool(value);
         else if (key == "AllowDevFirmwareUpdate")
           opt_allow_dev_firmware_update = ParseIniBool(value);
+        else if (key == "AllowUnvalidatedFirmwareUpdate")
+          opt_allow_unvalidated_firmware_update = ParseIniBool(value);
         else if (key == "SwitchReplyDelayUs")
           opt_switch_reply_delay_us_arg = DuplicateOptionalIniString(value);
         else if (key == "SwitchRefreshIdleMs")
@@ -4079,6 +4132,9 @@ int main(int argc, char** argv)
         break;
       case ')':
         opt_allow_dev_firmware_update = true;
+        break;
+      case '|':
+        opt_allow_unvalidated_firmware_update = true;
         break;
       case '7':
         opt_switch_reply_delay_us_arg = cag_option_get_value(&cag_context);
@@ -4919,7 +4975,8 @@ int main(int argc, char** argv)
   }
   if (!opt_no_serial)
   {
-    ReportBoardFirmware(pPpuc, opt_firmware_path, opt_allow_firmware_update, opt_allow_dev_firmware_update);
+    ReportBoardFirmware(pPpuc, opt_firmware_path, opt_allow_firmware_update, opt_allow_dev_firmware_update,
+                        opt_allow_unvalidated_firmware_update);
   }
 
   BallSearchRunner ballSearchRunner =

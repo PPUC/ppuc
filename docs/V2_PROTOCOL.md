@@ -472,6 +472,13 @@ Images are named `<board type>-<version>.uf2`, or
 parsed in full is ignored rather than half-understood — a misread board type
 would flash the wrong hardware.
 
+Board types are also marked as validated on hardware or not
+(`BoardTypeValidatedOnHardware()`). Only `IO_16_8_1` is today. ppuc reports a
+newer image for the others but refuses to install it, because their pin maps
+have never been checked against a real board and a wrong pin direction on this
+hardware drives an output into an input. Flash those over USB, where a person
+is present, or pass `--allow-unvalidated-firmware-update`.
+
 A board that does not answer a version query is **left alone**: no type, no
 version, no update. Those can still be flashed over USB, which is a far better
 outcome than guessing at what an unresponsive board is.
