@@ -591,10 +591,45 @@ Section topics: `PLATFORM` 102, `LED_STRING` 103, `LED_SEGMENT` 104,
 
 Field topics include `NUMBER` 78, `PORT` 80, `POWER` 87, `TYPE` 89,
 `MIN_PULSE_TIME` 77, `MAX_PULSE_TIME` 84, `HOLD_POWER` 72,
-`HOLD_POWER_ACTIVATION_TIME` 65, `FAST_SWITCH` 70, `ACTIVE_LOW` 86,
+`HOLD_POWER_ACTIVATION_TIME` 65, `FAST_SWITCH` 70, `STOP_SWITCH` 68,
+`STOP_SWITCH_2` 69, `ACTIVE_LOW` 86,
 `NEXT_BOARD` 88, `SWITCH_REPLY_DELAY_US` 93, and the LED-specific
 `BRIGHTNESS` 66, `COLOR` 67, `AFTER_GLOW` 71, `LED_NUMBER` 76,
 `AMOUNT_LEDS` 79, `LIGHT_UP` 85. `CONFIG_TOPIC_NULL` is 99.
+
+### Ordering within a PWM output
+
+The board registers a PWM output when `CONFIG_TOPIC_TYPE` arrives, using
+whatever it has accumulated for that port so far. Every other field of the
+output must therefore be sent **before** the type; anything after it is applied
+to the next output instead. `CONFIG_TOPIC_PORT` starts a fresh output and clears
+the accumulator.
+
+### Switches that start an output, and switches that stop one
+
+Two field topics attach a switch to a PWM output, with opposite meanings:
+
+- **`FAST_SWITCH` (70)** runs the output *while* the switch is closed. A
+  slingshot, a jet bumper, a flipper button.
+- **`STOP_SWITCH` (68)** and **`STOP_SWITCH_2` (69)** cut the output the moment
+  the switch closes. Up to two per output: a flipper's end-of-stroke contact, or
+  the switch at each end of a motor-driven assembly's travel.
+
+Both are acted on by the board itself, so the switch has to be on the same board
+as the output. Otherwise the reaction waits for the host to poll, which is the
+latency both exist to avoid.
+
+A stop engages on the switch **closing**, not on its being closed — an assembly
+usually sits on one of its end switches, and a level test would stop it ever
+moving. It releases once every stop switch is open, at which point an output
+driven by a fast switch fires again by itself. That is what brings a flipper
+back up when a ball has pushed the finger down while the button is still held.
+An output the host drives does not restart on its own: a motor that reached the
+end of its travel has arrived, not failed.
+
+`maxPulseTime` still applies and still wins. A stop switch can be unplugged or
+misadjusted; the timeout is what covers that, and after it cuts an output the
+driving switch must be released before it fires again.
 
 ---
 
