@@ -26,6 +26,20 @@ jobs:
           echo "${TAG}"
           echo "tag=${TAG}" >> $GITHUB_OUTPUT
 
+  pins:
+    name: Verify the dependency pin chain
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Resolve and verify pins
+        env:
+          # 60 unauthenticated API calls an hour per IP, shared with every
+          # other job on the runner. Without this the checks come back
+          # "unverified" and the run passes having verified nothing - which is
+          # why --strict treats unverified as a failure.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./tools/check-pins.sh --no-color --strict
+
   build:
     name: Build ppuc-${{ matrix.platform }}-${{ matrix.arch }}
     runs-on: ${{ matrix.os }}

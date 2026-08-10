@@ -17,6 +17,9 @@
 #   --workspace DIR  where sibling checkouts live (default: parent of this repo)
 #   --offline        skip all network access; verify only against local clones
 #   --no-color       plain output, e.g. for CI logs
+#   --strict         also fail when a pin could not be verified at all, rather
+#                    than reporting it as unverified and exiting 0. For CI,
+#                    where "could not check" must not read as "checked".
 #
 # Exit status:
 #   0  every pin resolved and verified
@@ -31,7 +34,9 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 WORKSPACE="$(cd "${REPO_ROOT}/.." && pwd -P)"
 OFFLINE=0
 USE_COLOR=1
+STRICT=0
 PROBLEMS=0
+UNVERIFIED=0
 RESOLVE_FAILED=0
 CACHE_DIR=""
 
@@ -40,6 +45,7 @@ while [ $# -gt 0 ]; do
       --workspace) WORKSPACE="$(cd "$2" && pwd -P)"; shift 2 ;;
       --offline)   OFFLINE=1; shift ;;
       --no-color)  USE_COLOR=0; shift ;;
+      --strict)    STRICT=1; shift ;;
       -h|--help)   sed -n '2,26p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
       *)           echo "Unknown option: $1" >&2; exit 2 ;;
    esac
@@ -51,6 +57,20 @@ if [ "${USE_COLOR}" = "1" ] && [ -t 1 ]; then
 else
    C_DIM=""; C_RED=""; C_GREEN=""; C_YELLOW=""; C_BOLD=""; C_OFF=""
 fi
+
+# GitHub allows 60 unauthenticated API calls an hour per IP, and one run of
+# this makes a dozen or more. In CI that limit is shared with every other job
+# on the runner, so without a token the checks come back "unverified" and the
+# run passes having verified nothing.
+# A function rather than an array: this has to run under bash 3.2 (macOS) with
+# set -u, where expanding an empty array is itself an error.
+gh_curl() {
+   if [ -n "${GITHUB_TOKEN:-}" ]; then
+      curl -fsSL --max-time 20 -H "Authorization: Bearer ${GITHUB_TOKEN}" "$@"
+   else
+      curl -fsSL --max-time 20 "$@"
+   fi
+}
 
 cleanup() { [ -n "${CACHE_DIR}" ] && rm -rf "${CACHE_DIR}"; }
 trap cleanup EXIT
@@ -69,6 +89,24 @@ repo_slug() {
       vpinball)      echo "PPUC/vpinball" ;;
       pinmame)       echo "mkalkbrenner/pinmame" ;;
       *)             echo "" ;;
+   esac
+}
+
+# Whether a pin into this repository is expected to sit on its default branch.
+#
+# It is, for the repositories PPUC develops: a release that pins a commit which
+# never reached main is pinning work nobody can find later.
+#
+# It is not, for the forks. PPUC/vpinball and PPUC/libdmdutil carry PPUC's own
+# commits on top of an upstream master they do not push to, and
+# mkalkbrenner/pinmame has diverged from its ppuc branch by design. Verified
+# 2026-08-10: those three are ahead of or diverged from their default branch
+# and are meant to be. Reporting that as a failure would mean this check could
+# never pass, which is how a check stops being read.
+expects_default_branch() {
+   case "$1" in
+      ppuc|libppuc|io-boards|libsdldmd) echo "yes" ;;
+      *)                                echo "no" ;;
    esac
 }
 
@@ -115,11 +153,31 @@ fetch_config() {
    slug="$(repo_slug "${name}")"
    [ -n "${slug}" ] || return 1
    out="${CACHE_DIR}/${name}-${sha}.sh"
-   if curl -fsSL --max-time 20 \
-        "https://raw.githubusercontent.com/${slug}/${sha}/${rel}" -o "${out}" 2>/dev/null; then
+   if gh_curl "https://raw.githubusercontent.com/${slug}/${sha}/${rel}" \
+        -o "${out}" 2>/dev/null; then
       echo "${out}"; return 0
    fi
    return 1
+}
+
+default_branch() {
+   # default_branch <slug> -> branch name, cached per run.
+   #
+   # Not every repository here calls it "main": PPUC/vpinball and
+   # PPUC/libdmdutil are on master, and mkalkbrenner/pinmame is on a branch
+   # called ppuc. Comparing against a branch that does not exist returns 404,
+   # which this script used to report as "unverified" - so those three pins
+   # were never actually checked, and nothing said so.
+   local slug="$1" cache="${CACHE_DIR}/branch-${slug//\//_}" branch
+   if [ -f "${cache}" ]; then
+      cat "${cache}"; return
+   fi
+   branch="$(gh_curl "https://api.github.com/repos/${slug}" 2>/dev/null |
+      grep -m1 '"default_branch"' |
+      sed -E 's/.*"default_branch"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')"
+   [ -n "${branch}" ] || branch="main"
+   printf '%s' "${branch}" >"${cache}"
+   printf '%s' "${branch}"
 }
 
 on_main() {
@@ -145,9 +203,12 @@ on_main() {
    slug="$(repo_slug "${name}")"
    [ -n "${slug}" ] || { echo "unknown"; return; }
 
-   # GitHub compare: main...<sha> is "identical" or "behind" when sha is an ancestor.
-   status="$(curl -fsSL --max-time 20 \
-      "https://api.github.com/repos/${slug}/compare/main...${sha}" 2>/dev/null |
+   # GitHub compare: <branch>...<sha> is "identical" or "behind" when sha is an
+   # ancestor.
+   local branch
+   branch="$(default_branch "${slug}")"
+   status="$(gh_curl \
+      "https://api.github.com/repos/${slug}/compare/${branch}...${sha}" 2>/dev/null |
       grep -m1 '"status"' | sed -E 's/.*"status"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')"
    case "${status}" in
       identical|behind) echo "yes" ;;
@@ -194,10 +255,21 @@ report() {
 
    if [ -n "$(repo_slug "${name}")" ]; then
       status="$(on_main "${name}" "${sha}")"
+      local expected
+      expected="$(expects_default_branch "${name}")"
       case "${status}" in
-         yes)     mark="${C_GREEN}on main${C_OFF}" ;;
-         no)      mark="${C_RED}NOT on main${C_OFF}"; PROBLEMS=$((PROBLEMS + 1)) ;;
-         unknown) mark="${C_DIM}unverified${C_OFF}" ;;
+         yes) mark="${C_GREEN}on default branch${C_OFF}" ;;
+         no)
+            if [ "${expected}" = "yes" ]; then
+               mark="${C_RED}NOT on default branch${C_OFF}"
+               PROBLEMS=$((PROBLEMS + 1))
+            else
+               # A fork carrying PPUC commits on top of upstream. Reported so
+               # it stays visible, not counted against the run.
+               mark="${C_DIM}fork, off default branch${C_OFF}"
+            fi
+            ;;
+         unknown) mark="${C_DIM}unverified${C_OFF}"; UNVERIFIED=$((UNVERIFIED + 1)) ;;
       esac
 
       local raw tag text
@@ -256,10 +328,17 @@ if LIBSDLDMD_CFG="$(fetch_config libsdldmd "${LIBSDLDMD_SHA}")"; then
    LIBDMDUTIL_SHA="$(read_pin "${LIBSDLDMD_CFG}" LIBDMDUTIL_SHA)"
    report "    " "libdmdutil" "${LIBDMDUTIL_SHA}"
    if LIBDMDUTIL_CFG="$(fetch_config libdmdutil "${LIBDMDUTIL_SHA}")"; then
-      for var in LIBZEDMD_SHA LIBSERUM_SHA LIBVNI_SHA LIBFRAMEUTIL_SHA LIBPUPDMD_SHA SOCKPP_SHA CARGS_SHA; do
+      # Read whatever libdmdutil actually pins rather than a list written here.
+      # The list that used to be here named LIBFRAMEUTIL_SHA, SOCKPP_SHA and
+      # CARGS_SHA, none of which exist, and missed LIBUSB_SHA, which does - and
+      # because a missing variable was skipped silently, nothing said so.
+      while IFS= read -r var; do
+         [ "${var}" = "LIBDMDUTIL_SHA" ] && continue
          value="$(read_pin "${LIBDMDUTIL_CFG}" "${var}")"
          [ -n "${value}" ] && report "      " "$(echo "${var}" | sed 's/_SHA$//' | tr 'A-Z' 'a-z')" "${value}"
-      done
+      done <<EOF
+$(grep -oE '^[A-Z][A-Z0-9_]*_SHA' "${LIBDMDUTIL_CFG}" | sort -u)
+EOF
    else
       echo "      ${C_DIM}libdmdutil config.sh not readable; sub-pins not resolved${C_OFF}"
    fi
@@ -301,8 +380,15 @@ if [ "${RESOLVE_FAILED}" != "0" ]; then
 fi
 if [ "${PROBLEMS}" != "0" ]; then
    echo "${C_YELLOW}${PROBLEMS} issue(s) found.${C_OFF}"
-   echo "${C_DIM}A pin that is not on main, or a local checkout that differs from"
+   echo "${C_DIM}A pin that is not on its default branch, or a local checkout that differs from"
    echo "its pin, means you are not testing what a normal build produces.${C_OFF}"
+   exit 1
+fi
+if [ "${UNVERIFIED}" != "0" ] && [ "${STRICT}" = "1" ]; then
+   echo "${C_RED}${UNVERIFIED} pin(s) could not be verified against their repository.${C_OFF}"
+   echo "${C_DIM}Running with --strict, so this is a failure: an unverified pin"
+   echo "means the check passed without checking. Usually a missing GITHUB_TOKEN,"
+   echo "a rate limit, or a commit that was never pushed.${C_OFF}"
    exit 1
 fi
 echo "${C_GREEN}Pin chain resolved and verified.${C_OFF}"

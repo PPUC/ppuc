@@ -521,11 +521,19 @@ a `config-tool` export through `libppuc` validation and fails on drift.
 documentation's section list precisely because it is declared differently from
 its neighbours.)*
 
-### 4.4 Pin-chain checker in CI
+### 4.4 Pin-chain checker in CI — **done**
 
-`tools/check-pins.sh` exists. Run it in CI, using `GITHUB_TOKEN` to avoid the
-unauthenticated API rate limit. Verify the `libdmdutil` variable names, which
-were guessed and are currently unverified.
+`tools/check-pins.sh` runs in CI with `GITHUB_TOKEN` and `--strict`.
+
+Three bugs surfaced when it was actually made to matter. It compared against a
+branch called `main`, but `PPUC/vpinball` and `PPUC/libdmdutil` are on `master`
+and `mkalkbrenner/pinmame` is on `ppuc`, so those three 404'd and were reported
+as unverified — never checked, and nothing said so. The `libdmdutil` sub-pins
+were a guessed list naming three variables that do not exist while missing
+`LIBUSB_SHA`, and a missing variable was skipped silently; it now reads
+whatever that config declares. And "not on the default branch" was counted as a
+failure for the forks, where it is the normal arrangement — the forks carry
+PPUC commits on top of an upstream branch they do not push to.
 
 ---
 
