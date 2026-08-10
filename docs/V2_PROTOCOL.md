@@ -533,6 +533,36 @@ sending 4 payload bytes instead of the full bitmap is most of the bus budget.
 is issued after `kDefaultSwitchRefreshIdleMs` (15 s) without non-button switch
 activity.
 
+### Boards that only carry slow switches
+
+A cabinet's flipper buttons sit on the boards that drive the flipper coils,
+where latency is the entire point. The start button, coin door and tilt do not
+care, and polling their board on every cycle costs every other board a reply's
+worth of wire time — about 1 ms for the 11-byte no-change frame.
+
+A board marked `slowSwitches: true` in the game YAML is therefore polled on
+every eighth chain rather than every chain
+(`RS485_COMM_SLOW_SWITCH_POLL_DIVIDER`). At the 4 ms output cadence that is
+roughly every 32 ms, and every cycle in between is shorter for everyone else.
+
+The mechanism is entirely host-side; boards are unaware of it. The chain is a
+linked list configured onto the boards, so the host can **enter it late** — the
+boards ahead of the entry point are simply not addressed and stay silent — but
+cannot skip a board in the middle without reconfiguring its successor. Slow
+boards are therefore sorted to the front of the chain when it is built,
+regardless of their order in the YAML, so that skipping them is a matter of
+choosing an entry point. Two rules keep it safe: a `kFrameSwitchRefresh` always
+enters at the front, and a chain consisting only of slow boards is polled every
+cycle, since there is nothing waiting behind it.
+
+**Skipping does not lose transitions.** A board pushes a full switch snapshot
+onto a 32-deep ring on every change, and a reply drains one entry, so a press
+between two polls is delivered late rather than dropped. What a lower poll rate
+does cost is drain time: a board with *n* queued transitions needs *n* polls to
+report them all, so at the default divider that is ~32 ms per transition. That
+is the reason the flag belongs only on boards whose switches are genuinely
+slow. Ring overflow is reported as `kStatusSwitchOverflow`.
+
 ---
 
 ## 10. Configuration topics
