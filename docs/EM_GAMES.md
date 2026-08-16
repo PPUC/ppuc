@@ -376,6 +376,50 @@ warnings and ball save live in the switch path rather than in the engine.
 
 See `ppuc_games/emdemo/rules/` for a worked example.
 
+## Authoring in the config-tool
+
+A ROM-less game is an ordinary `game` node with **Engine** set to *GameCore
+(ROM-less)*. There is no separate content type: every sub-structure -- boards,
+switches, PWM devices, LED strings, rules -- is identical to a ROM machine.
+
+**Roles are assigned on the device, not typed as numbers on the game.** Each
+switch, matrix switch and PWM device has a *Role* select listing the closed
+vocabulary. That is what makes `emGame.startSwitch references switch 11, which
+is not declared` impossible to produce from the UI: the exporter collects roles
+while it walks the devices, so a role can only ever name a device that was
+actually exported.
+
+Multi-valued roles -- trough, coin, tilt, playfield, player-up -- are assigned to
+as many devices as needed and keep device-number order.
+
+| Where | What |
+|---|---|
+| Game node | Engine, balls per game, players, credits, replay thresholds, match |
+| Game node | Tilt warnings, swing filter, blanking |
+| Game node | Ball save enabled, seconds, start trigger, max saves per ball |
+| Switch / matrix switch | Role: start, coin, service credit, trough, shooter lane, tilt, slam tilt, tilt inhibit, playfield |
+| PWM device | Role: trough kick, knocker, game-on relay, and the backbox lamps |
+| I/O board | **Virtual (host-owned)** for the board carrying the tilt inhibit switch |
+
+Tilt and ball save are exported for a **PinMAME** game too, because both work
+under either engine. Only the `emGame:` block is GameCore-only, and it is
+emitted solely when the engine is GameCore -- so an existing ROM game exports
+exactly as it did before.
+
+Blockly gains two toolbox categories, *Game (ROM-less)* and *Display*, for the
+`ppuc.game.*` and `ppuc.dmd.*` calls.
+
+### Keeping the two sides in step
+
+The schema lives in two repositories that cannot see each other: the exporter in
+`config-tool` writes it, and `ppuc-pinmame` reads it. A key added to one and not
+the other fails silently. `libppuc/tools/check-gamecore-drift.py` compares the
+two and runs in libppuc CI:
+
+```
+python3 libppuc/tools/check-gamecore-drift.py --strict
+```
+
 ## Current limits
 
 - Score reels, chimes and segment displays are not driven. `PWM_TYPE_MOTOR` and
