@@ -7,7 +7,10 @@ enum class RulesActionType
   SendSwitchToCpu,
   PulseCoil,
   StartBlinkLamp,
-  StopBlinkLamp
+  StopBlinkLamp,
+  // Starts or extends a ball save for durationMs. Works under either engine:
+  // ball save lives in PlayfieldAssist, in the switch path, not in the engine.
+  GrantBallSave
 };
 
 struct RulesAction

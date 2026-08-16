@@ -21,9 +21,15 @@ behavior:
 - suppress or later send physical switches to PinMAME
 - pulse coils and blink lamps as host-side interceptor output overrides
 
-The original ROM still owns scoring, original lamp logic, solenoid timing,
-switch matrix behavior, ball flow, and attract/game mode. PPUC adds extra output
-and presentation behavior around that baseline.
+In the default `pinmame` engine the original ROM still owns scoring, original
+lamp logic, solenoid timing, switch matrix behavior, ball flow, and attract/game
+mode. PPUC adds extra output and presentation behavior around that baseline.
+
+With `engine: script` there is no ROM: a C++ game core owns players, ball flow,
+scoring, tilt and attract instead. Rules see the same `ppuc.currentBall()`,
+`ppuc.currentPlayer()` and `ppuc.attractMode()` with the same meanings — only the
+thing writing them changes — so a rules file written for a ROM game keeps working.
+See [`EM_GAMES.md`](EM_GAMES.md).
 
 ## Lua API
 
@@ -72,7 +78,12 @@ ppuc.sendSwitchToCpu(number, state)
 ppuc.pulseCoil(number, durationMs)
 ppuc.blinkLamp(number, onMs, offMs)
 ppuc.stopBlinkLamp(number)
+ppuc.ballSave(durationMs)
 ```
+
+`ppuc.ballSave` works under both engines: ball save lives in the switch path
+ahead of the engine, not inside it. Under `engine: script` a further
+`ppuc.game.*` and `ppuc.dmd.*` API is available; see [`EM_GAMES.md`](EM_GAMES.md).
 
 Handlers:
 

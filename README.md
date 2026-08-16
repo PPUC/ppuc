@@ -321,6 +321,21 @@ pwmOutput:
     ballSearch: true
 ```
 
+### ROM-less Games (GameCore)
+
+`ppuc-pinmame` can drive a machine that has no game ROM at all — an
+electro-mechanical machine, or a homebrew one. A C++ game core owns players, ball
+flow, scoring, tilt and attract, configured by an `emGame:` block in the game's
+`io-boards.yaml`, and the scores are rendered to a DMD.
+
+Select it with `--engine script` or `[Game] Engine = script`. The default is
+`pinmame`.
+
+A machine is fully playable from configuration alone, with no Lua at all. See
+[`docs/EM_GAMES.md`](docs/EM_GAMES.md) and the reference machine in
+`ppuc_games/emdemo`.
+
+
 ### Lua Rules
 
 Use `Runtime.Rules=true` in a game-folder INI to run Lua rules from

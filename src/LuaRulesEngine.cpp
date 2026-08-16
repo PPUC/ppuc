@@ -1,5 +1,8 @@
 #include "LuaRulesEngine.h"
 
+#include "LuaApiSupport.h"
+#include "LuaGameApi.h"
+
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
@@ -23,6 +26,32 @@ constexpr const char* kHandlerNames[] = {
     "onBallChanged",
     "onPlayerChanged",
     "onRulesUpdate",
+    // ROM-less game events. Harmless under PinMAME: nothing ever emits them.
+    "onAttractStart",
+    "onAttractEnd",
+    "onGameStart",
+    "onPlayerAdded",
+    "onStartRejected",
+    "onBallStart",
+    "onBallServed",
+    "onBallServeFailed",
+    "onBallStuck",
+    "onBallEnd",
+    "onBonusCount",
+    "onExtraBall",
+    "onScore",
+    "onTiltWarning",
+    "onTilt",
+    "onSlamTilt",
+    "onReplay",
+    "onMatch",
+    "onGameEnd",
+    "onCreditsChanged",
+    "onBallSaved",
+    "onDmdFrame",
+    // Query handlers: return a boolean.
+    "canStartGame",
+    "canAddPlayer",
 };
 
 using LuaFn = int (*)(lua_State*);
@@ -75,37 +104,37 @@ LuaRulesEngine::~LuaRulesEngine()
 
 void LuaRulesEngine::SetDebug(bool debug)
 {
-  std::lock_guard<std::mutex> lock(m_mutex);
+  std::lock_guard<std::recursive_mutex> lock(m_mutex);
   m_debug = debug;
 }
 
 void LuaRulesEngine::SetTriggerCallback(TriggerCallback callback)
 {
-  std::lock_guard<std::mutex> lock(m_mutex);
+  std::lock_guard<std::recursive_mutex> lock(m_mutex);
   m_triggerCallback = std::move(callback);
 }
 
 void LuaRulesEngine::SetSpeechCallback(SpeechCallback callback)
 {
-  std::lock_guard<std::mutex> lock(m_mutex);
+  std::lock_guard<std::recursive_mutex> lock(m_mutex);
   m_speechCallback = std::move(callback);
 }
 
 void LuaRulesEngine::SetActionCallback(ActionCallback callback)
 {
-  std::lock_guard<std::mutex> lock(m_mutex);
+  std::lock_guard<std::recursive_mutex> lock(m_mutex);
   m_actionCallback = std::move(callback);
 }
 
 void LuaRulesEngine::SetClock(ClockFn clock)
 {
-  std::lock_guard<std::mutex> lock(m_mutex);
+  std::lock_guard<std::recursive_mutex> lock(m_mutex);
   m_clock = std::move(clock);
 }
 
 void LuaRulesEngine::SetSwitchGroups(const std::unordered_map<std::string, std::vector<uint16_t>>& switchGroups)
 {
-  std::lock_guard<std::mutex> lock(m_mutex);
+  std::lock_guard<std::recursive_mutex> lock(m_mutex);
   m_switchGroups = switchGroups;
 }
 
@@ -167,6 +196,12 @@ void LuaRulesEngine::RegisterApi()
   SetPpucFunction(m_lua, this, "pulseCoil", LuaPulseCoil);
   SetPpucFunction(m_lua, this, "blinkLamp", LuaBlinkLamp);
   SetPpucFunction(m_lua, this, "stopBlinkLamp", LuaStopBlinkLamp);
+  SetPpucFunction(m_lua, this, "ballSave", LuaBallSave);
+
+  // Registered only when the ROM-less game is running, so `ppuc.game == nil` is
+  // a reliable feature test for a script that must work under either engine.
+  RegisterLuaGameApi(m_lua, m_pGameCore);
+  RegisterLuaDmdApi(m_lua, m_pDmdCanvas);
 
   lua_setglobal(m_lua, "ppuc");
 }
@@ -178,7 +213,7 @@ bool LuaRulesEngine::LoadScript(const char* path, std::string& error)
 
 bool LuaRulesEngine::LoadScripts(const std::vector<std::string>& paths, std::string& error)
 {
-  std::lock_guard<std::mutex> lock(m_mutex);
+  std::lock_guard<std::recursive_mutex> lock(m_mutex);
   m_fatalError = false;
   m_fatalErrorMessage.clear();
   ClearRegisteredHandlers();
@@ -282,7 +317,7 @@ bool LuaRulesEngine::LoadScriptIntoState(const char* path, std::string& error)
   return true;
 }
 
-bool LuaRulesEngine::CallHandler(const char* name)
+bool LuaRulesEngine::CallHandler(const char* name, std::vector<LuaArg> args)
 {
   const auto it = m_handlers.find(name);
   if (it == m_handlers.end())
@@ -292,7 +327,7 @@ bool LuaRulesEngine::CallHandler(const char* name)
 
   for (const int handlerRef : it->second)
   {
-    if (!CallRegisteredHandler(handlerRef, name, {}))
+    if (!CallRegisteredHandler(handlerRef, name, args))
     {
       return false;
     }
@@ -300,17 +335,59 @@ bool LuaRulesEngine::CallHandler(const char* name)
   return true;
 }
 
-bool LuaRulesEngine::CallHandler(const char* name, int arg1)
+void LuaRulesEngine::SetGameCore(GameCore* pGameCore) { m_pGameCore = pGameCore; }
+
+void LuaRulesEngine::SetDmdCanvas(DmdCanvas* pCanvas) { m_pDmdCanvas = pCanvas; }
+
+void LuaRulesEngine::CallGameHandler(const char* name, std::vector<LuaArg> args)
 {
-  const auto it = m_handlers.find(name);
-  if (it == m_handlers.end())
+  std::lock_guard<std::recursive_mutex> lock(m_mutex);
+  if (m_lua == nullptr || m_fatalError)
   {
-    return true;
+    return;
+  }
+  // The current-event helpers (ppuc.switchGroupClosing and friends) only mean
+  // something during a switch dispatch; a game event is not one.
+  m_currentEvent = CurrentEvent{};
+  CallHandler(name, std::move(args));
+}
+
+bool LuaRulesEngine::CallQueryHandler(const char* name, std::vector<LuaArg> args, bool defaultResult)
+{
+  std::lock_guard<std::recursive_mutex> lock(m_mutex);
+  if (m_lua == nullptr || m_fatalError)
+  {
+    return defaultResult;
   }
 
+  const auto it = m_handlers.find(name);
+  if (it == m_handlers.end() || it->second.empty())
+  {
+    return defaultResult;
+  }
+
+  // Every registered handler must agree. One veto is a veto: a script that says
+  // no should not be overruled by another that forgot to.
   for (const int handlerRef : it->second)
   {
-    if (!CallRegisteredHandler(handlerRef, name, {arg1}))
+    lua_rawgeti(m_lua, LUA_REGISTRYINDEX, handlerRef);
+    for (const LuaArg& arg : args)
+    {
+      PushLuaArg(m_lua, arg);
+    }
+
+    if (lua_pcall(m_lua, static_cast<int>(args.size()), 1, 0) != LUA_OK)
+    {
+      std::string error = lua_tostring(m_lua, -1);
+      SetFatalError(std::string(name) + ": " + error);
+      lua_pop(m_lua, 1);
+      return defaultResult;
+    }
+
+    // A handler that returns nothing means "no opinion", not "no".
+    const bool allowed = lua_isnoneornil(m_lua, -1) ? defaultResult : (lua_toboolean(m_lua, -1) != 0);
+    lua_pop(m_lua, 1);
+    if (!allowed)
     {
       return false;
     }
@@ -318,30 +395,12 @@ bool LuaRulesEngine::CallHandler(const char* name, int arg1)
   return true;
 }
 
-bool LuaRulesEngine::CallHandler(const char* name, int arg1, int arg2)
-{
-  const auto it = m_handlers.find(name);
-  if (it == m_handlers.end())
-  {
-    return true;
-  }
-
-  for (const int handlerRef : it->second)
-  {
-    if (!CallRegisteredHandler(handlerRef, name, {arg1, arg2}))
-    {
-      return false;
-    }
-  }
-  return true;
-}
-
-bool LuaRulesEngine::CallRegisteredHandler(int handlerRef, const char* name, const std::vector<int>& args)
+bool LuaRulesEngine::CallRegisteredHandler(int handlerRef, const char* name, const std::vector<LuaArg>& args)
 {
   lua_rawgeti(m_lua, LUA_REGISTRYINDEX, handlerRef);
-  for (const int arg : args)
+  for (const LuaArg& arg : args)
   {
-    lua_pushinteger(m_lua, arg);
+    PushLuaArg(m_lua, arg);
   }
 
   if (lua_pcall(m_lua, static_cast<int>(args.size()), 0, 0) != LUA_OK)
@@ -408,7 +467,7 @@ void LuaRulesEngine::RunDueScheduledCallbacks(uint64_t nowMs)
 
 void LuaRulesEngine::Update()
 {
-  std::lock_guard<std::mutex> lock(m_mutex);
+  std::lock_guard<std::recursive_mutex> lock(m_mutex);
   if (m_lua == nullptr || m_fatalError)
   {
     return;
@@ -428,7 +487,7 @@ void LuaRulesEngine::Update()
 
 LuaRulesEngine::SwitchProcessResult LuaRulesEngine::ProcessSwitchState(int number, uint8_t state)
 {
-  std::lock_guard<std::mutex> lock(m_mutex);
+  std::lock_guard<std::recursive_mutex> lock(m_mutex);
   SwitchProcessResult result;
   const uint8_t normalized = state == 0 ? 0 : 1;
   const uint8_t old = GetState(m_switchStates, number);
@@ -437,7 +496,7 @@ LuaRulesEngine::SwitchProcessResult LuaRulesEngine::ProcessSwitchState(int numbe
 
   if (m_lua != nullptr && !m_fatalError)
   {
-    CallHandler("onSwitchChanged", number, normalized);
+    CallHandler("onSwitchChanged", {number, normalized});
   }
 
   if (normalized == 0 && m_suppressedSwitchOpen.erase(number) > 0)
@@ -455,35 +514,35 @@ LuaRulesEngine::SwitchProcessResult LuaRulesEngine::ProcessSwitchState(int numbe
 
 void LuaRulesEngine::OnLampState(int number, uint8_t state)
 {
-  std::lock_guard<std::mutex> lock(m_mutex);
+  std::lock_guard<std::recursive_mutex> lock(m_mutex);
   const uint8_t normalized = state == 0 ? 0 : 1;
   const uint8_t old = GetState(m_lampStates, number);
   m_lampStates[number] = normalized;
   m_currentEvent = CurrentEvent{EventType::Lamp, number, old, normalized};
   if (m_lua != nullptr && !m_fatalError)
   {
-    CallHandler("onLampChanged", number, normalized);
+    CallHandler("onLampChanged", {number, normalized});
   }
   m_currentEvent = CurrentEvent{};
 }
 
 void LuaRulesEngine::OnCoilState(int number, uint8_t state)
 {
-  std::lock_guard<std::mutex> lock(m_mutex);
+  std::lock_guard<std::recursive_mutex> lock(m_mutex);
   const uint8_t normalized = state == 0 ? 0 : 1;
   const uint8_t old = GetState(m_coilStates, number);
   m_coilStates[number] = normalized;
   m_currentEvent = CurrentEvent{EventType::Coil, number, old, normalized};
   if (m_lua != nullptr && !m_fatalError)
   {
-    CallHandler("onCoilChanged", number, normalized);
+    CallHandler("onCoilChanged", {number, normalized});
   }
   m_currentEvent = CurrentEvent{};
 }
 
 void LuaRulesEngine::SetCurrentBall(uint8_t currentBall)
 {
-  std::lock_guard<std::mutex> lock(m_mutex);
+  std::lock_guard<std::recursive_mutex> lock(m_mutex);
   if (m_currentBall == currentBall)
   {
     return;
@@ -491,13 +550,13 @@ void LuaRulesEngine::SetCurrentBall(uint8_t currentBall)
   m_currentBall = currentBall;
   if (m_lua != nullptr && !m_fatalError)
   {
-    CallHandler("onBallChanged", currentBall);
+    CallHandler("onBallChanged", {currentBall});
   }
 }
 
 void LuaRulesEngine::SetCurrentPlayer(uint8_t currentPlayer)
 {
-  std::lock_guard<std::mutex> lock(m_mutex);
+  std::lock_guard<std::recursive_mutex> lock(m_mutex);
   if (m_currentPlayer == currentPlayer)
   {
     return;
@@ -505,19 +564,19 @@ void LuaRulesEngine::SetCurrentPlayer(uint8_t currentPlayer)
   m_currentPlayer = currentPlayer;
   if (m_lua != nullptr && !m_fatalError)
   {
-    CallHandler("onPlayerChanged", currentPlayer);
+    CallHandler("onPlayerChanged", {currentPlayer});
   }
 }
 
 void LuaRulesEngine::SetAttractMode(bool attractMode)
 {
-  std::lock_guard<std::mutex> lock(m_mutex);
+  std::lock_guard<std::recursive_mutex> lock(m_mutex);
   m_attractMode = attractMode;
 }
 
 bool LuaRulesEngine::HasFatalError() const
 {
-  std::lock_guard<std::mutex> lock(m_mutex);
+  std::lock_guard<std::recursive_mutex> lock(m_mutex);
   return m_fatalError;
 }
 
@@ -937,6 +996,23 @@ int LuaRulesEngine::LuaStopBlinkLamp(lua_State* L)
   {
     engine->m_actionCallback(
         RulesAction{RulesActionType::StopBlinkLamp, static_cast<int>(luaL_checkinteger(L, 1)), 0, 0, 0, 0});
+  }
+  return 0;
+}
+
+// ppuc.ballSave(durationMs) -- start or extend a ball save right now.
+//
+// Works under both engines and regardless of the configured start trigger,
+// because ball save lives in the switch path rather than in the engine. A rule
+// that has just started a mode can hand out a few seconds of protection with it.
+// Extends an active save; never shortens one.
+int LuaRulesEngine::LuaBallSave(lua_State* L)
+{
+  auto* engine = FromLua(L);
+  if (engine->m_actionCallback)
+  {
+    engine->m_actionCallback(RulesAction{RulesActionType::GrantBallSave, 0, 0,
+                                         static_cast<uint32_t>(luaL_checkinteger(L, 1)), 0, 0});
   }
   return 0;
 }

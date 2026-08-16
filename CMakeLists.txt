@@ -254,8 +254,19 @@ endif()
 add_executable(ppuc-pinmame
    src/AudioOutput.cpp
    src/Uf2Image.cpp
+   src/LuaGameApi.cpp
    src/LuaRulesEngine.cpp
    src/MediaPluginHost.cpp
+   src/PinmameEngine.cpp
+   src/PinmameNvramMapLoader.cpp
+   src/PinmameNvramTracking.cpp
+   src/ScriptEngine.cpp
+   src/dmd/DmdCanvas.cpp
+   src/dmd/DmdDefaultScreen.cpp
+   src/dmd/DmdRenderer.cpp
+   src/game/GameConfigYaml.cpp
+   src/game/GameCore.cpp
+   src/game/PlayfieldAssist.cpp
    "${PPUC_VPINBALL_DIR}/plugins/plugins/MsgPluginManager.cpp"
    ${PPUC_LUA_SOURCES}
    src/SpeechCliSupport.cpp
@@ -665,14 +676,38 @@ if(PPUC_BUILD_TESTS)
    # subsystem, it owns game behaviour, and it is cleanly injectable — all of
    # its outputs go through std::function callbacks and it has no dependency on
    # PPUC or the serial transport.
+   #
+   # Every source listed here must link without libppuc, libpinmame, yaml-cpp,
+   # SDL or DMDUtil. That constraint is what keeps the tests fast and buildable
+   # anywhere; when a unit needs one of those, split the dependency-free logic
+   # into its own translation unit rather than linking it here. PinmameNvram-
+   # Tracking.cpp is the worked example: the decoder takes an injected byte
+   # reader, while map loading lives in PinmameNvramMapLoader.cpp and is not
+   # part of this target.
    add_executable(ppuc_tests
-      src/LuaRulesEngine.cpp
+      src/LuaGameApi.cpp
+   src/LuaRulesEngine.cpp
+      src/PinmameNvramTracking.cpp
       src/Uf2Image.cpp
+      src/dmd/DmdCanvas.cpp
+      src/dmd/DmdDefaultScreen.cpp
+      src/dmd/DmdRenderer.cpp
+      src/game/GameCore.cpp
+   src/game/PlayfieldAssist.cpp
+      src/game/PlayfieldAssist.cpp
       ${PPUC_LUA_SOURCES}
       tests/main.cpp
+      tests/GameFixture.h
       tests/RulesFixture.h
+      tests/test_game_core.cpp
+      tests/test_dmd_canvas.cpp
+      tests/test_dmd_pacing.cpp
+      tests/test_game_tilt.cpp
+      tests/test_playfield_assist.cpp
+      tests/test_lua_game_api.cpp
       tests/test_lua_rules_engine.cpp
       tests/test_lua_rules_timing.cpp
+      tests/test_pinmame_nvram_tracking.cpp
       tests/test_uf2_image.cpp
    )
 

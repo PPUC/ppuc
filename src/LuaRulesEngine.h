@@ -9,7 +9,11 @@
 #include <unordered_set>
 #include <vector>
 
+#include "LuaArg.h"
 #include "RulesAction.h"
+
+class GameCore;
+class DmdCanvas;
 
 struct lua_State;
 
@@ -44,6 +48,26 @@ class LuaRulesEngine
   // Overrides the clock. Passing an empty function restores the default.
   void SetClock(ClockFn clock);
   void SetSwitchGroups(const std::unordered_map<std::string, std::vector<uint16_t>>& switchGroups);
+  // Attaches the ROM-less game and its display. Both must be set before
+  // LoadScripts: `ppuc.game` and `ppuc.dmd` are registered only when present, and
+  // `ppuc.game == nil` is the documented feature test for a script that wants to
+  // run under either engine.
+  //
+  // Deliberately not stubbed with no-ops in ROM mode: a silent no-op is worse
+  // than an error naming the line.
+  void SetGameCore(GameCore* pGameCore);
+  void SetDmdCanvas(DmdCanvas* pCanvas);
+  GameCore* GetGameCore() const { return m_pGameCore; }
+  DmdCanvas* GetDmdCanvas() const { return m_pDmdCanvas; }
+
+  // Dispatches a GameCore event to `ppuc.on<Name>` handlers.
+  void CallGameHandler(const char* name, std::vector<LuaArg> args = {});
+
+  // Asks the script for permission. An absent handler returns `defaultResult`:
+  // credit policy is a rules decision, but having no rules must never make the
+  // machine unplayable.
+  bool CallQueryHandler(const char* name, std::vector<LuaArg> args, bool defaultResult);
+
   bool LoadScript(const char* path, std::string& error);
   bool LoadScripts(const std::vector<std::string>& paths, std::string& error);
   void Update();
@@ -110,10 +134,8 @@ class LuaRulesEngine
   void ClearPpucHandlers();
   void CapturePpucHandlers();
   bool LoadScriptIntoState(const char* path, std::string& error);
-  bool CallHandler(const char* name);
-  bool CallHandler(const char* name, int arg1);
-  bool CallHandler(const char* name, int arg1, int arg2);
-  bool CallRegisteredHandler(int handlerRef, const char* name, const std::vector<int>& args);
+  bool CallHandler(const char* name, std::vector<LuaArg> args = {});
+  bool CallRegisteredHandler(int handlerRef, const char* name, const std::vector<LuaArg>& args);
   bool CallScheduledCallback(int callbackRef);
   void RunDueScheduledCallbacks(uint64_t nowMs);
   void SetFatalError(const std::string& error);
@@ -143,6 +165,7 @@ class LuaRulesEngine
   static int LuaPulseCoil(lua_State* L);
   static int LuaBlinkLamp(lua_State* L);
   static int LuaStopBlinkLamp(lua_State* L);
+  static int LuaBallSave(lua_State* L);
 
   lua_State* m_lua = nullptr;
   std::unordered_map<int, uint8_t> m_switchStates;
@@ -166,5 +189,12 @@ class LuaRulesEngine
   bool m_fatalError = false;
   std::string m_fatalErrorMessage;
   uint64_t m_nextScheduledSequence = 0;
-  mutable std::mutex m_mutex;
+  GameCore* m_pGameCore = nullptr;
+  DmdCanvas* m_pDmdCanvas = nullptr;
+  // Recursive because a Lua handler may call ppuc.game.* which re-enters through
+  // a query handler -- ppuc.game.startGame() reaching canStartGame is the
+  // obvious case. Everything runs on the main loop, so the lock is nearly
+  // vestigial; making it recursive costs nothing and removes a class of
+  // deadlock that is very hard to reproduce.
+  mutable std::recursive_mutex m_mutex;
 };

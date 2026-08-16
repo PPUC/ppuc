@@ -50,6 +50,13 @@
 #include "AudioOutput.h"
 #include "LuaRulesEngine.h"
 #include "MediaPluginHost.h"
+#include "GameEngine.h"
+#include "PinmameEngine.h"
+#include "ScriptEngine.h"
+#include "game/GameConfigYaml.h"
+#include "LuaGameApi.h"
+#include "game/GameCore.h"
+#include "game/PlayfieldAssist.h"
 #include "SDL3/SDL.h"
 #include "SDL3/SDL_filesystem.h"
 #include "SDL3_image/SDL_image.h"
@@ -70,7 +77,6 @@
 #endif
 
 #define MAIN_LOOP_SLEEP_US 20  // Main loop sleep time in microseconds
-constexpr auto kPinmameTrackedStatePollInterval = std::chrono::milliseconds(500);
 constexpr uint32_t kDefaultSwitchRefreshIdleMs = 15000;
 constexpr uint32_t kDefaultOutputFrameIntervalMs = 4;
 constexpr uint32_t kDefaultBallSearchDelayMs = 15000;
@@ -85,46 +91,6 @@ std::unique_ptr<MediaPluginHost> pMediaPluginHost;
 std::unique_ptr<SpeechService> pSpeechService;
 
 constexpr char kBoardEffectTriggerSource = 'F';
-
-enum class PinmameMapEncoding
-{
-  INT,
-  BCD
-};
-
-enum class PinmameMapNibble
-{
-  BOTH,
-  HIGH,
-  LOW
-};
-
-struct PinmameTrackedField
-{
-  bool available = false;
-  uint32_t address = 0;
-  PinmameMapEncoding encoding = PinmameMapEncoding::INT;
-  PinmameMapNibble nibble = PinmameMapNibble::BOTH;
-  uint8_t mask = 0xFF;
-  int offset = 0;
-  bool treatZeroAsUnavailable = false;
-};
-
-struct PinmameTrackingConfig
-{
-  bool attemptedLoad = false;
-  bool loaded = false;
-  std::string mapPath;
-  PinmameTrackedField currentPlayer;
-  PinmameTrackedField currentBall;
-};
-
-struct PinmamePlatformMemoryRange
-{
-  uint32_t address = 0;
-  uint32_t size = 0;
-  PinmameMapNibble nibble = PinmameMapNibble::BOTH;
-};
 
 void ConfigureSDLVideoDriverForHeadlessLinux()
 {
@@ -310,6 +276,13 @@ bool opt_debug_effects = false;
 bool opt_debug_sound_commands = false;
 bool opt_no_serial = false;
 bool opt_no_sound = false;
+// "pinmame" runs an original ROM under libpinmame; "script" runs the ROM-less
+// game core. Deliberately explicit rather than inferred from whether a ROM zip
+// happens to exist: a machine with no console that silently picked the wrong
+// engine is a miserable thing to debug.
+const char* opt_engine = "pinmame";
+bool opt_no_display = false;
+uint32_t opt_exit_after_ms = 0;
 bool opt_speech = false;
 bool opt_greeting = false;
 const char* opt_music_files = NULL;
@@ -335,57 +308,10 @@ bool opt_hard_reset = false;
 const char* opt_virtual_dmd_renderer = "dots";
 const char* opt_pinmame_path = NULL;
 const char* opt_rom = NULL;
-std::atomic<int> game_state{0};
 std::atomic<bool> ball_search_game_running{false};
-bool running = true;
+std::atomic<bool> running{true};
 volatile std::sig_atomic_t shutdown_requested = 0;
-std::unordered_map<int, int> segmentDisplayDigitBases;
-std::unordered_map<int, std::string> lastSegmentDisplayDebugLine;
-int nextSegmentDisplayDigitBase = 1;
-std::mutex soundCommandDebugMutex;
-std::unordered_set<uint64_t> soundCommandDebugSeen;
-
-template <typename T>
-struct LogCallbackTraits;
-
-template <typename R, typename A1, typename A2, typename A3, typename A4>
-struct LogCallbackTraits<R (*)(A1, A2, A3, A4)>
-{
-  using Arg3 = A3;
-};
-
-#if defined(_WIN32) && !defined(_WIN64)
-template <typename R, typename A1, typename A2, typename A3, typename A4>
-struct LogCallbackTraits<R(__stdcall*)(A1, A2, A3, A4)>
-{
-  using Arg3 = A3;
-};
-#endif
-
-using PinmameLogMessageArg = LogCallbackTraits<PinmameOnLogMessageCallback>::Arg3;
-
-#define PINMAME_CALLBACK_CAST(type, fn) reinterpret_cast<type>(fn)
-
 static uint64_t CurrentUnixMs();
-static std::string NormalizeRomNameForMapLookup(const char* rom);
-static std::filesystem::path GetExecutableDirectory();
-static std::filesystem::path GetPinmameBaseDirectory();
-static std::vector<std::filesystem::path> GetPinmameNvramMapsRootCandidates();
-static std::optional<std::filesystem::path> FindPinmameNvramMapsRoot();
-static std::string DescribeHardwareGen(PINMAME_HARDWARE_GEN hardwareGen);
-static bool TryParseMapUnsigned(const YAML::Node& node, uint32_t* pValue);
-static std::optional<PinmameMapNibble> TryParseMapNibble(const YAML::Node& node);
-static bool TryLoadPlatformNibbleDefaults(const std::filesystem::path& path,
-                                          std::vector<PinmamePlatformMemoryRange>* pRanges, std::string* pError);
-static std::optional<PinmameMapNibble> ResolvePlatformNibbleDefault(
-    const std::vector<PinmamePlatformMemoryRange>& ranges, uint32_t address);
-static bool HardwareGenMatchesNvramMapPath(PINMAME_HARDWARE_GEN hardwareGen, const std::string& relativeMapPath);
-static bool TryLoadTrackedFieldFromMap(const YAML::Node& fieldNode,
-                                       const std::vector<PinmamePlatformMemoryRange>& platformRanges,
-                                       PinmameTrackedField* pField, std::string* pError);
-static bool TryLoadPinmameTrackingConfig(const char* rom, PINMAME_HARDWARE_GEN hardwareGen,
-                                         PinmameTrackingConfig* pConfig, std::string* pError);
-static bool TryDecodeTrackedPinmameValue(const PinmameTrackedField& field, uint8_t* pValue);
 
 static void PrintFlushedLogLine(const char* prefix, const char* message)
 {
@@ -402,12 +328,27 @@ static void PrintFlushedLogLine(const char* prefix, const char* message)
   fflush(stdout);
 }
 
-static void SendSwitchToCpu(int number, uint8_t state)
-{
-  const int switchNumber = (number < 241) ? number : 240 - number;
-  PinmameSetSwitch(switchNumber, state == 0 ? 0 : 1);
-}
+// Tilt warnings and ball save, in the switch path ahead of whichever engine is
+// running. Engine-neutral on purpose: this is what gives an early-electronic ROM
+// features it was never written to have.
+PlayfieldAssist g_playfieldAssist;
+bool g_playfieldAssistEnabled = false;
+// Non-null only under engine: script. The ROM path needs no back-reference: the
+// tilting bob hit is forwarded to PinMAME like any other switch.
+GameCore* g_pGameCore = nullptr;
+// Collected during option handling, loaded once the engine exists.
+std::vector<std::string> g_ruleScripts;
 
+// Arbitrates between what the game engine wants an output to do and what a Lua
+// rule has temporarily overridden it to do. Engine-neutral: "engine" here is
+// PinMAME or the ROM-less game core, and the arbitration is the same either way.
+//
+// THREADING. ApplyEngineCoil runs on the engine's thread (libpinmame has its
+// own), while Service() and the rules actions run on the main loop, so every
+// method that touches the maps takes m_mutex. The lock is never held across a
+// call into LuaRulesEngine: the path OnCoilChanged -> OnCoilState -> a Lua
+// onCoilChanged handler -> ppuc.pulseCoil -> HandleAction comes straight back in
+// here, and a non-recursive mutex held across that would deadlock.
 struct InterceptorOutputOverrides
 {
   struct CoilPulse
@@ -423,14 +364,20 @@ struct InterceptorOutputOverrides
     std::chrono::steady_clock::time_point nextToggle{};
   };
 
-  std::unordered_map<int, uint8_t> pinmameCoils;
-  std::unordered_map<int, uint8_t> pinmameLamps;
+  std::unordered_map<int, uint8_t> engineCoils;
+  std::unordered_map<int, uint8_t> engineLamps;
   std::unordered_map<int, CoilPulse> coilPulses;
   std::unordered_map<int, LampBlink> lampBlinks;
+  std::mutex mutex;
 
-  void ApplyPinmameCoil(PPUC* controller, int number, uint8_t state)
+  // Set by main() to route a rules-injected switch into whichever engine is
+  // running. Keeps this struct free of any engine header.
+  std::function<void(int, uint8_t)> sendSwitch;
+
+  void ApplyEngineCoil(PPUC* controller, int number, uint8_t state)
   {
-    pinmameCoils[number] = state == 0 ? 0 : 1;
+    std::lock_guard<std::mutex> lock(mutex);
+    engineCoils[number] = state == 0 ? 0 : 1;
     const auto now = std::chrono::steady_clock::now();
     const auto pulseIt = coilPulses.find(number);
     if (pulseIt != coilPulses.end() && now < pulseIt->second.until)
@@ -441,9 +388,10 @@ struct InterceptorOutputOverrides
     controller->SetSolenoidState(number, state == 0 ? 0 : 1);
   }
 
-  void ApplyPinmameLamp(PPUC* controller, int number, uint8_t state)
+  void ApplyEngineLamp(PPUC* controller, int number, uint8_t state)
   {
-    pinmameLamps[number] = state == 0 ? 0 : 1;
+    std::lock_guard<std::mutex> lock(mutex);
+    engineLamps[number] = state == 0 ? 0 : 1;
     if (lampBlinks.find(number) != lampBlinks.end())
     {
       return;
@@ -453,6 +401,7 @@ struct InterceptorOutputOverrides
 
   void PulseCoil(PPUC* controller, int number, uint32_t durationMs)
   {
+    std::lock_guard<std::mutex> lock(mutex);
     const auto now = std::chrono::steady_clock::now();
     auto& pulse = coilPulses[number];
     const auto until = now + std::chrono::milliseconds(durationMs == 0 ? 1 : durationMs);
@@ -465,6 +414,7 @@ struct InterceptorOutputOverrides
 
   void StartBlinkLamp(PPUC* controller, int number, uint32_t onMs, uint32_t offMs)
   {
+    std::lock_guard<std::mutex> lock(mutex);
     const uint32_t normalizedOnMs = onMs == 0 ? 250 : onMs;
     const uint32_t normalizedOffMs = offMs == 0 ? 250 : offMs;
     const auto existing = lampBlinks.find(number);
@@ -485,13 +435,15 @@ struct InterceptorOutputOverrides
 
   void StopBlinkLamp(PPUC* controller, int number)
   {
+    std::lock_guard<std::mutex> lock(mutex);
     lampBlinks.erase(number);
-    const uint8_t restore = pinmameLamps.count(number) == 0 ? 0 : pinmameLamps[number];
+    const uint8_t restore = engineLamps.count(number) == 0 ? 0 : engineLamps[number];
     controller->SetLampState(number, restore);
   }
 
   void Service(PPUC* controller)
   {
+    std::lock_guard<std::mutex> lock(mutex);
     const auto now = std::chrono::steady_clock::now();
 
     auto coilIt = coilPulses.begin();
@@ -501,7 +453,7 @@ struct InterceptorOutputOverrides
       {
         const int number = coilIt->first;
         coilIt = coilPulses.erase(coilIt);
-        const uint8_t restore = pinmameCoils.count(number) == 0 ? 0 : pinmameCoils[number];
+        const uint8_t restore = engineCoils.count(number) == 0 ? 0 : engineCoils[number];
         controller->SetSolenoidState(number, restore);
       }
       else
@@ -529,7 +481,10 @@ struct InterceptorOutputOverrides
     switch (action.type)
     {
       case RulesActionType::SendSwitchToCpu:
-        SendSwitchToCpu(action.number, action.state);
+        if (sendSwitch)
+        {
+          sendSwitch(action.number, action.state);
+        }
         break;
       case RulesActionType::PulseCoil:
         PulseCoil(controller, action.number, action.durationMs);
@@ -539,6 +494,9 @@ struct InterceptorOutputOverrides
         break;
       case RulesActionType::StopBlinkLamp:
         StopBlinkLamp(controller, action.number);
+        break;
+      case RulesActionType::GrantBallSave:
+        g_playfieldAssist.GrantBallSave(action.durationMs);
         break;
     }
   }
@@ -553,622 +511,6 @@ static uint64_t CurrentUnixMs()
           .count());
 }
 
-static std::string NormalizeRomNameForMapLookup(const char* rom)
-{
-  if (rom == nullptr || rom[0] == '\0')
-  {
-    return "";
-  }
-
-  std::filesystem::path romPath(rom);
-  std::string romName = romPath.filename().string();
-  const std::string extension = romPath.extension().string();
-  if (!extension.empty())
-  {
-    romName.resize(romName.size() - extension.size());
-  }
-  return romName;
-}
-
-static std::filesystem::path GetExecutableDirectory()
-{
-  const char* basePath = SDL_GetBasePath();
-  if (basePath == nullptr || basePath[0] == '\0')
-  {
-    return std::filesystem::current_path();
-  }
-
-  std::filesystem::path path(basePath);
-  SDL_free(const_cast<char*>(basePath));
-  return path;
-}
-
-static std::filesystem::path GetPinmameBaseDirectory()
-{
-#if defined(_WIN32) || defined(_WIN64)
-  if (opt_pinmame_path != nullptr)
-  {
-    return std::filesystem::path(opt_pinmame_path);
-  }
-
-  const char* homeDrive = getenv("HOMEDRIVE");
-  const char* homePath = getenv("HOMEPATH");
-  if (homeDrive != nullptr && homePath != nullptr)
-  {
-    return std::filesystem::path(std::string(homeDrive) + std::string(homePath)) / "pinmame";
-  }
-#else
-  if (opt_pinmame_path != nullptr)
-  {
-    return std::filesystem::path(opt_pinmame_path);
-  }
-
-  const char* home = getenv("HOME");
-  if (home != nullptr)
-  {
-    return std::filesystem::path(home) / ".pinmame";
-  }
-#endif
-
-  return {};
-}
-
-static std::vector<std::filesystem::path> GetPinmameNvramMapsRootCandidates()
-{
-  const std::filesystem::path exeDir = GetExecutableDirectory();
-  const std::filesystem::path cwd = std::filesystem::current_path();
-  const std::filesystem::path pinmameDir = GetPinmameBaseDirectory();
-
-  std::vector<std::filesystem::path> candidates = {
-      exeDir / "pinmame-nvram-maps",
-      cwd / "pinmame-nvram-maps",
-  };
-
-  if (!pinmameDir.empty())
-  {
-    candidates.push_back(pinmameDir / "pinmame-nvram-maps");
-  }
-
-  return candidates;
-}
-
-static std::optional<std::filesystem::path> FindPinmameNvramMapsRoot()
-{
-  for (const auto& candidate : GetPinmameNvramMapsRootCandidates())
-  {
-    if (std::filesystem::exists(candidate / "index.json") && std::filesystem::exists(candidate / "maps") &&
-        std::filesystem::exists(candidate / "platforms"))
-    {
-      return candidate;
-    }
-  }
-
-  return std::nullopt;
-}
-
-static std::string DescribeHardwareGen(const PINMAME_HARDWARE_GEN hardwareGen)
-{
-  struct HardwareGenLabel
-  {
-    PINMAME_HARDWARE_GEN bit;
-    const char* name;
-  };
-
-  static constexpr HardwareGenLabel kLabels[] = {
-      {PINMAME_HARDWARE_GEN_WPCALPHA_1, "WPCALPHA_1"},
-      {PINMAME_HARDWARE_GEN_WPCALPHA_2, "WPCALPHA_2"},
-      {PINMAME_HARDWARE_GEN_WPCDMD, "WPCDMD"},
-      {PINMAME_HARDWARE_GEN_WPCFLIPTRON, "WPCFLIPTRON"},
-      {PINMAME_HARDWARE_GEN_WPCDCS, "WPCDCS"},
-      {PINMAME_HARDWARE_GEN_WPCSECURITY, "WPCSECURITY"},
-      {PINMAME_HARDWARE_GEN_WPC95DCS, "WPC95DCS"},
-      {PINMAME_HARDWARE_GEN_WPC95, "WPC95"},
-      {PINMAME_HARDWARE_GEN_S11, "S11"},
-      {PINMAME_HARDWARE_GEN_S11X, "S11X"},
-      {PINMAME_HARDWARE_GEN_S11B2, "S11B2"},
-      {PINMAME_HARDWARE_GEN_S11C, "S11C"},
-      {PINMAME_HARDWARE_GEN_S9, "S9"},
-      {PINMAME_HARDWARE_GEN_DE, "DE"},
-      {PINMAME_HARDWARE_GEN_DEDMD16, "DEDMD16"},
-      {PINMAME_HARDWARE_GEN_DEDMD32, "DEDMD32"},
-      {PINMAME_HARDWARE_GEN_DEDMD64, "DEDMD64"},
-      {PINMAME_HARDWARE_GEN_S7, "S7"},
-      {PINMAME_HARDWARE_GEN_S6, "S6"},
-      {PINMAME_HARDWARE_GEN_S4, "S4"},
-      {PINMAME_HARDWARE_GEN_S3C, "S3C"},
-      {PINMAME_HARDWARE_GEN_S3, "S3"},
-      {PINMAME_HARDWARE_GEN_BY17, "BY17"},
-      {PINMAME_HARDWARE_GEN_BY35, "BY35"},
-      {PINMAME_HARDWARE_GEN_STMPU100, "STMPU100"},
-      {PINMAME_HARDWARE_GEN_STMPU200, "STMPU200"},
-      {PINMAME_HARDWARE_GEN_ASTRO, "ASTRO"},
-      {PINMAME_HARDWARE_GEN_HNK, "HNK"},
-      {PINMAME_HARDWARE_GEN_BYPROTO, "BYPROTO"},
-      {PINMAME_HARDWARE_GEN_BY6803, "BY6803"},
-      {PINMAME_HARDWARE_GEN_BY6803A, "BY6803A"},
-      {PINMAME_HARDWARE_GEN_BOWLING, "BOWLING"},
-      {PINMAME_HARDWARE_GEN_GTS1, "GTS1"},
-      {PINMAME_HARDWARE_GEN_GTS80, "GTS80"},
-      {PINMAME_HARDWARE_GEN_GTS80B, "GTS80B"},
-      {PINMAME_HARDWARE_GEN_WS, "WS"},
-      {PINMAME_HARDWARE_GEN_WS_1, "WS_1"},
-      {PINMAME_HARDWARE_GEN_WS_2, "WS_2"},
-      {PINMAME_HARDWARE_GEN_GTS3, "GTS3"},
-      {PINMAME_HARDWARE_GEN_ZAC1, "ZAC1"},
-      {PINMAME_HARDWARE_GEN_ZAC2, "ZAC2"},
-      {PINMAME_HARDWARE_GEN_SAM, "SAM"},
-      {PINMAME_HARDWARE_GEN_ALVG, "ALVG"},
-      {PINMAME_HARDWARE_GEN_ALVG_DMD2, "ALVG_DMD2"},
-      {PINMAME_HARDWARE_GEN_MRGAME, "MRGAME"},
-      {PINMAME_HARDWARE_GEN_SLEIC, "SLEIC"},
-      {PINMAME_HARDWARE_GEN_WICO, "WICO"},
-      {PINMAME_HARDWARE_GEN_SPA, "SPA"},
-  };
-
-  std::ostringstream stream;
-  stream << "0x" << std::hex << static_cast<uint64_t>(hardwareGen) << std::dec;
-
-  bool first = true;
-  for (const auto& label : kLabels)
-  {
-    if ((hardwareGen & label.bit) == 0)
-    {
-      continue;
-    }
-
-    stream << (first ? " (" : ", ");
-    stream << label.name;
-    first = false;
-  }
-
-  if (!first)
-  {
-    stream << ")";
-  }
-
-  return stream.str();
-}
-
-static bool TryParseMapUnsigned(const YAML::Node& node, uint32_t* pValue)
-{
-  if (!node || pValue == nullptr)
-  {
-    return false;
-  }
-
-  if (node.IsScalar())
-  {
-    const std::string text = node.as<std::string>();
-    if (text.empty())
-    {
-      return false;
-    }
-
-    char* end = nullptr;
-    const unsigned long value = strtoul(text.c_str(), &end, 0);
-    if (end == nullptr || *end != '\0' || value > UINT32_MAX)
-    {
-      return false;
-    }
-
-    *pValue = static_cast<uint32_t>(value);
-    return true;
-  }
-
-  return false;
-}
-
-static std::optional<PinmameMapNibble> TryParseMapNibble(const YAML::Node& node)
-{
-  if (!node || !node.IsScalar())
-  {
-    return std::nullopt;
-  }
-
-  const std::string nibble = node.as<std::string>();
-  if (nibble == "both")
-  {
-    return PinmameMapNibble::BOTH;
-  }
-  if (nibble == "high")
-  {
-    return PinmameMapNibble::HIGH;
-  }
-  if (nibble == "low")
-  {
-    return PinmameMapNibble::LOW;
-  }
-
-  return std::nullopt;
-}
-
-static bool TryLoadPlatformNibbleDefaults(const std::filesystem::path& path,
-                                          std::vector<PinmamePlatformMemoryRange>* pRanges, std::string* pError)
-{
-  if (pRanges == nullptr)
-  {
-    if (pError) *pError = "platform range output missing";
-    return false;
-  }
-
-  YAML::Node root;
-  try
-  {
-    root = YAML::LoadFile(path.string());
-  }
-  catch (const std::exception& ex)
-  {
-    if (pError) *pError = std::string("failed to parse platform file: ") + ex.what();
-    return false;
-  }
-
-  const YAML::Node memoryLayout = root["memory_layout"];
-  if (!memoryLayout || !memoryLayout.IsSequence())
-  {
-    if (pError) *pError = "platform file has no memory_layout sequence";
-    return false;
-  }
-
-  pRanges->clear();
-  for (const YAML::Node& entry : memoryLayout)
-  {
-    uint32_t address = 0;
-    uint32_t size = 0;
-    if (!TryParseMapUnsigned(entry["address"], &address) || !TryParseMapUnsigned(entry["size"], &size))
-    {
-      continue;
-    }
-
-    PinmamePlatformMemoryRange range;
-    range.address = address;
-    range.size = size;
-    range.nibble = TryParseMapNibble(entry["nibble"]).value_or(PinmameMapNibble::BOTH);
-    pRanges->push_back(range);
-  }
-
-  return true;
-}
-
-static std::optional<PinmameMapNibble> ResolvePlatformNibbleDefault(
-    const std::vector<PinmamePlatformMemoryRange>& ranges, const uint32_t address)
-{
-  for (const auto& range : ranges)
-  {
-    if (address >= range.address && address < range.address + range.size)
-    {
-      return range.nibble;
-    }
-  }
-
-  return std::nullopt;
-}
-
-static bool HardwareGenMatchesNvramMapPath(const PINMAME_HARDWARE_GEN hardwareGen, const std::string& relativeMapPath)
-{
-  struct HardwareGenPathPrefix
-  {
-    PINMAME_HARDWARE_GEN bit;
-    const char* prefix;
-  };
-
-  static constexpr HardwareGenPathPrefix kPrefixes[] = {
-      {PINMAME_HARDWARE_GEN_S3, "maps/williams/system3/"},
-      {PINMAME_HARDWARE_GEN_S3C, "maps/williams/system3/"},
-      {PINMAME_HARDWARE_GEN_S4, "maps/williams/system4/"},
-      {PINMAME_HARDWARE_GEN_S6, "maps/williams/system6/"},
-      {PINMAME_HARDWARE_GEN_S7, "maps/williams/system7/"},
-      {PINMAME_HARDWARE_GEN_S9, "maps/williams/system9/"},
-      {PINMAME_HARDWARE_GEN_S11, "maps/williams/system11/"},
-      {PINMAME_HARDWARE_GEN_S11X, "maps/williams/system11/"},
-      {PINMAME_HARDWARE_GEN_S11B2, "maps/williams/system11/"},
-      {PINMAME_HARDWARE_GEN_S11C, "maps/williams/system11/"},
-      {PINMAME_HARDWARE_GEN_WPCALPHA_1, "maps/williams/wpc/"},
-      {PINMAME_HARDWARE_GEN_WPCALPHA_2, "maps/williams/wpc/"},
-      {PINMAME_HARDWARE_GEN_WPCDMD, "maps/williams/wpc/"},
-      {PINMAME_HARDWARE_GEN_WPCFLIPTRON, "maps/williams/wpc/"},
-      {PINMAME_HARDWARE_GEN_WPCDCS, "maps/williams/wpc/"},
-      {PINMAME_HARDWARE_GEN_WPCSECURITY, "maps/williams/wpc/"},
-      {PINMAME_HARDWARE_GEN_WPC95DCS, "maps/williams/wpc/"},
-      {PINMAME_HARDWARE_GEN_WPC95, "maps/williams/wpc/"},
-      {PINMAME_HARDWARE_GEN_DE, "maps/dataeast/"},
-      {PINMAME_HARDWARE_GEN_DEDMD16, "maps/dataeast/"},
-      {PINMAME_HARDWARE_GEN_DEDMD32, "maps/dataeast/"},
-      {PINMAME_HARDWARE_GEN_DEDMD64, "maps/dataeast/"},
-      {PINMAME_HARDWARE_GEN_BY17, "maps/bally/as-2518-17/"},
-      {PINMAME_HARDWARE_GEN_BY35, "maps/bally/as-2518-35/"},
-      {PINMAME_HARDWARE_GEN_BY6803, "maps/bally/as-2518-133/"},
-      {PINMAME_HARDWARE_GEN_BY6803A, "maps/bally/as-2518-133/"},
-      {PINMAME_HARDWARE_GEN_STMPU100, "maps/stern/m100/"},
-      {PINMAME_HARDWARE_GEN_STMPU200, "maps/stern/m200/"},
-      {PINMAME_HARDWARE_GEN_WS, "maps/sega/whitestar/"},
-      {PINMAME_HARDWARE_GEN_WS, "maps/stern/whitestar/"},
-      {PINMAME_HARDWARE_GEN_WS_1, "maps/sega/whitestar/"},
-      {PINMAME_HARDWARE_GEN_WS_1, "maps/stern/whitestar/"},
-      {PINMAME_HARDWARE_GEN_WS_2, "maps/sega/whitestar/"},
-      {PINMAME_HARDWARE_GEN_WS_2, "maps/stern/whitestar/"},
-      {PINMAME_HARDWARE_GEN_SAM, "maps/stern/sam/"},
-      {PINMAME_HARDWARE_GEN_GTS80, "maps/gottlieb/system80/"},
-      {PINMAME_HARDWARE_GEN_GTS80B, "maps/gottlieb/system80b/"},
-      {PINMAME_HARDWARE_GEN_GTS3, "maps/gottlieb/system3/"},
-  };
-
-  bool matchedKnownHardware = false;
-  for (const auto& prefix : kPrefixes)
-  {
-    if ((hardwareGen & prefix.bit) == 0)
-    {
-      continue;
-    }
-
-    matchedKnownHardware = true;
-    if (relativeMapPath.rfind(prefix.prefix, 0) == 0)
-    {
-      return true;
-    }
-  }
-
-  return !matchedKnownHardware;
-}
-
-static bool TryLoadTrackedFieldFromMap(const YAML::Node& fieldNode,
-                                       const std::vector<PinmamePlatformMemoryRange>& platformRanges,
-                                       PinmameTrackedField* pField, std::string* pError)
-{
-  if (pField == nullptr)
-  {
-    return false;
-  }
-
-  pField->available = false;
-  if (!fieldNode || !fieldNode.IsMap())
-  {
-    return true;
-  }
-
-  uint32_t address = 0;
-  if (!TryParseMapUnsigned(fieldNode["start"], &address))
-  {
-    if (pError) *pError = "tracked field is missing a valid start address";
-    return false;
-  }
-
-  const std::string encodingText = fieldNode["encoding"] ? fieldNode["encoding"].as<std::string>() : "";
-  PinmameMapEncoding encoding;
-  if (encodingText == "int")
-  {
-    encoding = PinmameMapEncoding::INT;
-  }
-  else if (encodingText == "bcd")
-  {
-    encoding = PinmameMapEncoding::BCD;
-  }
-  else
-  {
-    if (pError) *pError = "tracked field uses unsupported encoding: " + encodingText;
-    return false;
-  }
-
-  uint32_t mask = 0xFF;
-  if (fieldNode["mask"] && !TryParseMapUnsigned(fieldNode["mask"], &mask))
-  {
-    if (pError) *pError = "tracked field has an invalid mask";
-    return false;
-  }
-
-  PinmameMapNibble nibble = ResolvePlatformNibbleDefault(platformRanges, address).value_or(PinmameMapNibble::BOTH);
-  if (fieldNode["nibble"])
-  {
-    const auto parsedNibble = TryParseMapNibble(fieldNode["nibble"]);
-    if (!parsedNibble.has_value())
-    {
-      if (pError) *pError = "tracked field has an invalid nibble setting";
-      return false;
-    }
-    nibble = parsedNibble.value();
-  }
-
-  int offset = 0;
-  if (fieldNode["offset"])
-  {
-    offset = fieldNode["offset"].as<int>();
-  }
-
-  bool treatZeroAsUnavailable = false;
-  const YAML::Node specialValues = fieldNode["special_values"];
-  if (specialValues && specialValues.IsMap())
-  {
-    const YAML::Node zeroNode = specialValues["0"];
-    treatZeroAsUnavailable = zeroNode && zeroNode.IsScalar();
-  }
-
-  pField->available = true;
-  pField->address = address;
-  pField->encoding = encoding;
-  pField->nibble = nibble;
-  pField->mask = static_cast<uint8_t>(mask & 0xFF);
-  pField->offset = offset;
-  pField->treatZeroAsUnavailable = treatZeroAsUnavailable;
-  return true;
-}
-
-static bool TryLoadPinmameTrackingConfig(const char* rom, const PINMAME_HARDWARE_GEN hardwareGen,
-                                         PinmameTrackingConfig* pConfig, std::string* pError)
-{
-  if (pConfig == nullptr)
-  {
-    if (pError) *pError = "tracking config output missing";
-    return false;
-  }
-
-  pConfig->loaded = false;
-  pConfig->mapPath.clear();
-  pConfig->currentPlayer = PinmameTrackedField{};
-  pConfig->currentBall = PinmameTrackedField{};
-
-  const std::string romName = NormalizeRomNameForMapLookup(rom);
-  if (romName.empty())
-  {
-    if (pError) *pError = "ROM name is empty";
-    return false;
-  }
-
-  const auto mapsRoot = FindPinmameNvramMapsRoot();
-  if (!mapsRoot.has_value())
-  {
-    if (pError) *pError = "pinmame-nvram-maps assets not found";
-    return false;
-  }
-
-  YAML::Node indexRoot;
-  try
-  {
-    indexRoot = YAML::LoadFile((mapsRoot.value() / "index.json").string());
-  }
-  catch (const std::exception& ex)
-  {
-    if (pError) *pError = std::string("failed to parse index.json: ") + ex.what();
-    return false;
-  }
-
-  const YAML::Node mapPathNode = indexRoot[romName];
-  if (!mapPathNode || !mapPathNode.IsScalar())
-  {
-    if (pError) *pError = "no nvram map found for ROM " + romName;
-    return false;
-  }
-
-  const std::string relativeMapPath = mapPathNode.as<std::string>();
-  if (!HardwareGenMatchesNvramMapPath(hardwareGen, relativeMapPath))
-  {
-    if (pError) *pError = "nvram map path does not match reported hardware generation: " + relativeMapPath;
-    return false;
-  }
-
-  const std::filesystem::path mapPath = mapsRoot.value() / relativeMapPath;
-  YAML::Node mapRoot;
-  try
-  {
-    mapRoot = YAML::LoadFile(mapPath.string());
-  }
-  catch (const std::exception& ex)
-  {
-    if (pError) *pError = std::string("failed to parse map file: ") + ex.what();
-    return false;
-  }
-
-  const YAML::Node metadata = mapRoot["_metadata"];
-  const YAML::Node platformNode = metadata["platform"];
-  if (!platformNode || !platformNode.IsScalar())
-  {
-    if (pError) *pError = "map file is missing _metadata.platform";
-    return false;
-  }
-
-  std::vector<PinmamePlatformMemoryRange> platformRanges;
-  const std::filesystem::path platformPath =
-      mapsRoot.value() / "platforms" / (platformNode.as<std::string>() + ".json");
-  if (!TryLoadPlatformNibbleDefaults(platformPath, &platformRanges, pError))
-  {
-    return false;
-  }
-
-  const YAML::Node gameState = mapRoot["game_state"];
-  if (!gameState || !gameState.IsMap())
-  {
-    if (pError) *pError = "map file is missing game_state";
-    return false;
-  }
-
-  if (!TryLoadTrackedFieldFromMap(gameState["current_player"], platformRanges, &pConfig->currentPlayer, pError))
-  {
-    return false;
-  }
-  if (!TryLoadTrackedFieldFromMap(gameState["current_ball"], platformRanges, &pConfig->currentBall, pError))
-  {
-    return false;
-  }
-
-  if (!pConfig->currentPlayer.available && !pConfig->currentBall.available)
-  {
-    if (pError) *pError = "map file does not define current_player or current_ball";
-    return false;
-  }
-
-  pConfig->loaded = true;
-  pConfig->mapPath = relativeMapPath;
-  return true;
-}
-
-static bool TryDecodeTrackedPinmameValue(const PinmameTrackedField& field, uint8_t* pValue)
-{
-  if (!field.available || pValue == nullptr)
-  {
-    return false;
-  }
-
-  uint8_t rawByte = 0;
-  if (PinmameReadMainCPUByte(field.address, &rawByte) == 0)
-  {
-    return false;
-  }
-
-  uint8_t value = static_cast<uint8_t>(rawByte & field.mask);
-  switch (field.nibble)
-  {
-    case PinmameMapNibble::HIGH:
-      value = static_cast<uint8_t>((value >> 4) & 0x0F);
-      break;
-    case PinmameMapNibble::LOW:
-      value = static_cast<uint8_t>(value & 0x0F);
-      break;
-    case PinmameMapNibble::BOTH:
-      break;
-  }
-
-  uint8_t decodedValue = value;
-  if (field.encoding == PinmameMapEncoding::BCD)
-  {
-    if (field.nibble == PinmameMapNibble::BOTH)
-    {
-      const uint8_t highNibble = static_cast<uint8_t>((value >> 4) & 0x0F);
-      const uint8_t lowNibble = static_cast<uint8_t>(value & 0x0F);
-
-      // Some games store a single decimal digit in one nibble and use the
-      // other nibble for flags. If one nibble is not valid BCD, keep the
-      // valid digit instead of decoding values like 0xF1 as 151.
-      if (highNibble <= 9 && lowNibble <= 9)
-      {
-        decodedValue = static_cast<uint8_t>(highNibble * 10 + lowNibble);
-      }
-      else if (lowNibble <= 9)
-      {
-        decodedValue = lowNibble;
-      }
-      else if (highNibble <= 9)
-      {
-        decodedValue = highNibble;
-      }
-      else
-      {
-        return false;
-      }
-    }
-  }
-
-  if (field.treatZeroAsUnavailable && decodedValue == 0)
-  {
-    return false;
-  }
-
-  const int adjustedValue = static_cast<int>(decodedValue) + field.offset;
-  if (adjustedValue < 0 || adjustedValue > UCHAR_MAX)
-  {
-    return false;
-  }
-
-  *pValue = static_cast<uint8_t>(adjustedValue);
-  return true;
-}
 
 static bool ParseUint32Strict(const char* text, uint32_t* outValue)
 {
@@ -2826,6 +2168,18 @@ static struct cag_option options[] = {
      .value_name = NULL,
      .description = "No serial communication to controllers (optional)"},
     {.identifier = 'M', .access_name = "no-sound", .value_name = NULL, .description = "Turn off sound (optional)"},
+    {.identifier = 't',
+     .access_name = "engine",
+     .value_name = "VALUE",
+     .description = "Game engine: pinmame (default) or script for ROM-less games"},
+    {.identifier = '[',
+     .access_name = "no-display",
+     .value_name = NULL,
+     .description = "Do not open or search for any DMD (optional, for headless runs)"},
+    {.identifier = ']',
+     .access_name = "exit-after-ms",
+     .value_name = "VALUE",
+     .description = "Exit after the given number of milliseconds (optional, for tests and burn-in)"},
     {.identifier = 'W',
      .access_name = "speech",
      .value_name = NULL,
@@ -3070,83 +2424,6 @@ static struct cag_option options[] = {
      .description = "Virtual DMD y position relative to the selected screen"},
     {.identifier = 'h', .access_letters = "h", .access_name = "help", .description = "Show help"}};
 
-void PINMAMECALLBACK Game(PinmameGame* game)
-{
-  printf(
-      "Game(): name=%s, description=%s, manufacturer=%s, year=%s, "
-      "flags=%lu, found=%d\n",
-      game->name, game->description, game->manufacturer, game->year, (unsigned long)game->flags, game->found);
-}
-
-void PINMAMECALLBACK OnStateUpdated(int state, const void* p_userData)
-{
-  if (opt_debug)
-  {
-    printf("OnStateUpdated(): state=%d\n", state);
-  }
-
-  if (!state)
-  {
-    running = false;
-    shutdown_requested = 1;
-    return;
-  }
-  else
-  {
-    /*
-    PinmameMechConfig mechConfig;
-    memset(&mechConfig, 0, sizeof(mechConfig));
-
-    mechConfig.sol1 = 11;
-    mechConfig.length = 240;
-    mechConfig.steps = 240;
-    mechConfig.type = PINMAME_MECH_FLAGS_NONLINEAR | PINMAME_MECH_FLAGS_REVERSE | PINMAME_MECH_FLAGS_ONESOL;
-    mechConfig.sw[0].swNo = 32;
-    mechConfig.sw[0].startPos = 0;
-    mechConfig.sw[0].endPos = 5;
-
-    PinmameSetMech(0, &mechConfig);
-    */
-
-    game_state.store(state, std::memory_order_release);
-  }
-}
-
-template <typename T>
-static void PrintPinmameLogMessage(PINMAME_LOG_LEVEL logLevel, const char* format, T arg)
-{
-  const char* logMessage = format;
-  char buffer[1024];
-
-  if constexpr (std::is_same_v<T, char*> || std::is_same_v<T, const char*>)
-  {
-    if (arg)
-    {
-      logMessage = arg;
-    }
-  }
-  else
-  {
-    vsnprintf(buffer, sizeof(buffer), format, arg);
-    logMessage = buffer;
-  }
-
-  if (logLevel == PINMAME_LOG_LEVEL_INFO)
-  {
-    PrintFlushedLogLine("INFO: ", logMessage);
-  }
-  else if (logLevel == PINMAME_LOG_LEVEL_ERROR)
-  {
-    PrintFlushedLogLine("ERROR: ", logMessage);
-  }
-}
-
-void PINMAMECALLBACK OnLogMessage(PINMAME_LOG_LEVEL logLevel, const char* format, PinmameLogMessageArg arg,
-                                  const void* p_userData)
-{
-  PrintPinmameLogMessage(logLevel, format, arg);
-}
-
 void DMDUTILCALLBACK DMDUtilLogCallback(DMDUtil_LogLevel logLevel, const char* format, va_list args)
 {
   char buffer[1024];
@@ -3182,320 +2459,65 @@ void DMDUTILCALLBACK OnDmdPupTrigger(uint16_t id, void* userData)
   }
 }
 
-static bool IsSegmentDisplayType(int displayType)
+void signal_handler_graceful(int sig)
 {
-  switch (displayType & PINMAME_DISPLAY_TYPE_SEGMASK)
-  {
-    case PINMAME_DISPLAY_TYPE_SEG16:
-    case PINMAME_DISPLAY_TYPE_SEG16R:
-    case PINMAME_DISPLAY_TYPE_SEG10:
-    case PINMAME_DISPLAY_TYPE_SEG9:
-    case PINMAME_DISPLAY_TYPE_SEG8:
-    case PINMAME_DISPLAY_TYPE_SEG8D:
-    case PINMAME_DISPLAY_TYPE_SEG7:
-    case PINMAME_DISPLAY_TYPE_SEG87:
-    case PINMAME_DISPLAY_TYPE_SEG87F:
-    case PINMAME_DISPLAY_TYPE_SEG98:
-    case PINMAME_DISPLAY_TYPE_SEG98F:
-    case PINMAME_DISPLAY_TYPE_SEG7S:
-    case PINMAME_DISPLAY_TYPE_SEG7SC:
-    case PINMAME_DISPLAY_TYPE_SEG16S:
-    case PINMAME_DISPLAY_TYPE_SEG16N:
-    case PINMAME_DISPLAY_TYPE_SEG16D:
-    case PINMAME_DISPLAY_TYPE_SEG8H:
-    case PINMAME_DISPLAY_TYPE_SEG7H:
-    case PINMAME_DISPLAY_TYPE_SEG87H:
-    case PINMAME_DISPLAY_TYPE_SEG87FH:
-    case PINMAME_DISPLAY_TYPE_SEG7SH:
-    case PINMAME_DISPLAY_TYPE_SEG7SCH:
-      return true;
-    default:
-      return false;
-  }
+  running = false;
+  shutdown_requested = 1;
 }
 
-static int DecodeB2SSegmentDigit(uint16_t bitState)
+// The host side of the engine seam. Every method here is a body that used to
+// live in a PinMAME callback, with the PinMAME types stripped out; the fan-out
+// to libppuc, the interceptor, LuaRulesEngine, the media host and the DMD is
+// unchanged.
+//
+// Methods may be called from the engine's own thread. That is the contract
+// GameEngineHost documents, and it is why the interceptor takes a lock.
+struct PpucEngineHost final : GameEngineHost
 {
-  switch (bitState & ~0x0080u)
+  void OnCoilChanged(uint16_t number, uint8_t state) override
   {
-    case 0x003Fu: return 0;
-    case 0x0006u:
-    case 0x0300u: return 1;
-    case 0x005Bu: return 2;
-    case 0x004Fu: return 3;
-    case 0x0066u: return 4;
-    case 0x006Du: return 5;
-    case 0x007Du:
-    case 0x007Cu: return 6;
-    case 0x0007u: return 7;
-    case 0x007Fu: return 8;
-    case 0x006Fu:
-    case 0x0067u: return 9;
-    default: return -1;
-  }
-}
-
-static int GetSegmentDisplayDigitBase(int index, int length)
-{
-  auto it = segmentDisplayDigitBases.find(index);
-  if (it != segmentDisplayDigitBases.end())
-  {
-    return it->second;
-  }
-  const int base = nextSegmentDisplayDigitBase;
-  segmentDisplayDigitBases[index] = base;
-  nextSegmentDisplayDigitBase += std::max(1, length);
-  return base;
-}
-
-static void DebugSegmentDisplayUpdate(int index, int type, int base,
-                                      const uint16_t* segments, int length)
-{
-  if (!opt_debug || segments == nullptr || length <= 0)
-  {
-    return;
-  }
-
-  std::ostringstream line;
-  line << "B2S segment display update: index=" << index << " type=" << type
-       << " base=" << base << " length=" << length << " raw=";
-  for (int i = 0; i < length; ++i)
-  {
-    if (i > 0)
+    if (pMediaPluginHost != nullptr)
     {
-      line << ',';
+      pMediaPluginHost->QueueEvent('S', number, state);
     }
-    line << "0x" << std::hex << std::uppercase << segments[i] << std::dec;
-  }
-  line << " digits=";
-  for (int i = 0; i < length; ++i)
-  {
-    if (i > 0)
+
+    g_interceptorOutputs.ApplyEngineCoil(pPpuc, number, state);
+
+    for (const PPUCCoilGiMapping& mapping : pPpuc->GetCoilGiMappings())
     {
-      line << ',';
-    }
-    line << DecodeB2SSegmentDigit(segments[i]);
-  }
-
-  std::string text = line.str();
-  if (lastSegmentDisplayDebugLine[index] == text)
-  {
-    return;
-  }
-  lastSegmentDisplayDebugLine[index] = text;
-  printf("%s\n", text.c_str());
-}
-
-void PINMAMECALLBACK OnDisplayAvailable(int index, int displayCount, PinmameDisplayLayout* p_displayLayout,
-                                        const void* p_userData)
-{
-  if (opt_debug)
-  {
-    printf(
-        "OnDisplayAvailable(): index=%d, displayCount=%d, type=%d, top=%d, "
-        "left=%d, width=%d, height=%d, "
-        "depth=%d, length=%d\n",
-        index, displayCount, p_displayLayout->type, p_displayLayout->top, p_displayLayout->left, p_displayLayout->width,
-        p_displayLayout->height, p_displayLayout->depth, p_displayLayout->length);
-  }
-  if (p_displayLayout != nullptr && IsSegmentDisplayType(p_displayLayout->type))
-  {
-    GetSegmentDisplayDigitBase(index, p_displayLayout->length);
-  }
-}
-
-void PINMAMECALLBACK OnDisplayUpdated(int index, void* p_displayData, PinmameDisplayLayout* p_displayLayout,
-                                      const void* p_userData)
-{
-  if (p_displayData == nullptr || p_displayLayout == nullptr)
-  {
-    return;
-  }
-
-  if (opt_debug)
-  {
-    printf(
-        "OnDisplayUpdated(): index=%d, type=%d, top=%d, left=%d, width=%d, "
-        "height=%d, depth=%d, length=%d\n",
-        index, p_displayLayout->type, p_displayLayout->top, p_displayLayout->left, p_displayLayout->width,
-        p_displayLayout->height, p_displayLayout->depth, p_displayLayout->length);
-  }
-
-  if (pMediaPluginHost != nullptr && IsSegmentDisplayType(p_displayLayout->type) && p_displayLayout->length > 0)
-  {
-    const int base = GetSegmentDisplayDigitBase(index, p_displayLayout->length);
-    const auto* segments = static_cast<const uint16_t*>(p_displayData);
-    DebugSegmentDisplayUpdate(index, p_displayLayout->type, base, segments,
-                              p_displayLayout->length);
-    int score = 0;
-    bool hasScoreDigit = false;
-    for (int i = 0; i < p_displayLayout->length; ++i)
-    {
-      const int digit = DecodeB2SSegmentDigit(segments[i]);
-      pMediaPluginHost->QueueSegmentDisplay(base + i, digit);
-      if (digit >= 0)
+      if (mapping.coil != number)
       {
-        hasScoreDigit = true;
-        score = score * 10 + digit;
+        continue;
       }
-      else if (hasScoreDigit)
+      const uint8_t brightness = state != 0 ? mapping.onBrightness : mapping.offBrightness;
+      if (opt_debug || opt_debug_coils)
       {
-        score *= 10;
+        printf("Coil GI mapping: solenoid=%d, state=%d, gi=%u, brightness=%u\n", number, state, mapping.gi, brightness);
       }
+      pPpuc->SetGIState(mapping.gi, brightness);
     }
-    if (hasScoreDigit)
+
+    // Deliberately outside any interceptor lock: a Lua onCoilChanged handler may
+    // call ppuc.pulseCoil, which comes straight back into the interceptor.
+    if (pLuaRulesEngine)
     {
-      pMediaPluginHost->QueuePlayerScore(index + 1, score);
+      pLuaRulesEngine->OnCoilState(number, state);
     }
   }
 
-  // For DMD games, the ype is PINMAME_DISPLAY_TYPE_DMD.
-  // For alphanumeric games that should be shown on a DMD,
-  // the type is PINMAME_DISPLAY_TYPE_DMD | PINMAME_DISPLAY_TYPE_DMDSEG.
-  // For some games like WPT, there's a second display on the playfield of type
-  // PINMAME_DISPLAY_TYPE_DMD | PINMAME_DISPLAY_TYPE_DMDNOAA | PINMAME_DISPLAY_TYPE_NODISP
-  if ((p_displayLayout->type & PINMAME_DISPLAY_TYPE_DMD) == PINMAME_DISPLAY_TYPE_DMD &&
-      (p_displayLayout->type & PINMAME_DISPLAY_TYPE_NODISP) == 0)
+  void OnGameRunningChanged(bool gameRunning) override
   {
-    pDmd->UpdateData((uint8_t*)p_displayData, p_displayLayout->depth, p_displayLayout->width, p_displayLayout->height,
-                     255, 255, 255);
-  }
-  else
-  {
-    switch (p_displayLayout->type)
-    {
-      case PINMAME_DISPLAY_TYPE_SEG16:    // 16 segments
-      case PINMAME_DISPLAY_TYPE_SEG16R:   // 16 segments with comma and period
-                                          // reversed
-      case PINMAME_DISPLAY_TYPE_SEG10:    // 9 segments and comma
-      case PINMAME_DISPLAY_TYPE_SEG9:     // 9 segments
-      case PINMAME_DISPLAY_TYPE_SEG8:     // 7 segments and comma
-      case PINMAME_DISPLAY_TYPE_SEG8D:    // 7 segments and period
-      case PINMAME_DISPLAY_TYPE_SEG7:     // 7 segments
-      case PINMAME_DISPLAY_TYPE_SEG87:    // 7 segments, comma every three
-      case PINMAME_DISPLAY_TYPE_SEG87F:   // 7 segments, forced comma every three
-      case PINMAME_DISPLAY_TYPE_SEG98:    // 9 segments, comma every three
-      case PINMAME_DISPLAY_TYPE_SEG98F:   // 9 segments, forced comma every three
-      case PINMAME_DISPLAY_TYPE_SEG7S:    // 7 segments, small
-      case PINMAME_DISPLAY_TYPE_SEG7SC:   // 7 segments, small, with comma
-      case PINMAME_DISPLAY_TYPE_SEG16S:   // 16 segments with split top and
-                                          // bottom line
-      case PINMAME_DISPLAY_TYPE_SEG16N:   // 16 segments without commas
-      case PINMAME_DISPLAY_TYPE_SEG16D:   // 16 segments with periods only
-      case PINMAME_DISPLAY_TYPE_SEGALL:   // maximum segment definition number
-      case PINMAME_DISPLAY_TYPE_IMPORT:   // Link to another display layout
-      case PINMAME_DISPLAY_TYPE_SEGMASK:  // Note that CORE_IMPORT must be part of the segmask as well!
-      case PINMAME_DISPLAY_TYPE_SEG8H:
-      case PINMAME_DISPLAY_TYPE_SEG7H:
-      case PINMAME_DISPLAY_TYPE_SEG87H:
-      case PINMAME_DISPLAY_TYPE_SEG87FH:
-      case PINMAME_DISPLAY_TYPE_SEG7SH:
-      case PINMAME_DISPLAY_TYPE_SEG7SCH:
-#ifdef PINMAME_DISPLAY_TYPE_VIDEO_ROT90
-      case PINMAME_DISPLAY_TYPE_VIDEO_ROT90:
-#endif
-        break;
-
-      case PINMAME_DISPLAY_TYPE_VIDEO:  // VIDEO Display
-        // @todo
-        break;
-
-      case PINMAME_DISPLAY_TYPE_DMD:  // DMD Display
-        // handled above, just surpress a warning of missing cases here.
-        break;
-
-      case PINMAME_DISPLAY_TYPE_SEGHIBIT:
-      case PINMAME_DISPLAY_TYPE_SEGREV:
-      case PINMAME_DISPLAY_TYPE_DMDNOAA:
-      case PINMAME_DISPLAY_TYPE_NODISP:
-        break;
-
-      default:
-        break;
-    }
-  }
-}
-
-int PINMAMECALLBACK OnAudioAvailable(PinmameAudioInfo* p_audioInfo, const void* p_userData)
-{
-  if (opt_debug)
-  {
-    printf(
-        "OnAudioAvailable(): format=%d, channels=%d, sampleRate=%.2f, "
-        "framesPerSecond=%.2f, samplesPerFrame=%d, "
-        "bufferSize=%d\n",
-        p_audioInfo->format, p_audioInfo->channels, p_audioInfo->sampleRate, p_audioInfo->framesPerSecond,
-        p_audioInfo->samplesPerFrame, p_audioInfo->bufferSize);
-  }
-
-  if (!opt_no_sound)
-  {
+    ball_search_game_running.store(gameRunning, std::memory_order_release);
     if (pAudioOutput != nullptr)
     {
-      pAudioOutput->ConfigureGameFormat(static_cast<int>(p_audioInfo->sampleRate), p_audioInfo->channels);
-    }
-    else
-    {
-      printf("Audio output not initialized.\n");
-    }
-  }
-  return p_audioInfo->samplesPerFrame;
-}
-
-int PINMAMECALLBACK OnAudioUpdated(void* p_buffer, int samples, const void* p_userData)
-{
-  if (pAudioOutput != nullptr)
-  {
-    pAudioOutput->QueueGameFrames(reinterpret_cast<const int16_t*>(p_buffer), static_cast<size_t>(samples));
-  }
-  return samples;
-}
-
-void PINMAMECALLBACK OnSolenoidUpdated(PinmameSolenoidState* p_solenoidState, const void* p_userData)
-{
-  const uint8_t coilState = p_solenoidState->state == 0 ? 0 : 1;
-  const bool isGameOnCoil = p_solenoidState->solNo == pPpuc->GetGameOnSolenoid();
-
-  if (opt_debug || opt_debug_coils)
-  {
-    printf("OnSolenoidUpdated: solenoid=%d, state=%d\n", p_solenoidState->solNo, coilState);
-  }
-
-  if (pMediaPluginHost != nullptr)
-  {
-    pMediaPluginHost->QueueEvent('S', p_solenoidState->solNo, coilState);
-  }
-
-  g_interceptorOutputs.ApplyPinmameCoil(pPpuc, p_solenoidState->solNo, coilState);
-
-  for (const PPUCCoilGiMapping& mapping : pPpuc->GetCoilGiMappings())
-  {
-    if (mapping.coil != p_solenoidState->solNo)
-    {
-      continue;
-    }
-    const uint8_t brightness = coilState != 0 ? mapping.onBrightness : mapping.offBrightness;
-    if (opt_debug || opt_debug_coils)
-    {
-      printf("Coil GI mapping: solenoid=%d, state=%d, gi=%u, brightness=%u\n", p_solenoidState->solNo, coilState,
-             mapping.gi, brightness);
-    }
-    pPpuc->SetGIState(mapping.gi, brightness);
-  }
-
-  if (isGameOnCoil)
-  {
-    ball_search_game_running.store(coilState != 0, std::memory_order_release);
-    if (pAudioOutput != nullptr)
-    {
-      pAudioOutput->SetMusicEnabled(coilState != 0);
+      pAudioOutput->SetMusicEnabled(gameRunning);
     }
 
-    if (coilState)
+    if (gameRunning)
     {
       if (opt_debug || opt_debug_coils)
       {
-        printf("Game started: solenoid=%d, state=%d\n", p_solenoidState->solNo, coilState);
+        printf("Game started\n");
       }
       QueueTransliteRender(RenderCommand::RENDER_GAME);
     }
@@ -3503,115 +2525,249 @@ void PINMAMECALLBACK OnSolenoidUpdated(PinmameSolenoidState* p_solenoidState, co
     {
       if (opt_debug || opt_debug_coils)
       {
-        printf("Game stopped: solenoid=%d, state=%d\n", p_solenoidState->solNo, coilState);
+        printf("Game stopped\n");
       }
       QueueTransliteRender(RenderCommand::RENDER_ATTRACT);
     }
-  }
 
-  if (pLuaRulesEngine)
-  {
-    if (isGameOnCoil)
+    if (pLuaRulesEngine)
     {
-      pLuaRulesEngine->SetAttractMode(coilState == 0);
-      if (coilState == 0)
+      pLuaRulesEngine->SetAttractMode(!gameRunning);
+      if (!gameRunning)
       {
         pLuaRulesEngine->SetCurrentBall(0);
         pLuaRulesEngine->SetCurrentPlayer(0);
       }
     }
-    pLuaRulesEngine->OnCoilState(p_solenoidState->solNo, coilState);
-  }
-}
 
-void PINMAMECALLBACK OnMechAvailable(int mechNo, PinmameMechInfo* p_mechInfo, const void* p_userData)
-{
-  if (opt_debug)
+    if (g_playfieldAssistEnabled)
+    {
+      // Neither feature should act in attract.
+      g_playfieldAssist.SetPlayActive(gameRunning);
+    }
+  }
+
+  void OnRunStateChanged(int state) override
   {
-    printf(
-        "OnMechAvailable: mechNo=%d, type=%d, length=%d, steps=%d, pos=%d, "
-        "speed=%d\n",
-        mechNo, p_mechInfo->type, p_mechInfo->length, p_mechInfo->steps, p_mechInfo->pos, p_mechInfo->speed);
+    if (state == 0)
+    {
+      running = false;
+      shutdown_requested = 1;
+    }
   }
-}
 
-void PINMAMECALLBACK OnMechUpdated(int mechNo, PinmameMechInfo* p_mechInfo, const void* p_userData)
-{
-  if (opt_debug)
+  void OnDmdFrame(const uint8_t* pData, int depth, int width, int height) override
   {
-    printf(
-        "OnMechUpdated: mechNo=%d, type=%d, length=%d, steps=%d, pos=%d, "
-        "speed=%d\n",
-        mechNo, p_mechInfo->type, p_mechInfo->length, p_mechInfo->steps, p_mechInfo->pos, p_mechInfo->speed);
+    pDmd->UpdateData(const_cast<uint8_t*>(pData), depth, width, height, 255, 255, 255);
   }
-}
 
-void PINMAMECALLBACK OnConsoleDataUpdated(void* p_data, int size, const void* p_userData)
-{
-  if (opt_debug)
+  void OnSegmentDigit(int digit, int value) override
   {
-    printf("OnConsoleDataUpdated: size=%d\n", size);
+    if (pMediaPluginHost != nullptr)
+    {
+      pMediaPluginHost->QueueSegmentDisplay(digit, value);
+    }
   }
-}
 
-static void LogPinmameSoundCommand(int boardNo, int cmd)
+  void OnPlayerScore(int player, int score) override
+  {
+    if (pMediaPluginHost != nullptr)
+    {
+      pMediaPluginHost->QueuePlayerScore(player, score);
+    }
+  }
+
+  int OnAudioFormat(int sampleRate, int channels, int samplesPerFrame) override
+  {
+    if (pAudioOutput != nullptr)
+    {
+      pAudioOutput->ConfigureGameFormat(sampleRate, channels);
+    }
+    else
+    {
+      printf("Audio output not initialized.\n");
+    }
+    return samplesPerFrame;
+  }
+
+  void OnAudioFrames(const int16_t* pSamples, int samples) override
+  {
+    if (pAudioOutput != nullptr)
+    {
+      pAudioOutput->QueueGameFrames(pSamples, static_cast<size_t>(samples));
+    }
+  }
+
+  void OnSoundCommand(int boardNo, int cmd) override
+  {
+    if (pMediaPluginHost != nullptr)
+    {
+      pMediaPluginHost->OnSoundCommand(boardNo, cmd);
+    }
+  }
+
+  void OnCurrentBallChanged(uint8_t ball) override
+  {
+    if (pLuaRulesEngine)
+    {
+      pLuaRulesEngine->SetCurrentBall(ball);
+    }
+    // Drives the per-ball reset of warnings and the ball-save arming, in both
+    // engines: under PinMAME this comes from the NVRAM tracking poll, under
+    // GameCore from the ball number it owns. Ball 0 means no game in progress.
+    if (g_playfieldAssistEnabled)
+    {
+      if (ball == 0)
+      {
+        g_playfieldAssist.OnBallEnd();
+      }
+      else
+      {
+        g_playfieldAssist.OnBallStart(ball);
+      }
+    }
+  }
+
+  void OnCurrentPlayerChanged(uint8_t player) override
+  {
+    if (pLuaRulesEngine)
+    {
+      pLuaRulesEngine->SetCurrentPlayer(player);
+    }
+    if (g_playfieldAssistEnabled)
+    {
+      g_playfieldAssist.SetCurrentPlayer(player);
+    }
+  }
+
+  void OnLogMessage(bool error, const char* message) override
+  {
+    PrintFlushedLogLine(error ? "ERROR: " : "INFO: ", message);
+  }
+};
+
+// Translates a GameCore event into the matching `ppuc.on*` handler.
+//
+// Kept as an explicit table rather than a generated name, because the argument
+// list is part of the API and a rules author reads it here.
+static void DispatchGameEventToRules(const GameEvent& event)
 {
-  if (!opt_debug_sound_commands)
+  if (pLuaRulesEngine == nullptr)
   {
     return;
   }
 
-  const uint64_t key = (static_cast<uint64_t>(static_cast<uint32_t>(boardNo)) << 32) |
-                       static_cast<uint32_t>(cmd);
-  bool firstSeen = false;
+  switch (event.type)
   {
-    std::lock_guard<std::mutex> lock(soundCommandDebugMutex);
-    firstSeen = soundCommandDebugSeen.insert(key).second;
+    case GameEventType::AttractStart: pLuaRulesEngine->CallGameHandler("onAttractStart"); break;
+    case GameEventType::AttractEnd: pLuaRulesEngine->CallGameHandler("onAttractEnd"); break;
+    case GameEventType::GameStart: pLuaRulesEngine->CallGameHandler("onGameStart", {event.value}); break;
+    case GameEventType::PlayerAdded: pLuaRulesEngine->CallGameHandler("onPlayerAdded", {event.player}); break;
+    case GameEventType::StartRejected:
+      pLuaRulesEngine->CallGameHandler("onStartRejected", {StartRejectReasonName(event.reason)});
+      break;
+    case GameEventType::BallStart:
+      pLuaRulesEngine->CallGameHandler("onBallStart", {event.player, event.ball});
+      break;
+    case GameEventType::BallServed:
+      pLuaRulesEngine->CallGameHandler("onBallServed", {event.player, event.ball});
+      break;
+    case GameEventType::BallServeFailed:
+      pLuaRulesEngine->CallGameHandler("onBallServeFailed", {event.value});
+      break;
+    case GameEventType::BallStuck:
+      pLuaRulesEngine->CallGameHandler("onBallStuck", {event.player, event.ball});
+      break;
+    case GameEventType::BallEnd: pLuaRulesEngine->CallGameHandler("onBallEnd", {event.player, event.ball}); break;
+    case GameEventType::BonusCount:
+      // Must reach ppuc.game.bonusDone(), or the bonus times out and the game
+      // continues anyway. A rules bug does not brick the machine.
+      pLuaRulesEngine->CallGameHandler("onBonusCount", {event.player, event.ball});
+      break;
+    case GameEventType::ExtraBall: pLuaRulesEngine->CallGameHandler("onExtraBall", {event.player}); break;
+    case GameEventType::Score:
+      pLuaRulesEngine->CallGameHandler("onScore", {event.player, event.value, event.total});
+      break;
+    case GameEventType::TiltWarning:
+      pLuaRulesEngine->CallGameHandler("onTiltWarning", {event.player, event.value, event.total});
+      break;
+    case GameEventType::Tilt: pLuaRulesEngine->CallGameHandler("onTilt", {event.player, event.ball}); break;
+    case GameEventType::SlamTilt: pLuaRulesEngine->CallGameHandler("onSlamTilt"); break;
+    case GameEventType::Replay: pLuaRulesEngine->CallGameHandler("onReplay", {event.player, event.value}); break;
+    case GameEventType::Match: pLuaRulesEngine->CallGameHandler("onMatch", {event.value, event.total}); break;
+    case GameEventType::GameEnd:
+      pLuaRulesEngine->CallGameHandler("onGameEnd", {event.player, event.value, event.total});
+      break;
+    case GameEventType::CreditsChanged:
+      pLuaRulesEngine->CallGameHandler("onCreditsChanged", {event.value});
+      break;
   }
-  printf("PinMAME sound command: board=%d id=%d hex=0x%X new=%d\n", boardNo, cmd,
-         static_cast<unsigned int>(cmd), firstSeen ? 1 : 0);
 }
 
-void PINMAMECALLBACK OnSoundCommand(int boardNo, int cmd, const void* p_userData)
+// Applies whatever tilt warnings and ball save asked for this tick.
+//
+// The tilt decision reaches the engines differently, and deliberately so:
+// PlayfieldAssist already forwarded the bob switch for the hit that tilts, so a
+// ROM tilts itself; GameCore does not watch the bob at all and is told directly.
+static void ServicePlayfieldAssist(GameEngine* pEngine)
 {
-  LogPinmameSoundCommand(boardNo, cmd);
-
-  if (pMediaPluginHost != nullptr)
-  {
-    pMediaPluginHost->OnSoundCommand(boardNo, cmd);
-  }
-}
-
-static void PollPinmameSoundCommands(std::vector<PinmameSoundCommand>& soundCommands)
-{
-  if (!opt_debug_sound_commands)
+  if (!g_playfieldAssistEnabled)
   {
     return;
   }
 
-  const int maxSoundCommands = PinmameGetMaxSoundCommands();
-  if (maxSoundCommands <= 0)
+  g_playfieldAssist.Update();
+
+  for (const PlayfieldAssist::Action& action : g_playfieldAssist.TakeActions())
   {
-    return;
-  }
-  if (soundCommands.size() < static_cast<size_t>(maxSoundCommands))
-  {
-    soundCommands.resize(static_cast<size_t>(maxSoundCommands));
+    switch (action.type)
+    {
+      case PlayfieldAssist::ActionType::PulseCoil:
+        g_interceptorOutputs.PulseCoil(pPpuc, action.number, action.durationMs);
+        break;
+      case PlayfieldAssist::ActionType::SetLamp:
+        g_interceptorOutputs.ApplyEngineLamp(pPpuc, action.number, action.value);
+        break;
+    }
   }
 
-  const int count = PinmameGetNewSoundCommands(soundCommands.data());
-  for (int i = 0; i < count && i < maxSoundCommands; ++i)
+  for (const PlayfieldAssist::Event& event : g_playfieldAssist.TakeEvents())
   {
-    LogPinmameSoundCommand(-1, soundCommands[static_cast<size_t>(i)].sndNo);
+    switch (event.type)
+    {
+      case PlayfieldAssist::EventType::TiltWarning:
+        printf("Tilt warning %lld of %lld for player %u\n", static_cast<long long>(event.value),
+               static_cast<long long>(event.value + event.total), event.player);
+        if (pLuaRulesEngine != nullptr)
+        {
+          pLuaRulesEngine->CallGameHandler("onTiltWarning", {event.player, event.value, event.total});
+        }
+        break;
+      case PlayfieldAssist::EventType::Tilt:
+        if (g_pGameCore != nullptr)
+        {
+          g_pGameCore->Tilt();
+        }
+        break;
+      case PlayfieldAssist::EventType::SlamTilt:
+        if (g_pGameCore != nullptr)
+        {
+          g_pGameCore->SlamTilt();
+        }
+        break;
+      case PlayfieldAssist::EventType::BallSaved:
+        printf("Ball saved (%lld this ball)\n", static_cast<long long>(event.value));
+        if (pLuaRulesEngine != nullptr)
+        {
+          pLuaRulesEngine->CallGameHandler("onBallSaved", {event.player, event.value});
+        }
+        break;
+      case PlayfieldAssist::EventType::BallSaveArmed:
+      case PlayfieldAssist::EventType::BallSaveExpired:
+      case PlayfieldAssist::EventType::TiltWarningsAwarded:
+        break;
+    }
   }
-}
-
-int PINMAMECALLBACK IsKeyPressed(PINMAME_KEYCODE keycode, const void* p_userData) { return 0; }
-
-void signal_handler_graceful(int sig)
-{
-  running = false;
-  shutdown_requested = 1;
 }
 
 int main(int argc, char** argv)
@@ -3789,6 +2945,8 @@ int main(int argc, char** argv)
       {
         if (key == "Rom")
           opt_rom = DuplicateOptionalIniString(value);
+        else if (key == "Engine")
+          opt_engine = DuplicateIniString(value);
       }
       else if (section == "Paths")
       {
@@ -3825,6 +2983,8 @@ int main(int argc, char** argv)
       {
         if (key == "NoSerial")
           opt_no_serial = ParseIniBool(value);
+        else if (key == "NoDisplay")
+          opt_no_display = ParseIniBool(value);
         else if (key == "NoSound")
           opt_no_sound = ParseIniBool(value);
         else if (key == "Debug")
@@ -4041,6 +3201,23 @@ int main(int argc, char** argv)
       case 'n':
         opt_no_serial = true;
         break;
+      case 't':
+        opt_engine = cag_option_get_value(&cag_context);
+        break;
+      case '[':
+        opt_no_display = true;
+        break;
+      case ']':
+      {
+        uint32_t parsed = 0;
+        if (!ParseUint32Strict(cag_option_get_value(&cag_context), &parsed))
+        {
+          printf("Invalid --exit-after-ms value.\n");
+          return 1;
+        }
+        opt_exit_after_ms = parsed;
+        break;
+      }
       case 'M':
         opt_no_sound = true;
         break;
@@ -4077,7 +3254,7 @@ int main(int argc, char** argv)
       case 'A':
         opt_pinmame_path = cag_option_get_value(&cag_context);
         break;
-      case 't':
+      case 'T':
         opt_serum_timeout = atoi(cag_option_get_value(&cag_context));
         break;
       case 'P':
@@ -4345,6 +3522,13 @@ int main(int argc, char** argv)
     return 1;
   }
 
+  const bool useScriptEngine = opt_engine != nullptr && strcmp(opt_engine, "script") == 0;
+  if (!useScriptEngine && (opt_engine == nullptr || strcmp(opt_engine, "pinmame") != 0))
+  {
+    printf("Unknown engine '%s'. Valid values are 'pinmame' and 'script'.\n", opt_engine ? opt_engine : "(null)");
+    return 1;
+  }
+
   pPpuc = new PPUC();
 
   // Load config file. But options set via command line are preferred.
@@ -4363,6 +3547,64 @@ int main(int argc, char** argv)
     opt_debug = pPpuc->GetDebug();
   }
 
+  // The emGame block lives in the same io-boards.yaml libppuc just parsed.
+  // libppuc ignores root keys it does not name, so this needs no libppuc schema
+  // change -- but every device number is cross-checked against the machine
+  // libppuc actually parsed, which turns "I press start and nothing happens"
+  // into a startup error that names the switch.
+  //
+  // Parsed here rather than at engine construction because the tilt inhibit
+  // switch has to reach libppuc before Connect(): it is sent to the boards as a
+  // config topic during session setup.
+  GameConfig g_gameConfig;
+  if (useScriptEngine)
+  {
+    std::string gameConfigError;
+    if (!LoadGameConfigFromYaml(config_file, &g_gameConfig, &gameConfigError))
+    {
+      printf("%s\n", gameConfigError.c_str());
+      return 1;
+    }
+
+    if (g_gameConfig.tilt.inhibitSwitch != 0)
+    {
+      pPpuc->SetTiltSwitch(static_cast<uint8_t>(g_gameConfig.tilt.inhibitSwitch));
+    }
+  }
+
+  // Tilt warnings and ball save are loaded for BOTH engines. Giving an
+  // early-electronic ROM features it never had is much of the point.
+  {
+    TiltAssistConfig tiltAssist;
+    BallSaveConfig ballSave;
+    std::string assistError;
+    if (!LoadPlayfieldAssistFromYaml(config_file, &tiltAssist, &ballSave, &assistError))
+    {
+      printf("%s\n", assistError.c_str());
+      return 1;
+    }
+
+    g_playfieldAssistEnabled =
+          !tiltAssist.switches.empty() || !tiltAssist.slamSwitches.empty() || ballSave.enabled;
+    if (g_playfieldAssistEnabled)
+    {
+      g_playfieldAssist.SetTiltConfig(tiltAssist);
+      g_playfieldAssist.SetBallSaveConfig(ballSave);
+
+      if (!tiltAssist.switches.empty())
+      {
+        printf("Tilt: %zu switch(es), %u warning(s), %u ms swing filter, %u ms blanking after a warning\n",
+               tiltAssist.switches.size(), tiltAssist.warnings, tiltAssist.debounceMs,
+               tiltAssist.warningBlankingMs);
+      }
+      if (ballSave.enabled)
+      {
+        printf("Ball save: %u ms, starting on %s\n", ballSave.durationMs,
+               BallSaveStartName(g_playfieldAssist.GetBallSaveConfig().startOn));
+      }
+    }
+  }
+
   if (opt_rom)
   {
     pPpuc->SetRom(opt_rom);
@@ -4377,7 +3619,16 @@ int main(int argc, char** argv)
     const std::filesystem::path gameFolder(opt_game_folder);
     if (opt_rules_enabled && !HasOptionValue(opt_rules))
     {
-      opt_rules = DuplicatePathString(gameFolder / "rules");
+      // Only when the folder is actually there. A ROM-less machine driven
+      // entirely by its emGame block is a supported configuration, and a game
+      // folder with no rules/ directory must not be a startup error. An
+      // explicitly given --rules that does not exist still is one.
+      std::error_code ec;
+      const std::filesystem::path rulesFolder = gameFolder / "rules";
+      if (std::filesystem::is_directory(rulesFolder, ec))
+      {
+        opt_rules = DuplicatePathString(rulesFolder);
+      }
     }
     if (!HasOptionValue(opt_altsound_folder) && HasOptionValue(opt_rom))
     {
@@ -4782,60 +4033,16 @@ int main(int argc, char** argv)
       return 1;
     }
 
-    if (!pLuaRulesEngine->LoadScripts(ruleScripts, error))
-    {
-      printf("%s: %s\n", error.c_str(), opt_rules);
-      return 1;
-    }
-
-    for (const std::string& ruleScript : ruleScripts)
-    {
-      printf("Loaded Lua rules from %s\n", ruleScript.c_str());
-    }
+    // Deliberately not loaded yet. `ppuc.game` and `ppuc.dmd` are registered
+    // when the Lua state is built, so the scripts cannot run until the engine
+    // exists -- a rules file that reads ppuc.game.switch("start") at load time
+    // would otherwise see nil.
+    g_ruleScripts = ruleScripts;
   }
 
-  PinmameConfig config = {
-      PINMAME_AUDIO_FORMAT_INT16,
-      44100,
-      "",
-      PINMAME_CALLBACK_CAST(PinmameOnStateUpdatedCallback, &OnStateUpdated),
-      PINMAME_CALLBACK_CAST(PinmameOnDisplayAvailableCallback, &OnDisplayAvailable),
-      PINMAME_CALLBACK_CAST(PinmameOnDisplayUpdatedCallback, &OnDisplayUpdated),
-      PINMAME_CALLBACK_CAST(PinmameOnAudioAvailableCallback, &OnAudioAvailable),
-      PINMAME_CALLBACK_CAST(PinmameOnAudioUpdatedCallback, &OnAudioUpdated),
-      PINMAME_CALLBACK_CAST(PinmameOnMechAvailableCallback, &OnMechAvailable),
-      PINMAME_CALLBACK_CAST(PinmameOnMechUpdatedCallback, &OnMechUpdated),
-      PINMAME_CALLBACK_CAST(PinmameOnSolenoidUpdatedCallback, &OnSolenoidUpdated),
-      PINMAME_CALLBACK_CAST(PinmameOnConsoleDataUpdatedCallback, &OnConsoleDataUpdated),
-      PINMAME_CALLBACK_CAST(PinmameIsKeyPressedFunction, &IsKeyPressed),
-      PINMAME_CALLBACK_CAST(PinmameOnLogMessageCallback, &OnLogMessage),
-      PINMAME_CALLBACK_CAST(PinmameOnSoundCommandCallback, &OnSoundCommand),
-  };
-
-#if defined(_WIN32) || defined(_WIN64)
-  if (opt_pinmame_path != nullptr)
-  {
-    snprintf((char*)config.vpmPath, PINMAME_MAX_PATH, "%s%s", opt_pinmame_path,
-             (opt_pinmame_path[0] != '\0' && opt_pinmame_path[strlen(opt_pinmame_path) - 1] != '\\' &&
-              opt_pinmame_path[strlen(opt_pinmame_path) - 1] != '/')
-                 ? "\\"
-                 : "");
-  }
-  else
-  {
-    snprintf((char*)config.vpmPath, PINMAME_MAX_PATH, "%s%s\\pinmame\\", getenv("HOMEDRIVE"), getenv("HOMEPATH"));
-  }
-#else
-  if (opt_pinmame_path != nullptr)
-  {
-    snprintf((char*)config.vpmPath, PINMAME_MAX_PATH, "%s%s", opt_pinmame_path,
-             (opt_pinmame_path[0] != '\0' && opt_pinmame_path[strlen(opt_pinmame_path) - 1] != '/') ? "/" : "");
-  }
-  else
-  {
-    snprintf((char*)config.vpmPath, PINMAME_MAX_PATH, "%s/.pinmame/", getenv("HOME"));
-  }
-#endif
+  // The engine owns the PinMAME configuration now; the host only needs the
+  // resolved PinMAME directory to locate the Serum altcolor folder.
+  const std::string vpmPath = ResolveVpmPath(opt_pinmame_path ? opt_pinmame_path : "");
 
   if (opt_backbox_address)
   {
@@ -4848,9 +4055,9 @@ int main(int argc, char** argv)
   {
     char altcolorPath[PINMAME_MAX_PATH + 10];
 #if defined(_WIN32) || defined(_WIN64)
-    snprintf(altcolorPath, PINMAME_MAX_PATH + 8, "%saltcolor", config.vpmPath);
+    snprintf(altcolorPath, PINMAME_MAX_PATH + 8, "%saltcolor", vpmPath.c_str());
 #else
-    snprintf(altcolorPath, PINMAME_MAX_PATH + 8, "%saltcolor", config.vpmPath);
+    snprintf(altcolorPath, PINMAME_MAX_PATH + 8, "%saltcolor", vpmPath.c_str());
 #endif
 
     dmdConfig->SetLogCallback(DMDUtilLogCallback);
@@ -4890,7 +4097,12 @@ int main(int argc, char** argv)
 
   pDmd = new DMDUtil::DMD();
   pDmd->SetRomName(opt_rom);
-  pDmd->FindDisplays();
+  if (!opt_no_display)
+  {
+    // Probes USB for ZeDMD and friends, and IsFinding() below blocks until it
+    // finishes. Skipping it is what makes a headless run possible.
+    pDmd->FindDisplays();
+  }
 
   if (opt_console_display)
   {
@@ -4966,7 +4178,7 @@ int main(int argc, char** argv)
 #endif
   }
 
-  while (pDmd->IsFinding()) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  while (!opt_no_display && pDmd->IsFinding()) std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
   if (!opt_no_serial && !pPpuc->Connect())
   {
@@ -4992,30 +4204,114 @@ int main(int argc, char** argv)
     return 1;
   }
 
-  PinmameSetConfig(&config);
+  PpucEngineHost engineHost;
+  std::unique_ptr<GameEngine> pEngine;
 
-  // TODO: Add support for PINMAME_DMD_MODE_BRIGHTNESS in the libdmdutil pipeline.
-  // For now, keep using RAW so monochrome DMD ROMs render correctly on ZeDMD and SDLDMD.
-  const PINMAME_DMD_MODE dmdMode = PINMAME_DMD_MODE_RAW;
-  PinmameSetDmdMode(dmdMode);
-  if (opt_altsound)
+  if (useScriptEngine)
   {
-    PinmameSetSoundMode(PINMAME_SOUND_MODE_ALTSOUND);
+    ScriptEngine::Options scriptOptions;
+    scriptOptions.gameId = opt_rom ? opt_rom : "";
+    scriptOptions.dmdWidth = opt_virtual_dmd_hd ? 256 : 128;
+    scriptOptions.dmdHeight = opt_virtual_dmd_hd ? 64 : 32;
+    scriptOptions.debug = opt_debug;
+
+    ScriptEngine::MachineIo machineIo;
+    // Routed through the interceptor rather than straight to libppuc, so a Lua
+    // rule can override a GameCore-driven output the same way it can override a
+    // PinMAME-driven one.
+    machineIo.pulseCoil = [](int number, uint32_t durationMs)
+    { g_interceptorOutputs.PulseCoil(pPpuc, number, durationMs); };
+    machineIo.setCoil = [](int number, uint8_t state)
+    { g_interceptorOutputs.ApplyEngineCoil(pPpuc, number, state); };
+    machineIo.setLamp = [](int number, uint8_t state)
+    { g_interceptorOutputs.ApplyEngineLamp(pPpuc, number, state); };
+    machineIo.setGi = [](int giString, uint8_t level) { pPpuc->SetGIState(giString, level); };
+    machineIo.setTiltInhibit = [](int number, uint8_t state)
+    {
+      // Only succeeds when the switch belongs to a board the host owns. On a
+      // machine without one, tilt still suppresses scoring; it just cannot drop
+      // a flipper the player is holding.
+      pPpuc->SetSwitchState(number, state);
+    };
+
+    auto scriptEngine = std::make_unique<ScriptEngine>(std::move(scriptOptions), g_gameConfig, std::move(machineIo));
+    // Lets the tilt decision reach GameCore. GameCore does not watch the bob
+    // itself; PlayfieldAssist counted the warnings and decided.
+    g_pGameCore = &scriptEngine->Game();
+
+    // Must precede LoadScripts: this is what makes ppuc.game and ppuc.dmd exist.
+    if (pLuaRulesEngine)
+    {
+      pLuaRulesEngine->SetGameCore(&scriptEngine->Game());
+      pLuaRulesEngine->SetDmdCanvas(&scriptEngine->Canvas());
+    }
+
+    // The game core asks the script for permission on a start or an add-player.
+    // An absent handler allows: credit policy is a rules decision, but having no
+    // rules must never make the machine unplayable.
+    scriptEngine->Game().SetAllowCallback(
+        [](const char* what, int arg) -> bool
+        {
+          if (pLuaRulesEngine == nullptr)
+          {
+            return true;
+          }
+          return pLuaRulesEngine->CallQueryHandler(what, {arg}, true);
+        });
+
+    scriptEngine->SetEventCallback([](const GameEvent& event) { DispatchGameEventToRules(event); });
+
+    // Rules draw on top of the built-in screen, on ticks that will actually
+    // flush, so ppuc.onDmdFrame runs at most ~30 times a second no matter what
+    // the author writes.
+    scriptEngine->SetDmdDrawCallback(
+        []()
+        {
+          if (pLuaRulesEngine != nullptr)
+          {
+            pLuaRulesEngine->CallGameHandler("onDmdFrame");
+          }
+        });
+
+    pEngine = std::move(scriptEngine);
   }
-  PinmameSetHandleKeyboard(0);
-  PinmameSetHandleMechanics(0);
+  else
+  {
+    PinmameEngineOptions engineOptions;
+    engineOptions.rom = opt_rom ? opt_rom : "";
+    engineOptions.pinmamePath = opt_pinmame_path ? opt_pinmame_path : "";
+    engineOptions.platform = pPpuc->GetPlatform();
+    engineOptions.gameOnSolenoid = pPpuc->GetGameOnSolenoid();
+    engineOptions.altsound = opt_altsound;
+    engineOptions.noSound = opt_no_sound;
+    engineOptions.debug = opt_debug;
+    engineOptions.debugCoils = opt_debug_coils;
+    engineOptions.debugSoundCommands = opt_debug_sound_commands;
+    engineOptions.debugErrors = opt_debug_errors;
+    pEngine = std::make_unique<PinmameEngine>(std::move(engineOptions));
+  }
 
-#if defined(_WIN32) || defined(_WIN64)
-  // Avoid compile error C2131. Use a larger constant value instead.
-  PinmameLampState changedLampStates[256];
-  PinmameGIState changedGIStates[8];
-#else
-  PinmameLampState changedLampStates[PinmameGetMaxLamps()];
-  PinmameGIState changedGIStates[PinmameGetMaxGIs()];
-#endif
-  std::vector<PinmameSoundCommand> soundCommands;
+  pEngine->SetHost(&engineHost);
 
-  if (PinmameRun(opt_rom) == PINMAME_STATUS_OK)
+  if (pLuaRulesEngine && !g_ruleScripts.empty())
+  {
+    std::string rulesError;
+    if (!pLuaRulesEngine->LoadScripts(g_ruleScripts, rulesError))
+    {
+      printf("%s: %s\n", rulesError.c_str(), opt_rules ? opt_rules : "(rules)");
+      return 1;
+    }
+    for (const std::string& ruleScript : g_ruleScripts)
+    {
+      printf("Loaded Lua rules from %s\n", ruleScript.c_str());
+    }
+  }
+
+  // Rules-injected switches go to whichever engine is running.
+  g_interceptorOutputs.sendSwitch = [&pEngine](int number, uint8_t state) { pEngine->SendSwitch(number, state); };
+
+  std::string engineError;
+  if (pEngine->Start(engineError))
   {
     // Setup signal handlers to allow graceful termination
     signal(SIGINT, signal_handler_graceful);
@@ -5024,16 +4320,11 @@ int main(int argc, char** argv)
     signal(SIGQUIT, signal_handler_graceful);
     signal(SIGABRT, signal_handler_graceful);
 
-    int index_recv = 0;
-    PINMAME_HARDWARE_GEN hardwareGen = static_cast<PINMAME_HARDWARE_GEN>(0);
-    bool loggedPinmameIdentity = false;
-    bool loggedTrackingConfig = false;
-    bool loggedMissingCurrentBallApi = false;
-    bool loggedMissingCurrentPlayerApi = false;
-    bool trackCurrentBall = false;
-    bool trackCurrentPlayer = false;
-    auto nextTrackedStatePollAt = std::chrono::steady_clock::time_point{};
-    PinmameTrackingConfig trackingConfig;
+    std::vector<GameEngineOutputChange> lampChanges;
+    std::vector<GameEngineOutputChange> giChanges;
+    GameEngine::Identity identity;
+    bool loggedIdentity = false;
+    const bool pollGis = pEngine->HasCapability(GameEngine::Capability::ChangedGis);
 
     ball_search_game_running.store(false, std::memory_order_release);
     pPpuc->StartUpdates();
@@ -5042,51 +4333,37 @@ int main(int argc, char** argv)
       pPpuc->SetSwitchState(pPpuc->GetCoinDoorClosedSwitch(), 1);
     }
 
+    const auto loopStartedAt = std::chrono::steady_clock::now();
+
     while (running)
     {
       std::this_thread::sleep_for(std::chrono::microseconds(MAIN_LOOP_SLEEP_US));
 
-      if (!loggedPinmameIdentity)
+      if (opt_exit_after_ms != 0 &&
+          std::chrono::steady_clock::now() - loopStartedAt >= std::chrono::milliseconds(opt_exit_after_ms))
       {
-        hardwareGen = PinmameGetHardwareGen();
-        if (hardwareGen != 0)
+        printf("Exiting after %u ms as requested.\n", opt_exit_after_ms);
+        running = false;
+        break;
+      }
+
+      if (!loggedIdentity && pEngine->TryGetIdentity(&identity))
+      {
+        printf("Game engine started: game=%s hardware=%s\n", identity.name.c_str(), identity.description.c_str());
+        if (pMediaPluginHost != nullptr)
         {
-          printf("PinMAME started: ROM=%s hardware=%s\n", opt_rom ? opt_rom : "(null)",
-                 DescribeHardwareGen(hardwareGen).c_str());
-          if (pMediaPluginHost != nullptr)
-          {
-            pMediaPluginHost->SetGameInfo(opt_rom, static_cast<uint64_t>(hardwareGen));
-            pMediaPluginHost->OnGameStart();
-          }
-          loggedPinmameIdentity = true;
+          pMediaPluginHost->SetGameInfo(identity.name.c_str(), identity.hardwareGen);
+          pMediaPluginHost->OnGameStart();
         }
+        loggedIdentity = true;
       }
 
-      if (loggedPinmameIdentity && !trackingConfig.attemptedLoad)
-      {
-        std::string trackingError;
-        trackingConfig.attemptedLoad = true;
-        if (!TryLoadPinmameTrackingConfig(opt_rom, hardwareGen, &trackingConfig, &trackingError))
-        {
-          if ((opt_debug || opt_debug_errors) && !trackingError.empty())
-          {
-            printf("PinMAME tracking map unavailable for ROM=%s: %s\n", opt_rom ? opt_rom : "(null)",
-                   trackingError.c_str());
-          }
-        }
+      // Runs in both loop phases, before the readiness gate: the engine has its
+      // own startup work (identity, tracking-map load) that must proceed while
+      // the host is still waiting for it to come up.
+      pEngine->Update();
 
-        trackCurrentBall = pLuaRulesEngine != nullptr && trackingConfig.currentBall.available;
-        trackCurrentPlayer = pLuaRulesEngine != nullptr && trackingConfig.currentPlayer.available;
-        nextTrackedStatePollAt = std::chrono::steady_clock::now();
-      }
-
-      if ((opt_debug || opt_debug_errors) && trackingConfig.loaded && !loggedTrackingConfig)
-      {
-        printf("PinMAME tracking map loaded: %s\n", trackingConfig.mapPath.c_str());
-        loggedTrackingConfig = true;
-      }
-
-      if (game_state.load(std::memory_order_acquire) == 0)
+      if (!pEngine->IsReady())
       {
         if (pLuaRulesEngine)
         {
@@ -5098,47 +4375,11 @@ int main(int argc, char** argv)
           }
         }
         g_interceptorOutputs.Service(pPpuc);
-        PollPinmameSoundCommands(soundCommands);
         if (pMediaPluginHost != nullptr)
         {
           pMediaPluginHost->Process();
         }
         continue;
-      }
-
-      const auto now = std::chrono::steady_clock::now();
-      PollPinmameSoundCommands(soundCommands);
-      if ((trackCurrentBall || trackCurrentPlayer) && now >= nextTrackedStatePollAt)
-      {
-        nextTrackedStatePollAt = now + kPinmameTrackedStatePollInterval;
-
-        if (trackCurrentBall)
-        {
-          uint8_t currentBall = 0;
-          if (TryDecodeTrackedPinmameValue(trackingConfig.currentBall, &currentBall))
-          {
-            pLuaRulesEngine->SetCurrentBall(currentBall);
-          }
-          else if (!loggedMissingCurrentBallApi && (opt_debug || opt_debug_errors))
-          {
-            printf("Current-ball tracking unavailable: libpinmame does not expose raw memory access.\n");
-            loggedMissingCurrentBallApi = true;
-          }
-        }
-
-        if (trackCurrentPlayer)
-        {
-          uint8_t currentPlayer = 0;
-          if (TryDecodeTrackedPinmameValue(trackingConfig.currentPlayer, &currentPlayer))
-          {
-            pLuaRulesEngine->SetCurrentPlayer(currentPlayer);
-          }
-          else if (!loggedMissingCurrentPlayerApi && (opt_debug || opt_debug_errors))
-          {
-            printf("Current-player tracking unavailable: libpinmame does not expose raw memory access.\n");
-            loggedMissingCurrentPlayerApi = true;
-          }
-        }
       }
 
       PPUCSwitchState* switchState;
@@ -5147,6 +4388,14 @@ int main(int argc, char** argv)
         const uint8_t newSwitchState = switchState->state == 0 ? 0 : 1;
         NoteBallSearchSwitchUpdate(pPpuc, ballSearchRunner, switchState->number, newSwitchState,
                                    opt_ball_search_delay_ms);
+
+        // Tilt warnings and ball save decide first: a warning hit and a saved
+        // drain must never reach the engine at all, under either engine.
+        PlayfieldAssist::SwitchDecision assistDecision;
+        if (g_playfieldAssistEnabled)
+        {
+          assistDecision = g_playfieldAssist.ProcessSwitch(switchState->number, newSwitchState);
+        }
 
         LuaRulesEngine::SwitchProcessResult switchProcess;
         if (pLuaRulesEngine)
@@ -5161,9 +4410,10 @@ int main(int argc, char** argv)
 
         // Switches between 200 and 240 are custom switches within the io-boards which should not be sent to
         // pinmame. Switches above 240 will become negative values, for example 243 => -3.
-        if (switchProcess.forwardToCpu && (switchState->number < 200 || switchState->number > 241))
+        if (assistDecision.forwardToEngine && switchProcess.forwardToCpu &&
+            (switchState->number < 200 || switchState->number > 241))
         {
-          SendSwitchToCpu(switchState->number, newSwitchState);
+          pEngine->SendSwitch(switchState->number, newSwitchState);
         }
 
         if (opt_debug || opt_debug_switches)
@@ -5183,11 +4433,11 @@ int main(int argc, char** argv)
                               ball_search_game_running.load(std::memory_order_acquire),
                               opt_ball_search_delay_ms, opt_ball_search_round_delay_ms);
 
-      int count = PinmameGetChangedLamps(changedLampStates);
-      for (int c = 0; c < count; c++)
+      pEngine->PollChangedLamps(lampChanges);
+      for (const GameEngineOutputChange& change : lampChanges)
       {
-        uint16_t lampNo = changedLampStates[c].lampNo;
-        uint8_t lampState = changedLampStates[c].state == 0 ? 0 : 1;
+        const uint16_t lampNo = change.number;
+        const uint8_t lampState = change.value == 0 ? 0 : 1;
 
         if (opt_debug || opt_debug_lamps)
         {
@@ -5199,7 +4449,7 @@ int main(int argc, char** argv)
           pMediaPluginHost->QueueEvent('L', lampNo, lampState);
         }
 
-        g_interceptorOutputs.ApplyPinmameLamp(pPpuc, static_cast<int>(lampNo), lampState);
+        g_interceptorOutputs.ApplyEngineLamp(pPpuc, static_cast<int>(lampNo), lampState);
 
         if (pLuaRulesEngine)
         {
@@ -5212,13 +4462,13 @@ int main(int argc, char** argv)
         }
       }
 
-      if (pPpuc->GetPlatform() == PLATFORM_WPC)
+      if (pollGis)
       {
-        count = PinmameGetChangedGIs(changedGIStates);
-        for (int c = 0; c < count; c++)
+        pEngine->PollChangedGis(giChanges);
+        for (const GameEngineOutputChange& change : giChanges)
         {
-          const uint8_t giNo = static_cast<uint8_t>(changedGIStates[c].giNo);
-          const uint8_t giState = static_cast<uint8_t>(changedGIStates[c].state);
+          const uint8_t giNo = static_cast<uint8_t>(change.number);
+          const uint8_t giState = static_cast<uint8_t>(change.value);
 
           if (opt_debug || opt_debug_lamps)
           {
@@ -5243,6 +4493,7 @@ int main(int argc, char** argv)
           running = false;
         }
       }
+      ServicePlayfieldAssist(pEngine.get());
       g_interceptorOutputs.Service(pPpuc);
 
       if (pMediaPluginHost != nullptr)
@@ -5316,11 +4567,11 @@ int main(int argc, char** argv)
                 break;
               case 53:  // 5
                 // Coin Right on Williams Flash
-                PinmameSetSwitch(4, 1);
+                pEngine->SendSwitch(4, 1);
                 break;
               case 13:  // Enter
                 // Game Start on Williams Flash
-                PinmameSetSwitch(3, 1);
+                pEngine->SendSwitch(3, 1);
                 break;
             }
             break;
@@ -5344,9 +4595,16 @@ int main(int argc, char** argv)
       _Exit(0);
     }
 
+    // Stop the engine first: Stop() joins the engine's thread, which is what
+    // guarantees no output sink fires into a stopped updater or a disconnected
+    // bus during teardown.
+    pEngine->Stop();
     CancelActiveBallSearch(pPpuc, ballSearchRunner);
     pPpuc->StopUpdates();
-    PinmameStop();
+  }
+  else
+  {
+    printf("%s\n", engineError.c_str());
   }
 
   if (!opt_no_serial)

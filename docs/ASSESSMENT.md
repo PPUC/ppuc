@@ -46,7 +46,9 @@ Several core decisions are genuinely good, and some were not obvious:
   and wish you luck.
 
 **What is missing is not architecture. It is the ability to change safely.**
-There are no automated tests anywhere in the stack, no coil-safety validators,
+There were no automated tests anywhere in the stack when this was written (there
+are now: doctest suites in `ppuc` and `libppuc`, Unity tests in `io-boards`), no
+coil-safety validators,
 and one confirmed latent gap (§4.2) that modern titles will expose. The
 project's quality currently rests on one person's domain experience. That is
 precisely why it works — and it is also the thing that does not scale to more
@@ -284,7 +286,10 @@ one given the goal of growing a homebrew community.
 
 ## 4. What is genuinely weak
 
-**Zero automated tests.** Not sparse — zero, across six repositories, ~20k
+**Zero automated tests** at the time of writing. This has since been addressed:
+`ppuc/tests/` and `libppuc/tests/` run under doctest and `io-boards/test/` under
+Unity, all three in CI. The assessment below describes the state that motivated
+them. Originally: not sparse — zero, across six repositories, ~20k
 lines of C++ and a Drupal site, for software that fires solenoids next to a
 standing human. The fast-flip logic in particular — the one component
 explicitly documented as preventing hardware damage — has nothing asserting
