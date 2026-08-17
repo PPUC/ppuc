@@ -40,6 +40,65 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: ./tools/check-pins.sh --no-color --strict
 
+  schema-drift:
+    name: Schema drift across the stack
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: ppuc
+
+      # Both checks compare things that live in different repositories, which is
+      # why they run here rather than in libppuc: ppuc is the top of the build
+      # graph and the only place that legitimately knows about all of them.
+      # libppuc sits below ppuc and has no business cloning game exports.
+      #
+      # libppuc comes from the pin rather than from main, so this job only
+      # changes behaviour when someone bumps LIBPPUC_SHA -- deliberately, and
+      # visibly in the diff.
+      - name: Fetch libppuc at the pinned revision
+        run: |
+          LIBPPUC_SHA=$(grep -oE '^LIBPPUC_SHA=.*' ppuc/platforms/config.sh | cut -d= -f2)
+          if [ -z "${LIBPPUC_SHA}" ]; then
+            echo "::error::could not read LIBPPUC_SHA from platforms/config.sh"
+            exit 1
+          fi
+          echo "libppuc ${LIBPPUC_SHA}"
+          git clone --filter=blob:none https://github.com/PPUC/libppuc.git libppuc
+          git -C libppuc checkout --detach "${LIBPPUC_SHA}"
+
+      - name: Fetch the exported games and the exporter
+        # Public repositories, no token needed. Unpinned on purpose: the point of
+        # both checks is to notice when one of these moves.
+        run: |
+          git clone --depth 1 https://github.com/mkalkbrenner/ppuc_games.git ppuc_games
+          git clone --depth 1 https://github.com/PPUC/config-tool.git config-tool
+
+      # The hardware schema: libppuc's validator against what config-tool
+      # actually produces. Strict, because both sides are pinned or published.
+      - name: Hardware schema drift
+        run: |
+          EXPORTS=$(find ppuc_games -name '*.yml' -o -name '*.yaml' | sort)
+          if [ -z "${EXPORTS}" ]; then
+            echo "::error::no exported games found; the check would pass vacuously"
+            exit 1
+          fi
+          echo "${EXPORTS}"
+          python3 libppuc/tools/check-schema-drift.py ${EXPORTS}
+
+      # The GameCore schema: ppuc's parser against config-tool's exporter.
+      # Deliberately NOT strict. config-tool's main branch moves independently,
+      # so a pull request here that adds a parser key is legitimately ahead of
+      # the exporter until that side merges. A job that went red for it would be
+      # red through every coordinated change and ignored by the time it mattered.
+      - name: GameCore schema drift (report only)
+        run: |
+          python3 ppuc/tools/check-gamecore-drift.py \
+            --ppuc ppuc --config-tool config-tool | tee drift.txt
+          if grep -q DRIFT drift.txt; then
+            echo "::warning::GameCore schema drift between ppuc and config-tool; see the log"
+          fi
+
   build:
     name: Build ppuc-${{ matrix.platform }}-${{ matrix.arch }}
     runs-on: ${{ matrix.os }}

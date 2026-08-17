@@ -413,12 +413,22 @@ Blockly gains two toolbox categories, *Game (ROM-less)* and *Display*, for the
 
 The schema lives in two repositories that cannot see each other: the exporter in
 `config-tool` writes it, and `ppuc-pinmame` reads it. A key added to one and not
-the other fails silently. `libppuc/tools/check-gamecore-drift.py` compares the
-two and runs in libppuc CI:
+the other fails silently. `ppuc/tools/check-gamecore-drift.py` compares the two:
 
 ```
-python3 libppuc/tools/check-gamecore-drift.py --strict
+python3 tools/check-gamecore-drift.py --config-tool ../config-tool --strict
 ```
+
+It lives in `ppuc` rather than in `libppuc` because libppuc sits *below* ppuc in
+the stack and knows nothing about either side of this schema — the parser is
+ppuc's own source, and the exporter belongs to config-tool.
+
+ppuc CI runs it **report-only**, and deliberately so. config-tool's main branch
+moves independently, so a pull request here that adds a parser key is
+legitimately ahead of the exporter until that side merges; a job that failed for
+it would be red through every coordinated change and ignored by the time it
+mattered. Use `--strict` locally, and when closing out a change that touches
+both sides.
 
 ## Current limits
 

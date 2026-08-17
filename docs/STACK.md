@@ -284,6 +284,20 @@ dual-winding coil with an EOS contact.
 
 ## 6. Cross-Repo Change Guide
 
+Two schema checks live in `ppuc/tools/` rather than in the repository whose
+schema they cover, because they compare things that live in different
+repositories and `ppuc` is the only layer that legitimately knows about all of
+them:
+
+- `check-pins.sh` — the SHA pin chain.
+- `check-gamecore-drift.py` — ppuc's `emGame`/`tilt`/`ballSave` parser against
+  config-tool's exporter.
+
+`libppuc/tools/check-schema-drift.py` still owns the hardware schema, but is run
+from ppuc CI against libppuc at the pinned revision. libppuc's own CI is
+self-contained and clones nothing: a layer below ppuc has no business fetching
+game exports or the exporter.
+
 | Change | Repos to touch |
 |--------|----------------|
 | CLI option, INI key, media/presentation, rules API | `ppuc` (+ `config-tool` if it should be exported) |
