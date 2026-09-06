@@ -29,6 +29,10 @@ The stack is six independent repositories:
 
 Companion documents in this directory:
 
+- [`PLUGIN_MIGRATION.md`](PLUGIN_MIGRATION.md) — **in progress**: moving PPUC
+  onto the VPX pinball plugin bus. Replaces libpinmame with PinMAME-as-a-plugin,
+  makes PPUC a CTLPI provider, and decomposes the DMD stack into plugins. Also
+  carries the upstream PR set for `vpinball` / `libdmdutil` / `libzedmd`.
 - [`ASSESSMENT.md`](ASSESSMENT.md) — independent architecture review, current
   state, and prioritized stabilization backlog.
 - [`STABILIZATION_PLAN.md`](STABILIZATION_PLAN.md) — proposed work plan for
@@ -58,7 +62,7 @@ repository root.
         v
   ┌───────────────────────────── PC / SBC ─────────────────────────────┐
   │  ppuc-pinmame                                                      │
-  │    libpinmame  ── ROM emulation, event/delta callbacks             │
+  │    GameEngine ── PinmameEngine (libpinmame) | ScriptEngine (EM)    │
   │    LuaRulesEngine ── game rules, interceptor, callouts             │
   │    MediaPluginHost ── VPX plugins: PUP, B2S, AltSound              │
   │    libdmdutil + libsdldmd ── DMD, AltColor/Serum, translite        │
@@ -109,8 +113,16 @@ bandwidth than an idle playfield.
 ### `ppuc` — applications
 
 - `src/ppuc.cpp` (~5k lines): main entry point. CLI parsing (`cargs`), INI and
-  game-folder resolution, PinMAME callbacks, runtime loop, bench test modes,
-  ball search, switch refresh, DMD/translite setup.
+  game-folder resolution, the `GameEngineHost` fan-out, runtime loop, bench
+  test modes, ball search, switch refresh, DMD/translite setup.
+- `src/GameEngine.h`: the engine seam. `GameEngine` (start/stop/update/poll/
+  send-switch) and the `GameEngineHost` sink that everything else hangs off.
+  Depends on nothing but the standard library, which is what lets `ppuc_tests`
+  link engine-facing code.
+- `src/PinmameEngine.*`: `GameEngine` over libpinmame. **Being replaced** by a
+  plugin-based engine — see `docs/PLUGIN_MIGRATION.md`.
+- `src/ScriptEngine.*` + `src/game/`: the ROM-less engine for electro-mechanical
+  machines, driven by config and Lua rules.
 - `src/LuaRulesEngine.*`: embedded Lua 5.4 rules engine (`ppuc.*` namespace).
 - `src/MediaPluginHost.*`: hosts VPX message plugins (PUP, B2S, AltSound) via
   `MsgPluginManager` from the vpinball plugin SDK.

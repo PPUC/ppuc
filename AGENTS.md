@@ -45,8 +45,16 @@ Repository-local reference documentation:
 ## Source Layout
 
 - `src/ppuc.cpp` (~5k lines): main entry point. CLI parsing (`cargs`), INI and
-  game-folder resolution, PinMAME callbacks, runtime loop, bench test modes,
-  ball search, switch refresh, DMD/translite setup, backbox server.
+  game-folder resolution, the `GameEngineHost` fan-out, runtime loop, bench
+  test modes, ball search, switch refresh, DMD/translite setup, backbox server.
+- `src/GameEngine.h`: the engine seam. `GameEngine` (start/stop/update/poll/
+  send-switch) and the `GameEngineHost` sink that everything else hangs off.
+  Depends on nothing but the standard library, which is what lets `ppuc_tests`
+  link engine-facing code.
+- `src/PinmameEngine.*`: `GameEngine` over libpinmame. **Being replaced** by a
+  plugin-based engine — see `docs/PLUGIN_MIGRATION.md`.
+- `src/ScriptEngine.*` + `src/game/`: the ROM-less engine for electro-mechanical
+  machines, driven by config and Lua rules.
 - `src/LuaRulesEngine.*`: embedded Lua 5.4 rules engine exposing the `ppuc`
   namespace.
 - `src/MediaPluginHost.*` (~2k lines): hosts VPX message plugins (PUP, B2S,
