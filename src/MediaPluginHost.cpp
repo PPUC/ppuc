@@ -1,5 +1,7 @@
 #include "MediaPluginHost.h"
 
+#include "ScriptObject.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -538,9 +540,6 @@ private:
                         MsgSettingDef* settingDef);
   bool EnsureB2SServer();
   void ReleaseB2SServer();
-  std::optional<unsigned int> FindScriptMember(
-      const ScriptClassDef* classDef, const char* name,
-      std::initializer_list<const char*> argTypes) const;
   bool CallB2SMember(const char* name, std::initializer_list<const char*> argTypes,
                      ScriptVariant* args);
   void DispatchB2SEvent(const PUPQueueEventMsg& event);
@@ -594,8 +593,7 @@ private:
   uint32_t nextAudioResId_ = 1;
   std::unordered_map<std::string, ScriptClassDef*> scriptClasses_;
   std::unordered_map<std::string, const ScriptClassDef*> comOverrides_;
-  const ScriptClassDef* b2sServerClass_ = nullptr;
-  void* b2sServer_ = nullptr;
+  ScriptObject b2sServer_;
 
   static Impl* instance_;
   static LoggingPluginAPI loggingApi_;
@@ -1629,7 +1627,7 @@ bool MediaPluginHost::Impl::EnsureB2SServer()
   {
     return false;
   }
-  if (b2sServer_ != nullptr)
+  if (b2sServer_.IsValid())
   {
     return true;
   }
@@ -1646,89 +1644,21 @@ bool MediaPluginHost::Impl::EnsureB2SServer()
     return false;
   }
 
-  b2sServerClass_ = it->second;
-  b2sServer_ = b2sServerClass_->CreateObject();
-  if (b2sServer_ == nullptr)
+  if (!b2sServer_.Create(it->second))
   {
     std::printf("B2S server object creation failed\n");
-    b2sServerClass_ = nullptr;
     return false;
   }
   return true;
 }
 
-void MediaPluginHost::Impl::ReleaseB2SServer()
-{
-  if (b2sServer_ == nullptr || b2sServerClass_ == nullptr)
-  {
-    b2sServer_ = nullptr;
-    b2sServerClass_ = nullptr;
-    return;
-  }
-
-  if (auto member = FindScriptMember(b2sServerClass_, "Release", {}))
-  {
-    b2sServerClass_->members[*member].Call(b2sServer_, static_cast<int>(*member),
-                                           nullptr, nullptr);
-  }
-  b2sServer_ = nullptr;
-  b2sServerClass_ = nullptr;
-}
-
-std::optional<unsigned int> MediaPluginHost::Impl::FindScriptMember(
-    const ScriptClassDef* classDef, const char* name,
-    std::initializer_list<const char*> argTypes) const
-{
-  if (classDef == nullptr || name == nullptr)
-  {
-    return std::nullopt;
-  }
-  for (unsigned int i = 0; i < classDef->nMembers; ++i)
-  {
-    const ScriptClassMemberDef& member = classDef->members[i];
-    if (member.name.name == nullptr || std::strcmp(member.name.name, name) != 0 ||
-        member.nArgs != argTypes.size() || member.Call == nullptr)
-    {
-      continue;
-    }
-
-    bool argsMatch = true;
-    unsigned int argIndex = 0;
-    for (const char* expectedType : argTypes)
-    {
-      const char* actualType = member.callArgType[argIndex].name;
-      if (expectedType == nullptr || actualType == nullptr ||
-          std::strcmp(actualType, expectedType) != 0)
-      {
-        argsMatch = false;
-        break;
-      }
-      ++argIndex;
-    }
-    if (argsMatch)
-    {
-      return i;
-    }
-  }
-  return std::nullopt;
-}
+void MediaPluginHost::Impl::ReleaseB2SServer() { b2sServer_.Release(); }
 
 bool MediaPluginHost::Impl::CallB2SMember(
     const char* name, std::initializer_list<const char*> argTypes,
     ScriptVariant* args)
 {
-  if (!EnsureB2SServer())
-  {
-    return false;
-  }
-  auto member = FindScriptMember(b2sServerClass_, name, argTypes);
-  if (!member)
-  {
-    return false;
-  }
-  b2sServerClass_->members[*member].Call(b2sServer_, static_cast<int>(*member),
-                                         args, nullptr);
-  return true;
+  return EnsureB2SServer() && b2sServer_.Call(name, argTypes, args);
 }
 
 void MediaPluginHost::Impl::DispatchB2SEvent(const PUPQueueEventMsg& event)

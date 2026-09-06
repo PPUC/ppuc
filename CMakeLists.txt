@@ -252,11 +252,13 @@ if(NOT (PLATFORM STREQUAL "win" OR PLATFORM STREQUAL "win-mingw"))
 endif()
 
 add_executable(ppuc-pinmame
+   src/AudioMixer.cpp
    src/AudioOutput.cpp
    src/Uf2Image.cpp
    src/LuaGameApi.cpp
    src/LuaRulesEngine.cpp
    src/MediaPluginHost.cpp
+   src/ScriptObject.cpp
    src/PinmameEngine.cpp
    src/PinmameNvramMapLoader.cpp
    src/PinmameNvramTracking.cpp
@@ -513,6 +515,7 @@ endif()
 
 if(PPUC_BUILD_MENU)
 add_executable(ppuc-menu
+   src/AudioMixer.cpp
    src/AudioOutput.cpp
    src/menu.cpp
    src/SpeechCliSupport.cpp
@@ -685,15 +688,16 @@ if(PPUC_BUILD_TESTS)
    # reader, while map loading lives in PinmameNvramMapLoader.cpp and is not
    # part of this target.
    add_executable(ppuc_tests
+      src/AudioMixer.cpp
       src/LuaGameApi.cpp
-   src/LuaRulesEngine.cpp
+      src/LuaRulesEngine.cpp
       src/PinmameNvramTracking.cpp
+      src/ScriptObject.cpp
       src/Uf2Image.cpp
       src/dmd/DmdCanvas.cpp
       src/dmd/DmdDefaultScreen.cpp
       src/dmd/DmdRenderer.cpp
       src/game/GameCore.cpp
-   src/game/PlayfieldAssist.cpp
       src/game/PlayfieldAssist.cpp
       ${PPUC_LUA_SOURCES}
       tests/main.cpp
@@ -708,6 +712,8 @@ if(PPUC_BUILD_TESTS)
       tests/test_lua_rules_engine.cpp
       tests/test_lua_rules_timing.cpp
       tests/test_pinmame_nvram_tracking.cpp
+      tests/test_audio_mixer.cpp
+      tests/test_script_object.cpp
       tests/test_uf2_image.cpp
    )
 
