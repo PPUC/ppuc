@@ -10,6 +10,8 @@
 
 #include "SDL3/SDL.h"
 
+#include "AudioMixer.h"
+
 #if defined(PPUC_HAS_SDL3_MIXER)
 struct MIX_Audio;
 struct MIX_Mixer;
@@ -38,13 +40,6 @@ public:
   void QueueSpeechSamples(const int16_t* samples, size_t sampleCount,
                          int frequency, int channels);
 
-private:
-  struct PendingBuffer
-  {
-    std::vector<int16_t> samples;
-    size_t offsetSamples = 0;
-  };
-
 public:
   struct MusicTrack
   {
@@ -65,11 +60,9 @@ private:
 #endif
 
   void EnsureStreamLocked(const SDL_AudioSpec& spec);
-  void QueueSamplesLocked(std::deque<PendingBuffer>& queue,
-                          const int16_t* samples, size_t sampleCount,
-                          int frequency, int channels);
-  bool MixQueueLocked(std::deque<PendingBuffer>& queue,
-                      int16_t* mixBuffer, size_t sampleCount);
+  // Converts to the device format if needed, then hands off to AudioMixer.
+  void QueueSamplesLocked(AudioMixer::Queue& queue, const int16_t* samples,
+                          size_t sampleCount, int frequency, int channels);
   void MixMusicLocked(int16_t* mixBuffer, size_t sampleCount,
                       bool duckToBackground);
 #if defined(PPUC_HAS_SDL3_MIXER)
@@ -91,9 +84,9 @@ private:
   };
   int gameFrequency_ = 48000;
   int gameChannels_ = 2;
-  std::deque<PendingBuffer> gameQueue_;
-  std::unordered_map<uint64_t, std::deque<PendingBuffer>> pluginQueues_;
-  std::deque<PendingBuffer> speechQueue_;
+  AudioMixer::Queue gameQueue_;
+  std::unordered_map<uint64_t, AudioMixer::Queue> pluginQueues_;
+  AudioMixer::Queue speechQueue_;
   std::vector<MusicTrack> musicTracks_;
 #if defined(PPUC_HAS_SDL3_MIXER)
   MIX_Mixer* musicMixer_ = nullptr;

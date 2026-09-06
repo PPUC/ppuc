@@ -2,8 +2,9 @@
 
 #include <algorithm>
 #include <cmath>
-#include <limits>
 #include <sstream>
+
+#include "AudioMixer.h"
 
 #if defined(PPUC_HAS_SDL3_MIXER)
 #include "SDL3_mixer/SDL_mixer.h"
@@ -11,23 +12,10 @@
 
 namespace
 {
-constexpr size_t kMaxBufferedSamples = 22050 * 30;
 constexpr float kMusicBaseGain = 0.28f;
 constexpr float kMusicDuckGain = 0.08f;
 constexpr float kMusicAttackPerSample = 0.00012f;
 constexpr float kMusicReleasePerSample = 0.00003f;
-static int16_t ClampMixedSample(int value)
-{
-  if (value > std::numeric_limits<int16_t>::max())
-  {
-    return std::numeric_limits<int16_t>::max();
-  }
-  if (value < std::numeric_limits<int16_t>::min())
-  {
-    return std::numeric_limits<int16_t>::min();
-  }
-  return static_cast<int16_t>(value);
-}
 
 std::string Trim(const std::string& input)
 {
@@ -274,14 +262,14 @@ void SDLCALL AudioOutput::OnDeviceNeedsAudio(void* userdata,
 
   {
     std::lock_guard<std::mutex> lock(self->mutex_);
-    const bool gameActive = self->MixQueueLocked(self->gameQueue_, mixBuffer.data(), sampleCount);
+    const bool gameActive = AudioMixer::Mix(self->gameQueue_, mixBuffer.data(), sampleCount);
     bool pluginActive = false;
     for (auto it = self->pluginQueues_.begin();
          it != self->pluginQueues_.end();)
     {
-      pluginActive = self->MixQueueLocked(it->second, mixBuffer.data(),
-                                          sampleCount) ||
-                     pluginActive;
+      pluginActive =
+          AudioMixer::Mix(it->second, mixBuffer.data(), sampleCount) ||
+          pluginActive;
       if (it->second.empty())
       {
         it = self->pluginQueues_.erase(it);
@@ -291,7 +279,7 @@ void SDLCALL AudioOutput::OnDeviceNeedsAudio(void* userdata,
         ++it;
       }
     }
-    const bool speechActive = self->MixQueueLocked(self->speechQueue_, mixBuffer.data(), sampleCount);
+    const bool speechActive = AudioMixer::Mix(self->speechQueue_, mixBuffer.data(), sampleCount);
     self->MixMusicLocked(mixBuffer.data(), sampleCount, gameActive || pluginActive || speechActive);
   }
 
@@ -323,7 +311,7 @@ void AudioOutput::EnsureStreamLocked(const SDL_AudioSpec& spec)
   }
 }
 
-void AudioOutput::QueueSamplesLocked(std::deque<PendingBuffer>& queue,
+void AudioOutput::QueueSamplesLocked(AudioMixer::Queue& queue,
                                      const int16_t* samples,
                                      size_t sampleCount, int frequency,
                                      int channels)
@@ -337,13 +325,13 @@ void AudioOutput::QueueSamplesLocked(std::deque<PendingBuffer>& queue,
     }
   }
 
-  PendingBuffer pending;
+  std::vector<int16_t> converted;
   const bool requiresConversion = frequency != deviceSpec_.freq ||
                                   channels != deviceSpec_.channels;
 
   if (!requiresConversion)
   {
-    pending.samples.assign(samples, samples + sampleCount);
+    converted.assign(samples, samples + sampleCount);
   }
   else
   {
@@ -367,63 +355,12 @@ void AudioOutput::QueueSamplesLocked(std::deque<PendingBuffer>& queue,
         reinterpret_cast<const int16_t*>(convertedData);
     const size_t convertedSampleCount =
         static_cast<size_t>(convertedLength) / sizeof(int16_t);
-    pending.samples.assign(convertedSamples,
-                           convertedSamples + convertedSampleCount);
+    converted.assign(convertedSamples,
+                     convertedSamples + convertedSampleCount);
     SDL_free(convertedData);
   }
 
-  if (pending.samples.empty())
-  {
-    return;
-  }
-
-  queue.push_back(std::move(pending));
-
-  size_t bufferedSamples = 0;
-  for (const auto& entry : queue)
-  {
-    bufferedSamples += entry.samples.size() - entry.offsetSamples;
-  }
-  while (bufferedSamples > kMaxBufferedSamples && !queue.empty())
-  {
-    bufferedSamples -= queue.front().samples.size() - queue.front().offsetSamples;
-    queue.pop_front();
-  }
-}
-
-bool AudioOutput::MixQueueLocked(std::deque<PendingBuffer>& queue,
-                                 int16_t* mixBuffer, size_t sampleCount)
-{
-  size_t mixedSamples = 0;
-  bool hadAudibleSamples = false;
-  while (mixedSamples < sampleCount && !queue.empty())
-  {
-    PendingBuffer& front = queue.front();
-    const size_t availableSamples = front.samples.size() - front.offsetSamples;
-    const size_t chunkSamples =
-        std::min(sampleCount - mixedSamples, availableSamples);
-
-    for (size_t i = 0; i < chunkSamples; ++i)
-    {
-      const int16_t sample = front.samples[front.offsetSamples + i];
-      if (!hadAudibleSamples && std::abs(static_cast<int>(sample)) >= 512)
-      {
-        hadAudibleSamples = true;
-      }
-      const int mixedValue = static_cast<int>(mixBuffer[mixedSamples + i]) +
-                             static_cast<int>(sample);
-      mixBuffer[mixedSamples + i] = ClampMixedSample(mixedValue);
-    }
-
-    mixedSamples += chunkSamples;
-    front.offsetSamples += chunkSamples;
-    if (front.offsetSamples >= front.samples.size())
-    {
-      queue.pop_front();
-    }
-  }
-
-  return hadAudibleSamples;
+  AudioMixer::Enqueue(queue, std::move(converted));
 }
 
 void AudioOutput::MixMusicLocked(int16_t* mixBuffer, size_t sampleCount,
@@ -494,7 +431,7 @@ void AudioOutput::MixMusicLocked(int16_t* mixBuffer, size_t sampleCount,
     const int16_t sample = musicBuffer[i];
     const int mixedValue =
         static_cast<int>(mixBuffer[i]) + static_cast<int>(std::lround(static_cast<float>(sample) * musicGain_));
-    mixBuffer[i] = ClampMixedSample(mixedValue);
+    mixBuffer[i] = AudioMixer::ClampSample(mixedValue);
 #endif
   }
 }
