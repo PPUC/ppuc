@@ -4015,12 +4015,21 @@ int main(int argc, char** argv)
             return;
           }
 
+          // Fan out, do not branch. These are two different sinks, not two
+          // ways of reaching one: QueueEvent feeds the PUP plugin (video
+          // playback), while DMD::SetPUPTrigger feeds libserum's scene
+          // generator via Serum_Scene_Trigger. A game can legitimately use
+          // both -- Flash ships flash_l1.pup.csv *and* flash_l1.cROMc -- and
+          // an `else if` here silently dropped every Serum scene trigger
+          // whenever --pup, --altsound or --b2s was enabled.
           if (pMediaPluginHost)
           {
             pMediaPluginHost->QueueEvent(source, id, value);
           }
-          else if (pDmd)
+          if (pDmd)
           {
+            // No-ops unless Serum is loaded and this is a 'D' press; the
+            // 50000..62000 scene-id window is enforced inside libdmdutil.
             pDmd->SetPUPTrigger(source, id, value);
           }
         });
