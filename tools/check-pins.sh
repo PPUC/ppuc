@@ -13,6 +13,7 @@
 #
 # Usage:
 #   tools/check-pins.sh [--workspace DIR] [--offline] [--no-color]
+#                       [--branch NAME]
 #
 #   --workspace DIR  where sibling checkouts live (default: parent of this repo)
 #   --offline        skip all network access; verify only against local clones
@@ -20,6 +21,17 @@
 #   --strict         also fail when a pin could not be verified at all, rather
 #                    than reporting it as unverified and exiting 0. For CI,
 #                    where "could not check" must not read as "checked".
+#   --branch NAME    also accept pins reachable from a branch of this name, for
+#                    a change spanning several repositories. Defaults to the
+#                    branch this repository is on, so a coordinated feature
+#                    branch works without being asked for. Pass the empty string
+#                    to require the default branch regardless.
+#
+# A change that spans repositories cannot pin commits that are on main yet: the
+# whole point is that they are not merged. Creating a branch of the same name in
+# each affected repository and pinning to it is the supported way to do that,
+# and the pins move to main-only commits when the branches merge. On main, or on
+# a tag, `--branch` resolves to the default branch and nothing is loosened.
 #
 # Exit status:
 #   0  every pin resolved and verified
@@ -35,7 +47,13 @@ WORKSPACE="$(cd "${REPO_ROOT}/.." && pwd -P)"
 OFFLINE=0
 USE_COLOR=1
 STRICT=0
+# Empty means "no feature branch"; unset means "detect it". They are different:
+# --branch '' is how a release build demands default-branch pins even when the
+# checkout happens to sit on a branch.
+FEATURE_BRANCH_SET=0
+FEATURE_BRANCH=""
 PROBLEMS=0
+FEATURE_PINS=0
 UNVERIFIED=0
 RESOLVE_FAILED=0
 CACHE_DIR=""
@@ -46,7 +64,8 @@ while [ $# -gt 0 ]; do
       --offline)   OFFLINE=1; shift ;;
       --no-color)  USE_COLOR=0; shift ;;
       --strict)    STRICT=1; shift ;;
-      -h|--help)   sed -n '2,26p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+      --branch)    FEATURE_BRANCH="$2"; FEATURE_BRANCH_SET=1; shift 2 ;;
+      -h|--help)   sed -n '2,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
       *)           echo "Unknown option: $1" >&2; exit 2 ;;
    esac
 done
@@ -180,6 +199,63 @@ default_branch() {
    printf '%s' "${branch}"
 }
 
+# The branch a coordinated change is being made on.
+#
+# Detected from this repository unless given. A detached HEAD - which is what
+# actions/checkout leaves on a pull request - detects as nothing, so CI passes
+# it explicitly.
+detect_feature_branch() {
+   local branch
+   branch="$(git -C "${REPO_ROOT}" rev-parse --abbrev-ref HEAD 2>/dev/null)" || return 0
+   case "${branch}" in
+      HEAD|main|master|"") return 0 ;;
+   esac
+   printf '%s' "${branch}"
+}
+
+if [ "${FEATURE_BRANCH_SET}" = "0" ]; then
+   FEATURE_BRANCH="$(detect_feature_branch)"
+fi
+
+on_feature_branch() {
+   # on_feature_branch <repo name> <sha> -> "yes" | "no" | "unknown"
+   #
+   # Whether the pin is reachable from a branch of the coordinated name in that
+   # repository. Only asked when the pin is not on the default branch, so this
+   # never weakens the ordinary answer.
+   local name="$1" sha="$2" slug status local_dir="${WORKSPACE}/$1"
+   [ -n "${FEATURE_BRANCH}" ] || { echo "no"; return; }
+
+   if [ -d "${local_dir}/.git" ] && git -C "${local_dir}" cat-file -e "${sha}^{commit}" 2>/dev/null; then
+      local ref=""
+      for candidate in "origin/${FEATURE_BRANCH}" "${FEATURE_BRANCH}"; do
+         if git -C "${local_dir}" rev-parse --verify --quiet "${candidate}" >/dev/null 2>&1; then
+            ref="${candidate}"; break
+         fi
+      done
+      if [ -n "${ref}" ]; then
+         if git -C "${local_dir}" merge-base --is-ancestor "${sha}" "${ref}" 2>/dev/null; then
+            echo "yes"; return
+         fi
+         echo "no"; return
+      fi
+   fi
+
+   [ "${OFFLINE}" = "1" ] && { echo "unknown"; return; }
+   slug="$(repo_slug "${name}")"
+   [ -n "${slug}" ] || { echo "unknown"; return; }
+
+   # A branch that does not exist in this repository answers 404, which compare
+   # reports as no status at all: correctly "no", not "unknown".
+   status="$(gh_curl \
+      "https://api.github.com/repos/${slug}/compare/${FEATURE_BRANCH}...${sha}" 2>/dev/null |
+      grep -m1 '"status"' | sed -E 's/.*"status"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')"
+   case "${status}" in
+      identical|behind) echo "yes" ;;
+      *)                echo "no" ;;
+   esac
+}
+
 on_main() {
    # on_main <repo name> <sha> -> "yes" | "no" | "unknown"
    local name="$1" sha="$2" slug status local_dir="${WORKSPACE}/$1"
@@ -261,8 +337,16 @@ report() {
          yes) mark="${C_GREEN}on default branch${C_OFF}" ;;
          no)
             if [ "${expected}" = "yes" ]; then
-               mark="${C_RED}NOT on default branch${C_OFF}"
-               PROBLEMS=$((PROBLEMS + 1))
+               # A change spanning repositories cannot have its pins on main
+               # yet, by definition. A branch of the agreed name carrying the
+               # commit is the supported way to say so.
+               if [ "$(on_feature_branch "${name}" "${sha}")" = "yes" ]; then
+                  mark="${C_YELLOW}on branch ${FEATURE_BRANCH}${C_OFF}"
+                  FEATURE_PINS=$((FEATURE_PINS + 1))
+               else
+                  mark="${C_RED}NOT on default branch${C_OFF}"
+                  PROBLEMS=$((PROBLEMS + 1))
+               fi
             else
                # A fork carrying PPUC commits on top of upstream. Reported so
                # it stays visible, not counted against the run.
@@ -374,6 +458,9 @@ fi
 # --- summary ----------------------------------------------------------------
 
 echo
+if [ -n "${FEATURE_BRANCH}" ]; then
+   echo "${C_DIM}Coordinated branch: ${FEATURE_BRANCH}${C_OFF}"
+fi
 if [ "${RESOLVE_FAILED}" != "0" ]; then
    echo "${C_RED}Chain could not be fully resolved.${C_OFF}"
    exit 2
@@ -383,6 +470,15 @@ if [ "${PROBLEMS}" != "0" ]; then
    echo "${C_DIM}A pin that is not on its default branch, or a local checkout that differs from"
    echo "its pin, means you are not testing what a normal build produces.${C_OFF}"
    exit 1
+fi
+if [ "${FEATURE_PINS}" != "0" ]; then
+   # Reported rather than counted. These pins are correct for a change that is
+   # not merged yet, and wrong for a release -- which is why the release path
+   # runs with --branch '' and fails on exactly these.
+   echo "${C_YELLOW}${FEATURE_PINS} pin(s) sit on branch ${FEATURE_BRANCH} rather than a default branch.${C_OFF}"
+   echo "${C_DIM}Expected while the change is in flight. They must move to merged"
+   echo "commits before this is released; the release check runs with --branch ''"
+   echo "and fails on them.${C_OFF}"
 fi
 if [ "${UNVERIFIED}" != "0" ] && [ "${STRICT}" = "1" ]; then
    echo "${C_RED}${UNVERIFIED} pin(s) could not be verified against their repository.${C_OFF}"

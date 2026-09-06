@@ -27,7 +27,11 @@ documentation:
 - `tools/check-pins.sh`: resolves the transitive dependency pin chain, verifies
   each pin is on its repository's `main`, and reports local checkouts that drift
   from what is pinned. Run it before concluding that a cross-repo change took
-  effect.
+  effect. While a change spans several repositories its pins cannot be on `main`
+  yet; create a branch of the same name in each affected repository and the
+  check accepts and reports them (`--branch NAME`, detected automatically from
+  the current branch). `--branch ''` demands merged commits, which is what CI
+  uses on `main` and on tags.
 
 Repository-local reference documentation:
 

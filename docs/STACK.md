@@ -289,7 +289,10 @@ schema they cover, because they compare things that live in different
 repositories and `ppuc` is the only layer that legitimately knows about all of
 them:
 
-- `check-pins.sh` — the SHA pin chain.
+- `check-pins.sh` — the SHA pin chain. A change spanning several repositories
+  cannot have its pins on `main` yet, so a branch of the same name in each
+  affected repository is accepted and reported; on `main` or a tag the check
+  runs with `--branch ''` and demands merged commits.
 - `check-gamecore-drift.py` — ppuc's `emGame`/`tilt`/`ballSave` parser against
   config-tool's exporter.
 

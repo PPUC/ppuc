@@ -38,7 +38,27 @@ jobs:
           # "unverified" and the run passes having verified nothing - which is
           # why --strict treats unverified as a failure.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./tools/check-pins.sh --no-color --strict
+        run: |
+          # actions/checkout leaves a detached HEAD, so the branch cannot be
+          # detected and has to be passed in. On a pull request that is the
+          # source branch; on a push it is the branch pushed to.
+          BRANCH="${{ github.head_ref || github.ref_name }}"
+
+          # A change spanning several repositories cannot have its pins on main
+          # yet -- that is what makes it a coordinated change. Pins on a branch
+          # of the same name in each affected repository are accepted and
+          # reported; on main or a tag, BRANCH resolves to the default branch
+          # and nothing is loosened.
+          case "${BRANCH}" in
+            main|master|v*)
+              echo "Release path: pins must be on their default branches."
+              ./tools/check-pins.sh --no-color --strict --branch ''
+              ;;
+            *)
+              echo "Coordinated branch: ${BRANCH}"
+              ./tools/check-pins.sh --no-color --strict --branch "${BRANCH}"
+              ;;
+          esac
 
   schema-drift:
     name: Schema drift across the stack
