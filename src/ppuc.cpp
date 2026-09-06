@@ -50,6 +50,7 @@
 #include "AudioOutput.h"
 #include "LuaRulesEngine.h"
 #include "MediaPluginHost.h"
+#include "PluginBus.h"
 #include "GameEngine.h"
 #include "PinmameEngine.h"
 #include "ScriptEngine.h"
@@ -87,6 +88,10 @@ DMDUtil::DMD* pDmd;
 PPUC* pPpuc;
 std::unique_ptr<LuaRulesEngine> pLuaRulesEngine;
 std::unique_ptr<AudioOutput> pAudioOutput;
+// Declared before pMediaPluginHost so it is destroyed after it: at plugin
+// unload the ScriptClassDefs and the code behind every plugin function pointer
+// go away together, so no client may outlive the bus.
+std::unique_ptr<PluginBus> pPluginBus;
 std::unique_ptr<MediaPluginHost> pMediaPluginHost;
 std::unique_ptr<SpeechService> pSpeechService;
 
@@ -3682,7 +3687,14 @@ int main(int argc, char** argv)
 
   if (opt_pup || opt_altsound || opt_b2s)
   {
-    pMediaPluginHost = std::make_unique<MediaPluginHost>(pAudioOutput.get());
+    pPluginBus = std::make_unique<PluginBus>();
+    std::string busError;
+    if (!pPluginBus->Initialize(opt_plugin_dir ? opt_plugin_dir : "", &busError))
+    {
+      fprintf(stderr, "Plugin bus init failed: %s\n", busError.c_str());
+      return 1;
+    }
+    pMediaPluginHost = std::make_unique<MediaPluginHost>(pAudioOutput.get(), *pPluginBus);
     MediaPluginHost::Options mediaOptions;
     mediaOptions.enablePup = opt_pup;
     mediaOptions.enableAltSound = opt_altsound;
@@ -3714,6 +3726,7 @@ int main(int argc, char** argv)
     {
       fprintf(stderr, "Media plugin init failed: %s\n", mediaError.c_str());
       pMediaPluginHost.reset();
+      pPluginBus.reset();
     }
   }
 
@@ -4386,7 +4399,9 @@ int main(int argc, char** argv)
         g_interceptorOutputs.Service(pPpuc);
         if (pMediaPluginHost != nullptr)
         {
-          pMediaPluginHost->Process();
+          if (pPluginBus) pPluginBus->Process();
+          if (pPluginBus) pPluginBus->Process();
+        pMediaPluginHost->Process();
         }
         continue;
       }
@@ -4507,6 +4522,7 @@ int main(int argc, char** argv)
 
       if (pMediaPluginHost != nullptr)
       {
+        if (pPluginBus) pPluginBus->Process();
         pMediaPluginHost->Process();
       }
 
@@ -4656,6 +4672,13 @@ int main(int argc, char** argv)
   {
     pMediaPluginHost->Shutdown();
     pMediaPluginHost.reset();
+  }
+  if (pPluginBus)
+  {
+    // After every client: unloading a plugin frees the code its function
+    // pointers point into.
+    pPluginBus->Shutdown();
+    pPluginBus.reset();
     quitSDL = true;
   }
 

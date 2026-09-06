@@ -1,5 +1,6 @@
 #include "MediaPluginHost.h"
 
+#include "PluginBus.h"
 #include "ScriptObject.h"
 
 #include <algorithm>
@@ -36,7 +37,6 @@
 
 namespace
 {
-constexpr uint32_t kHostEndpointId = 1;
 constexpr int kDefaultBackglassWidth = 1920;
 constexpr int kDefaultBackglassHeight = 1080;
 constexpr float kPi = 3.14159265358979323846f;
@@ -451,7 +451,7 @@ public:
 class MediaPluginHost::Impl
 {
 public:
-  explicit Impl(AudioOutput* audioOutput) : audioOutput_(audioOutput) {}
+  Impl(AudioOutput* audioOutput, PluginBus& bus) : audioOutput_(audioOutput), bus_(bus) {}
   ~Impl() { Shutdown(); }
 
   bool Initialize(const Options& options, std::string* errorMessage);
@@ -470,28 +470,13 @@ private:
   static void HostPluginLoad(uint32_t, const MsgPluginAPI*) {}
   static void HostPluginUnload() {}
 
-  static void MSGPIAPI OnGetLoggingApi(unsigned int, void*, void* msgData);
-  static void MSGPIAPI OnGetScriptApi(unsigned int, void*, void* msgData);
   static void MSGPIAPI OnGetVpxApi(unsigned int, void*, void* msgData);
   static void MSGPIAPI OnGetAudioSrc(unsigned int, void*, void* msgData);
   static void MSGPIAPI OnAudioUpdate(unsigned int, void*, void* msgData);
   static void MSGPIAPI OnGetBackglassRenderer(unsigned int, void*,
                                               void* msgData);
 
-  static void MSGPIAPI Log(const char* source, const char* func, int line,
-                           unsigned int level, const char* message);
 
-  static void MSGPIAPI RegisterScriptClass(ScriptClassDef* classDef);
-  static void MSGPIAPI RegisterScriptTypeAlias(const char*, const char*) {}
-  static void MSGPIAPI RegisterScriptArrayType(ScriptArrayDef*) {}
-  static void MSGPIAPI SubmitTypeLibrary(unsigned int) {}
-  static void MSGPIAPI UnregisterScriptClass(ScriptClassDef* classDef);
-  static void MSGPIAPI UnregisterScriptTypeAlias(const char*) {}
-  static void MSGPIAPI UnregisterScriptArrayType(ScriptArrayDef*) {}
-  static void MSGPIAPI OnScriptError(unsigned int type, const char* message);
-  static void MSGPIAPI SetCOMObjectOverride(const char* classname,
-                                            const ScriptClassDef* classDef);
-  static ScriptClassDef* MSGPIAPI GetClassDef(const char* typeName);
 
   static void MSGPIAPI GetVpxInfo(VPXInfo* info);
   static void MSGPIAPI GetTableInfo(VPXTableInfo* info);
@@ -534,10 +519,6 @@ private:
                                       float, float, float, float, float, float,
                                       float, float, float);
 
-  void LoadPluginById(const std::string& id);
-  void ConfigureSetting(const std::string& pluginId,
-                        MsgPI::MsgPluginManager::SettingAction action,
-                        MsgSettingDef* settingDef);
   bool EnsureB2SServer();
   void ReleaseB2SServer();
   bool CallB2SMember(const char* name, std::initializer_list<const char*> argTypes,
@@ -549,9 +530,7 @@ private:
   void DestroyBackglassWindow();
 
   AudioOutput* audioOutput_ = nullptr;
-  MsgPI::MsgPluginManager pluginManager_;
-  std::shared_ptr<MsgPI::MsgPlugin> hostPlugin_;
-  std::vector<std::shared_ptr<MsgPI::MsgPlugin>> loadedPlugins_;
+  PluginBus& bus_;
   std::mutex pendingMutex_;
   std::vector<PUPQueueEventMsg> pendingEvents_;
   std::vector<B2SSegmentDigitMsg> pendingB2SSegmentDigits_;
@@ -577,8 +556,6 @@ private:
   bool loggedB2SServerUnavailable_ = false;
   uint64_t lastBackglassDiagnosticMs_ = 0;
 
-  unsigned int getLoggingApiId_ = 0;
-  unsigned int getScriptApiId_ = 0;
   unsigned int getVpxApiId_ = 0;
   unsigned int getAudioSrcId_ = 0;
   unsigned int audioUpdateId_ = 0;
@@ -591,36 +568,15 @@ private:
 
   AudioSrcId pinmameAudioSrc_ = {};
   uint32_t nextAudioResId_ = 1;
-  std::unordered_map<std::string, ScriptClassDef*> scriptClasses_;
-  std::unordered_map<std::string, const ScriptClassDef*> comOverrides_;
   ScriptObject b2sServer_;
 
   static Impl* instance_;
-  static LoggingPluginAPI loggingApi_;
-  static ScriptablePluginAPI scriptApi_;
   static VPXPluginAPI vpxApi_;
 };
 
 MediaPluginHost::Impl* MediaPluginHost::Impl::instance_ = nullptr;
 
-LoggingPluginAPI MediaPluginHost::Impl::loggingApi_ = {
-    .Log = &MediaPluginHost::Impl::Log,
-};
 
-ScriptablePluginAPI MediaPluginHost::Impl::scriptApi_ = {
-    .RegisterScriptClass = &MediaPluginHost::Impl::RegisterScriptClass,
-    .RegisterScriptTypeAlias = &MediaPluginHost::Impl::RegisterScriptTypeAlias,
-    .RegisterScriptArrayType = &MediaPluginHost::Impl::RegisterScriptArrayType,
-    .SubmitTypeLibrary = &MediaPluginHost::Impl::SubmitTypeLibrary,
-    .UnregisterScriptClass = &MediaPluginHost::Impl::UnregisterScriptClass,
-    .UnregisterScriptTypeAlias =
-        &MediaPluginHost::Impl::UnregisterScriptTypeAlias,
-    .UnregisterScriptArrayType =
-        &MediaPluginHost::Impl::UnregisterScriptArrayType,
-    .OnError = &MediaPluginHost::Impl::OnScriptError,
-    .SetCOMObjectOverride = &MediaPluginHost::Impl::SetCOMObjectOverride,
-    .GetClassDef = &MediaPluginHost::Impl::GetClassDef,
-};
 
 VPXPluginAPI MediaPluginHost::Impl::vpxApi_ = {
     .GetVpxInfo = &MediaPluginHost::Impl::GetVpxInfo,
@@ -700,20 +656,7 @@ bool MediaPluginHost::Impl::Initialize(const Options& options,
                   : (std::getenv("HOME") ? std::getenv("HOME") : ".");
   SetGameInfo(options.gameId, options.hardwareGen);
 
-  hostPlugin_ = pluginManager_.RegisterPlugin(
-      "PPUC", "PPUC", "PPUC media plugin host", "", "", "", HostPluginLoad,
-      HostPluginUnload);
-  pluginManager_.LoadPlugin(*hostPlugin_);
-
-  pluginManager_.SetSettingsHandler(
-      [this](const std::string& pluginId,
-             MsgPI::MsgPluginManager::SettingAction action,
-             MsgSettingDef* settingDef)
-      { ConfigureSetting(pluginId, action, settingDef); });
-
-  const MsgPluginAPI& api = pluginManager_.GetMsgAPI();
-  getLoggingApiId_ = api.GetMsgID(LOGPI_NAMESPACE, LOGPI_MSG_GET_API);
-  getScriptApiId_ = api.GetMsgID(SCRIPTPI_NAMESPACE, SCRIPTPI_MSG_GET_API);
+  const MsgPluginAPI& api = bus_.Api();
   getVpxApiId_ = api.GetMsgID(VPXPI_NAMESPACE, VPXPI_MSG_GET_API);
   getAudioSrcId_ = api.GetMsgID(CTLPI_NAMESPACE, CTLPI_AUDIO_GET_SRC_MSG);
   audioUpdateId_ = api.GetMsgID(CTLPI_NAMESPACE, CTLPI_AUDIO_ON_UPDATE_MSG);
@@ -727,41 +670,27 @@ bool MediaPluginHost::Impl::Initialize(const Options& options,
       api.GetMsgID(CTLPI_NAMESPACE, CTLPI_EVT_ON_SOUND_COMMAND);
   pupQueueEventId_ = api.GetMsgID(PUPPI_NAMESPACE, PUPPI_MSG_QUEUE_EVENT);
 
-  api.SubscribeMsg(kHostEndpointId, getLoggingApiId_, OnGetLoggingApi, this);
-  api.SubscribeMsg(kHostEndpointId, getScriptApiId_, OnGetScriptApi, this);
-  api.SubscribeMsg(kHostEndpointId, getVpxApiId_, OnGetVpxApi, this);
-  api.SubscribeMsg(kHostEndpointId, getAudioSrcId_, OnGetAudioSrc, this);
-  api.SubscribeMsg(kHostEndpointId, audioUpdateId_, OnAudioUpdate, this);
-  api.SubscribeMsg(kHostEndpointId, getAuxRendererId_, OnGetBackglassRenderer,
+  api.SubscribeMsg(bus_.HostEndpointId(), getVpxApiId_, OnGetVpxApi, this);
+  api.SubscribeMsg(bus_.HostEndpointId(), getAudioSrcId_, OnGetAudioSrc, this);
+  api.SubscribeMsg(bus_.HostEndpointId(), audioUpdateId_, OnAudioUpdate, this);
+  api.SubscribeMsg(bus_.HostEndpointId(), getAuxRendererId_, OnGetBackglassRenderer,
                    this);
 
-  if (!std::filesystem::exists(pluginDir_))
-  {
-    if (errorMessage != nullptr)
-    {
-      *errorMessage = "plugin directory does not exist: " + pluginDir_;
-    }
-    return false;
-  }
-  std::printf("Media plugin directory: %s\n", pluginDir_.c_str());
-
-  pluginManager_.ScanPluginFolder(std::make_shared<SDLModuleLoader>(),
-                                  pluginDir_, [](MsgPI::MsgPlugin&) {});
   if (options.enablePup)
   {
-    LoadPluginById("PUP");
+    bus_.LoadPluginById("PUP");
   }
   if (options.enableAltSound)
   {
-    LoadPluginById("AltSound");
+    bus_.LoadPluginById("AltSound");
   }
   if (options.enableB2S)
   {
-    LoadPluginById("B2S");
+    bus_.LoadPluginById("B2S");
     EnsureB2SServer();
   }
 
-  pinmameAudioSrc_.id.endpointId = kHostEndpointId;
+  pinmameAudioSrc_.id.endpointId = bus_.HostEndpointId();
   pinmameAudioSrc_.id.resId = nextAudioResId_++;
   pinmameAudioSrc_.overrideId.id = 0;
   pinmameAudioSrc_.type = CTLPI_AUDIO_SRC_BACKGLASS_STEREO;
@@ -783,30 +712,10 @@ void MediaPluginHost::Impl::Shutdown()
   ReleaseB2SServer();
   DestroyBackglassWindow();
 
-  const MsgPluginAPI& api = pluginManager_.GetMsgAPI();
-  for (auto it = loadedPlugins_.rbegin(); it != loadedPlugins_.rend(); ++it)
-  {
-    if (*it && (*it)->IsLoaded())
-    {
-      pluginManager_.UnloadPlugin(**it);
-    }
-  }
-  loadedPlugins_.clear();
-  scriptClasses_.clear();
-  comOverrides_.clear();
+  // PluginBus unloads the plugins and clears the script registries; it
+  // outlives this object precisely so that happens after every client is gone.
+  const MsgPluginAPI& api = bus_.Api();
 
-  if (getLoggingApiId_ != 0)
-  {
-    api.UnsubscribeMsg(getLoggingApiId_, OnGetLoggingApi, this);
-    api.ReleaseMsgID(getLoggingApiId_);
-    getLoggingApiId_ = 0;
-  }
-  if (getScriptApiId_ != 0)
-  {
-    api.UnsubscribeMsg(getScriptApiId_, OnGetScriptApi, this);
-    api.ReleaseMsgID(getScriptApiId_);
-    getScriptApiId_ = 0;
-  }
   if (getVpxApiId_ != 0)
   {
     api.UnsubscribeMsg(getVpxApiId_, OnGetVpxApi, this);
@@ -857,12 +766,6 @@ void MediaPluginHost::Impl::Shutdown()
     pupQueueEventId_ = 0;
   }
 
-  if (hostPlugin_ && hostPlugin_->IsLoaded())
-  {
-    pluginManager_.UnloadPlugin(*hostPlugin_);
-  }
-  hostPlugin_.reset();
-  pluginManager_.SetSettingsHandler(nullptr);
   initialized_ = false;
   if (instance_ == this)
   {
@@ -888,8 +791,8 @@ void MediaPluginHost::Impl::OnGameStart()
       .gameId = gameId_.c_str(),
       .hardwareGen = options_.hardwareGen,
   };
-  const MsgPluginAPI& api = pluginManager_.GetMsgAPI();
-  api.BroadcastMsg(kHostEndpointId, onControllerGameStartId_, &msg);
+  const MsgPluginAPI& api = bus_.Api();
+  api.BroadcastMsg(bus_.HostEndpointId(), onControllerGameStartId_, &msg);
 }
 
 void MediaPluginHost::Impl::OnGameEnd()
@@ -898,9 +801,9 @@ void MediaPluginHost::Impl::OnGameEnd()
   {
     return;
   }
-  const MsgPluginAPI& api = pluginManager_.GetMsgAPI();
-  api.BroadcastMsg(kHostEndpointId, onControllerGameEndId_, nullptr);
-  api.BroadcastMsg(kHostEndpointId, onVpxGameEndId_, nullptr);
+  const MsgPluginAPI& api = bus_.Api();
+  api.BroadcastMsg(bus_.HostEndpointId(), onControllerGameEndId_, nullptr);
+  api.BroadcastMsg(bus_.HostEndpointId(), onVpxGameEndId_, nullptr);
   gameStarted_ = false;
 }
 
@@ -983,7 +886,7 @@ void MediaPluginHost::Impl::Process()
   {
     if (pupQueueEventId_ != 0)
     {
-      pluginManager_.GetMsgAPI().BroadcastMsg(kHostEndpointId, pupQueueEventId_,
+      bus_.Api().BroadcastMsg(bus_.HostEndpointId(), pupQueueEventId_,
                                               &event);
     }
     DispatchB2SEvent(event);
@@ -1002,10 +905,10 @@ void MediaPluginHost::Impl::Process()
         .boardNo = static_cast<unsigned int>(boardNo),
         .cmd = static_cast<unsigned int>(cmd),
     };
-    pluginManager_.GetMsgAPI().BroadcastMsg(kHostEndpointId, onSoundCommandId_,
+    bus_.Api().BroadcastMsg(bus_.HostEndpointId(), onSoundCommandId_,
                                             &msg);
   }
-  pluginManager_.ProcessAsyncCallbacks();
+  // PluginBus::Process() drains async callbacks once per main-loop tick.
 
   if (!options_.enablePup && !options_.enableB2S)
   {
@@ -1023,7 +926,7 @@ void MediaPluginHost::Impl::Process()
       .count = 0,
       .entries = entries,
   };
-  pluginManager_.GetMsgAPI().BroadcastMsg(kHostEndpointId, getAuxRendererId_,
+  bus_.Api().BroadcastMsg(bus_.HostEndpointId(), getAuxRendererId_,
                                           &getRenderer);
   if (getRenderer.count == 0)
   {
@@ -1121,22 +1024,6 @@ void MediaPluginHost::Impl::Process()
   SDL_RenderPresent(backglassRenderer_);
 }
 
-void MediaPluginHost::Impl::OnGetLoggingApi(unsigned int, void*, void* msgData)
-{
-  if (msgData != nullptr)
-  {
-    *static_cast<LoggingPluginAPI**>(msgData) = &loggingApi_;
-  }
-}
-
-void MediaPluginHost::Impl::OnGetScriptApi(unsigned int, void*, void* msgData)
-{
-  if (msgData != nullptr)
-  {
-    *static_cast<ScriptablePluginAPI**>(msgData) = &scriptApi_;
-  }
-}
-
 void MediaPluginHost::Impl::OnGetVpxApi(unsigned int, void*, void* msgData)
 {
   if (msgData != nullptr)
@@ -1168,7 +1055,7 @@ void MediaPluginHost::Impl::OnAudioUpdate(unsigned int, void* userData,
   auto* self = static_cast<Impl*>(userData);
   auto* msg = static_cast<AudioUpdateMsg*>(msgData);
   if (self == nullptr || msg == nullptr || self->audioOutput_ == nullptr ||
-      msg->id.endpointId == kHostEndpointId)
+      msg->id.endpointId == self->bus_.HostEndpointId())
   {
     return;
   }
@@ -1216,90 +1103,11 @@ void MediaPluginHost::Impl::OnGetBackglassRenderer(unsigned int, void* userData,
   msg->count++;
 }
 
-void MediaPluginHost::Impl::Log(const char* source, const char*, int,
-                                unsigned int level, const char* message)
-{
-  const char* levelName = "INFO";
-  if (level >= LPI_LVL_ERROR)
-  {
-    levelName = "ERROR";
-  }
-  else if (level >= LPI_LVL_WARN)
-  {
-    levelName = "WARN";
-  }
-  else if (level <= LPI_LVL_DEBUG)
-  {
-    levelName = "DEBUG";
-  }
-  std::printf("[%s:%s] %s\n", source ? source : "plugin", levelName,
-              message ? message : "");
-}
 
-void MediaPluginHost::Impl::RegisterScriptClass(ScriptClassDef* classDef)
-{
-  if (instance_ == nullptr || classDef == nullptr || classDef->name.name == nullptr)
-  {
-    return;
-  }
-  instance_->scriptClasses_[classDef->name.name] = classDef;
-}
 
-void MediaPluginHost::Impl::UnregisterScriptClass(ScriptClassDef* classDef)
-{
-  if (instance_ == nullptr || classDef == nullptr || classDef->name.name == nullptr)
-  {
-    return;
-  }
-  auto it = instance_->scriptClasses_.find(classDef->name.name);
-  if (it != instance_->scriptClasses_.end() && it->second == classDef)
-  {
-    instance_->scriptClasses_.erase(it);
-  }
-  for (auto overrideIt = instance_->comOverrides_.begin();
-       overrideIt != instance_->comOverrides_.end();)
-  {
-    if (overrideIt->second == classDef)
-    {
-      overrideIt = instance_->comOverrides_.erase(overrideIt);
-    }
-    else
-    {
-      ++overrideIt;
-    }
-  }
-}
 
-void MediaPluginHost::Impl::OnScriptError(unsigned int type,
-                                          const char* message)
-{
-  std::printf("[plugin-script:%u] %s\n", type, message ? message : "");
-}
 
-void MediaPluginHost::Impl::SetCOMObjectOverride(
-    const char* classname, const ScriptClassDef* classDef)
-{
-  if (instance_ == nullptr || classname == nullptr || classname[0] == '\0')
-  {
-    return;
-  }
-  if (classDef == nullptr)
-  {
-    instance_->comOverrides_.erase(classname);
-    return;
-  }
-  instance_->comOverrides_[classname] = classDef;
-}
 
-ScriptClassDef* MediaPluginHost::Impl::GetClassDef(const char* typeName)
-{
-  if (instance_ == nullptr || typeName == nullptr)
-  {
-    return nullptr;
-  }
-  auto it = instance_->scriptClasses_.find(typeName);
-  return it == instance_->scriptClasses_.end() ? nullptr : it->second;
-}
 
 void MediaPluginHost::Impl::GetVpxInfo(VPXInfo* info)
 {
@@ -1602,24 +1410,6 @@ void MediaPluginHost::Impl::DrawSegDisplay(
   self->backglassFrameDrewImage_ = true;
 }
 
-void MediaPluginHost::Impl::LoadPluginById(const std::string& id)
-{
-  auto plugin = pluginManager_.GetPlugin(id);
-  if (plugin == nullptr)
-  {
-    std::printf("Media plugin not found: %s\n", id.c_str());
-    return;
-  }
-  pluginManager_.LoadPlugin(*plugin);
-  if (plugin->IsLoaded())
-  {
-    loadedPlugins_.push_back(plugin);
-  }
-  else
-  {
-    std::printf("Media plugin failed to load: %s\n", id.c_str());
-  }
-}
 
 bool MediaPluginHost::Impl::EnsureB2SServer()
 {
@@ -1632,9 +1422,8 @@ bool MediaPluginHost::Impl::EnsureB2SServer()
     return true;
   }
 
-  auto it = comOverrides_.find("B2S.Server");
-  if (it == comOverrides_.end() || it->second == nullptr ||
-      it->second->CreateObject == nullptr)
+  const ScriptClassDef* classDef = bus_.ComOverride("B2S.Server");
+  if (classDef == nullptr || classDef->CreateObject == nullptr)
   {
     if (!loggedB2SServerUnavailable_)
     {
@@ -1644,7 +1433,7 @@ bool MediaPluginHost::Impl::EnsureB2SServer()
     return false;
   }
 
-  if (!b2sServer_.Create(it->second))
+  if (!b2sServer_.Create(classDef))
   {
     std::printf("B2S server object creation failed\n");
     return false;
@@ -1714,49 +1503,6 @@ void MediaPluginHost::Impl::DispatchB2SPlayerScore(
   CallB2SMember("B2SSetScorePlayer", {"int", "int"}, args);
 }
 
-void MediaPluginHost::Impl::ConfigureSetting(
-    const std::string& pluginId,
-    MsgPI::MsgPluginManager::SettingAction action, MsgSettingDef* settingDef)
-{
-  if (action != MsgPI::MsgPluginManager::SettingAction::Load ||
-      settingDef == nullptr)
-  {
-    return;
-  }
-
-  if (settingDef->type == MSGPI_SETTING_TYPE_STRING)
-  {
-    const char* value = settingDef->stringDef.defVal;
-    if (pluginId == "PUP" && std::strcmp(settingDef->propId, "PUPFolder") == 0)
-    {
-      value = pupFolder_.c_str();
-    }
-    else if (pluginId == "AltSound" &&
-             std::strcmp(settingDef->propId, "Folder") == 0)
-    {
-      value = altSoundFolder_.c_str();
-    }
-    if (settingDef->stringDef.Set != nullptr)
-    {
-      settingDef->stringDef.Set(value ? value : "");
-    }
-  }
-  else if (settingDef->type == MSGPI_SETTING_TYPE_BOOL &&
-           settingDef->boolDef.Set != nullptr)
-  {
-    settingDef->boolDef.Set(settingDef->boolDef.defVal);
-  }
-  else if (settingDef->type == MSGPI_SETTING_TYPE_INT &&
-           settingDef->intDef.Set != nullptr)
-  {
-    settingDef->intDef.Set(settingDef->intDef.defVal);
-  }
-  else if (settingDef->type == MSGPI_SETTING_TYPE_FLOAT &&
-           settingDef->floatDef.Set != nullptr)
-  {
-    settingDef->floatDef.Set(settingDef->floatDef.defVal);
-  }
-}
 
 bool MediaPluginHost::Impl::EnsureBackglassWindow()
 {
@@ -1832,8 +1578,8 @@ void MediaPluginHost::Impl::DestroyBackglassWindow()
   }
 }
 
-MediaPluginHost::MediaPluginHost(AudioOutput* audioOutput)
-    : impl_(std::make_unique<Impl>(audioOutput))
+MediaPluginHost::MediaPluginHost(AudioOutput* audioOutput, PluginBus& bus)
+    : impl_(std::make_unique<Impl>(audioOutput, bus))
 {
 }
 

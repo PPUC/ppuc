@@ -7,6 +7,8 @@
 
 #include "AudioOutput.h"
 
+class PluginBus;
+
 struct SDL_Renderer;
 struct SDL_Texture;
 struct SDL_Window;
@@ -35,7 +37,7 @@ public:
     bool b2sSegmentSmoothing = true;
   };
 
-  explicit MediaPluginHost(AudioOutput* audioOutput);
+  MediaPluginHost(AudioOutput* audioOutput, PluginBus& bus);
   ~MediaPluginHost();
 
   bool Initialize(const Options& options, std::string* errorMessage);

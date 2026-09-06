@@ -258,6 +258,7 @@ add_executable(ppuc-pinmame
    src/LuaGameApi.cpp
    src/LuaRulesEngine.cpp
    src/MediaPluginHost.cpp
+   src/PluginBus.cpp
    src/ScriptObject.cpp
    src/PinmameEngine.cpp
    src/PinmameNvramMapLoader.cpp
