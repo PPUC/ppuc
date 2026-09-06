@@ -306,6 +306,7 @@ float opt_b2s_segment_glow = 1.4f;
 bool opt_b2s_segment_smoothing = true;
 const char* opt_game_folder = NULL;
 const char* opt_plugin_dir = NULL;
+std::vector<std::string> opt_extra_plugins;
 const char* opt_pup_folder = NULL;
 const char* opt_altsound_folder = NULL;
 bool opt_console_display = false;
@@ -2247,6 +2248,10 @@ static struct cag_option options[] = {
      .access_name = "b2s",
      .value_name = NULL,
      .description = "Enable B2S backglass rendering through the plugin host (optional)"},
+    {.identifier = '+',
+     .access_name = "extra-plugin",
+     .value_name = "VALUE",
+     .description = "Additionally load this plugin by its plugin.cfg id, repeatable (diagnostics)"},
     {.identifier = '^',
      .access_name = "plugin-dir",
      .value_name = "VALUE",
@@ -3274,6 +3279,9 @@ int main(int argc, char** argv)
       case '?':
         opt_b2s = true;
         break;
+      case '+':
+        opt_extra_plugins.emplace_back(cag_option_get_value(&cag_context));
+        break;
       case '^':
         opt_plugin_dir = cag_option_get_value(&cag_context);
         break;
@@ -3693,6 +3701,11 @@ int main(int argc, char** argv)
     {
       fprintf(stderr, "Plugin bus init failed: %s\n", busError.c_str());
       return 1;
+    }
+    for (const std::string& id : opt_extra_plugins)
+    {
+      printf("Loading extra plugin: %s\n", id.c_str());
+      pPluginBus->LoadPluginById(id);
     }
     pMediaPluginHost = std::make_unique<MediaPluginHost>(pAudioOutput.get(), *pPluginBus);
     MediaPluginHost::Options mediaOptions;

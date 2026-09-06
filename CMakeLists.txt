@@ -690,6 +690,55 @@ else()
 endif()
 endif()
 
+# A plugin that observes the bus and logs what it sees. Built with the tests
+# because that is what it is for: every claim about PPUC's ControllerDef, its
+# sound commands and its injected state events is otherwise only inferred from
+# reading other plugins' source.
+if(PPUC_BUILD_TESTS)
+   add_library(FakeCtlPlugin MODULE tests/fakectl/FakeCtlPlugin.cpp)
+   target_include_directories(FakeCtlPlugin PRIVATE ${PPUC_INCLUDE_DIRS})
+   set_target_properties(FakeCtlPlugin PROPERTIES
+      OUTPUT_NAME "plugin-fakectl"
+      PREFIX ""
+   )
+   if(PLATFORM STREQUAL "macos")
+      # CMake gives a MODULE library .so on macOS; plugin.cfg names .dylib, as
+      # every other plugin in the folder does.
+      set_target_properties(FakeCtlPlugin PROPERTIES SUFFIX ".dylib")
+   endif()
+
+   # Drives the host halves without hardware and asserts on what FakeCtl saw.
+   # Separate from ppuc_tests on purpose: that target must keep linking without
+   # SDL, and this one needs the real MediaPluginHost.
+   add_executable(ppuc_plugin_smoke
+      src/AudioMixer.cpp
+      src/AudioOutput.cpp
+      src/MediaPluginHost.cpp
+      src/PluginBus.cpp
+      src/ScriptObject.cpp
+      "${PPUC_VPINBALL_DIR}/plugins/plugins/MsgPluginManager.cpp"
+      tests/fakectl/plugin_smoke.cpp
+   )
+   target_include_directories(ppuc_plugin_smoke PRIVATE ${PPUC_INCLUDE_DIRS})
+   target_link_directories(ppuc_plugin_smoke PRIVATE
+      third-party/build-libs/${PLATFORM}-${ARCH}
+      third-party/runtime-libs/${PLATFORM}-${ARCH}
+   )
+   target_link_libraries(ppuc_plugin_smoke PRIVATE SDL3 SDL3_image)
+   set_target_properties(ppuc_plugin_smoke PROPERTIES
+      BUILD_WITH_INSTALL_RPATH TRUE
+      INSTALL_RPATH "${CMAKE_CURRENT_SOURCE_DIR}/third-party/runtime-libs/${PLATFORM}-${ARCH}"
+   )
+   add_test(NAME ppuc_plugin_smoke
+      COMMAND ppuc_plugin_smoke "${CMAKE_BINARY_DIR}/plugins")
+   set(PPUC_FAKECTL_DIR "${CMAKE_BINARY_DIR}/plugins/fakectl")
+   add_custom_command(TARGET FakeCtlPlugin POST_BUILD
+      COMMAND "${CMAKE_COMMAND}" -E make_directory "${PPUC_FAKECTL_DIR}"
+      COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_CURRENT_SOURCE_DIR}/tests/fakectl/plugin.cfg" "${PPUC_FAKECTL_DIR}/plugin.cfg"
+      COMMAND "${CMAKE_COMMAND}" -E copy "$<TARGET_FILE:FakeCtlPlugin>" "${PPUC_FAKECTL_DIR}"
+   )
+endif()
+
 if(PPUC_BUILD_TESTS)
    enable_testing()
 
