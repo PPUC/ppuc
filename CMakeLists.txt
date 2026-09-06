@@ -276,6 +276,7 @@ add_executable(ppuc-pinmame
    src/LuaRulesEngine.cpp
    src/MediaPluginHost.cpp
    src/PluginBus.cpp
+   src/PluginEngine.cpp
    src/ScriptObject.cpp
    src/PinmameEngine.cpp
    src/PinmameNvramMapLoader.cpp
@@ -780,6 +781,7 @@ if(PPUC_BUILD_TESTS)
       tests/test_lua_rules_timing.cpp
       tests/test_pinmame_nvram_tracking.cpp
       tests/test_audio_mixer.cpp
+      tests/test_plugin_switch_map.cpp
       tests/test_script_object.cpp
       tests/test_uf2_image.cpp
    )
