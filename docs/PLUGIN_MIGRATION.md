@@ -815,6 +815,29 @@ and nothing more.
 | 21 | `StateSrcId.overrideId` (+ optional push event) | V | ~90 | D | — |
 | 22 | `ControllerDef.capabilities` — so `vni` stops using the `pinmame::` prefix as a proxy for `PMPI_EVT_ON_CONSOLE_DATA` | V | ~30 | D | — |
 
+### Do not expose Serum's scaling algorithm as a bus message
+
+libserum 2.6.2 upscales internally and never downscales, and
+`Serum_GetScalingAlgorithm()` reports the authored choice so a caller scaling
+the output further can match it. libdmdutil already does this at
+`DMD.cpp:1634`, which works because it links libserum directly.
+
+Mirroring that onto the bus so a sink can ask looks like the obvious next step.
+Don't, for now:
+
+- `serum.cpp:45` holds a single file-static `colorizer`, so any global query is
+  implicitly single-colorization. Scaling is a property *of a source*, so if it
+  ever belongs on the bus it belongs as a `DisplaySrcId` field.
+- Nothing would consume it. `dmdutil` hands RGB to libdmdutil without scaling,
+  and `upscaledmd` deliberately applies a user-chosen filter rather than the
+  authored one. The only future consumer is `hardware-dmd` (#14).
+- **`DisplaySinkId` (#12) largely dissolves the need.** Once the colorizer
+  produces the plane matching the panel, nothing downstream scales and the
+  algorithm never has to leave the plugin. Shipping the workaround first takes
+  the pressure off the real fix.
+
+Revisit as part of #12, not before.
+
 ### `DisplaySinkId` — the strawman for #12
 
 ```c
