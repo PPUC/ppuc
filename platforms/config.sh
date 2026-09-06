@@ -11,12 +11,12 @@ SDL_MIXER_SHA=72a81869b45e249e8e67102db4e98dd2441f05a1
 FLITE_SHA=6c9f20dc915b17f5619340069889db0aa007fcdc
 ESPEAK_NG_SHA=1.52.0
 LUA_VERSION=5.4.8
-PINMAME_SHA=3a5ce504118c6cb79bd365db12d6baec08708aaf
+PINMAME_SHA=d2f97f5087e83392313f05483be6b2d948c2f7ae
 PINMAME_NVRAM_MAPS_SHA=d8693b9ca59a1b871d2a473be3adb0392471a8e3
 LIBPPUC_SHA=b514db24d7867b5ad4bbb565dfb382b0f483d5fb
 DOCTEST_VERSION=2.4.11
 LIBSDLDMD_SHA=6091a7157af07efe6fc8278a36bda63efe80f15a
-VPINBALL_SHA=c0b065d443c4d6ca393679795f76159a0229418c
+VPINBALL_SHA=0ad6e86bed5323b5676c506c22739b06f0a3f9fe
 VPINBALL_SDL_SHA=f87239e71e42da91ca317a12eefb82cfbf3393eb
 VPINBALL_SDL_IMAGE_SHA="${VPINBALL_SDL_IMAGE_SHA:-${SDL_IMAGE_SHA}}"
 VPINBALL_SDL_TTF_SHA=a1ce3670aec736ecbf0936c43f2f0cc53aa61e5b
@@ -620,8 +620,15 @@ ppuc_prepare_vpinball_media_dependencies() {
       ppuc_vpinball_media_glob_copy "${PPUC_SOURCE_ROOT}/third-party/runtime-libs/${platform_tag}/libpupdmd.so*" "${runtime_dir}"
    fi
    cp -a "${PPUC_SOURCE_ROOT}/third-party/include/pupdmd.h" "${include_dir}/"
-   mkdir -p "${ppuc_include_dir}/pup"
-   cp -a "${vpinball_root}/plugins/pup/PUPPlugin.h" "${ppuc_include_dir}/pup/"
+   # PUPPlugin.h is not staged: PUPPI_MSG_QUEUE_EVENT was a PPUC-only addition
+   # to the fork and no longer exists. PUP discovers controller state from the
+   # bus now, so nothing here includes that header.
+   # PinMAMEPlugin.h comes from the pinmame tree and carries PMPI_GAMEID_PREFIX,
+   # PMPI_EVT_ON_AUDIO_CMD and PinMAMEChildBoardEventMsg, which the media host
+   # needs to publish its controller and its sound commands.
+   mkdir -p "${ppuc_include_dir}/pinmame"
+   cp -a "${PPUC_SOURCE_ROOT}/external/pinmame/pinmame/src/libpinmame/PinMAMEPlugin.h" \
+      "${ppuc_include_dir}/pinmame/"
 }
 
 ppuc_prepare_vpinball_media_plugins() {

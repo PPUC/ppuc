@@ -120,11 +120,17 @@ if(NOT DEFINED PPUC_VPINBALL_DIR OR PPUC_VPINBALL_DIR STREQUAL "")
    endif()
 endif()
 get_filename_component(PPUC_VPINBALL_DIR "${PPUC_VPINBALL_DIR}" ABSOLUTE BASE_DIR "${PPUC_REAL_SOURCE_DIR}")
+# plugins/pup/PUPPlugin.h is deliberately absent: PUPPI_MSG_QUEUE_EVENT was a
+# PPUC-only addition to the fork and does not exist upstream. PUP now discovers
+# controller state from the bus instead of being pushed events.
 set(PPUC_REQUIRED_VPINBALL_PLUGIN_FILES
    "${PPUC_VPINBALL_DIR}/plugins/plugins/MsgPlugin.h"
    "${PPUC_VPINBALL_DIR}/plugins/plugins/MsgPluginManager.h"
    "${PPUC_VPINBALL_DIR}/plugins/plugins/MsgPluginManager.cpp"
-   "${PPUC_VPINBALL_DIR}/plugins/pup/PUPPlugin.h"
+   "${PPUC_VPINBALL_DIR}/plugins/plugins/ControllerPlugin.h"
+   "${PPUC_VPINBALL_DIR}/plugins/plugins/ScriptablePlugin.h"
+   "${PPUC_VPINBALL_DIR}/plugins/plugins/LoggingPlugin.h"
+   "${PPUC_VPINBALL_DIR}/plugins/plugins/VPXPlugin.h"
 )
 foreach(PPUC_REQUIRED_VPINBALL_PLUGIN_FILE IN LISTS PPUC_REQUIRED_VPINBALL_PLUGIN_FILES)
    if(NOT EXISTS "${PPUC_REQUIRED_VPINBALL_PLUGIN_FILE}")
@@ -133,6 +139,17 @@ foreach(PPUC_REQUIRED_VPINBALL_PLUGIN_FILE IN LISTS PPUC_REQUIRED_VPINBALL_PLUGI
          "Run the platform external.sh script first.")
    endif()
 endforeach()
+
+# The plugin SDK replaced the split GetInputs/GetDevices messages with a single
+# unified state API. Building against the old header fails deep inside
+# MediaPluginHost with errors that say nothing about the pin, so check here.
+file(READ "${PPUC_VPINBALL_DIR}/plugins/plugins/ControllerPlugin.h" PPUC_CTLPI_HEADER)
+if(NOT PPUC_CTLPI_HEADER MATCHES "CTLPI_STATE_GET_SRC_MSG")
+   message(FATAL_ERROR
+      "vpinball plugin SDK is too old: ControllerPlugin.h has no unified state API. "
+      "Bump VPINBALL_SHA in platforms/config.sh and re-run external.sh.")
+endif()
+unset(PPUC_CTLPI_HEADER)
 list(APPEND PPUC_INCLUDE_DIRS
    "${PPUC_VPINBALL_DIR}/plugins"
    "${PPUC_VPINBALL_DIR}/third-party/include"

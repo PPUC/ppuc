@@ -28,10 +28,10 @@
 #include "SDL3/SDL.h"
 #include "SDL3_image/SDL_image.h"
 
+#include "pinmame/PinMAMEPlugin.h"
 #include "plugins/ControllerPlugin.h"
 #include "plugins/LoggingPlugin.h"
 #include "plugins/MsgPluginManager.h"
-#include "pup/PUPPlugin.h"
 #include "plugins/ScriptablePlugin.h"
 #include "plugins/VPXPlugin.h"
 
@@ -304,6 +304,16 @@ void DrawSegmentByIndex(SDL_Renderer* renderer, int index, const SDL_FRect& rect
   }
 }
 
+// One machine-state change on its way to the plugins. Matches the payload
+// B2SPluginEventStream expects on "B2S"/"OnStateChange:1" byte for byte, which
+// is the only un-gated way into PUP's and DOF's event streams.
+struct PpucPluginEvent
+{
+  uint8_t type;
+  int32_t index;
+  int32_t value;
+};
+
 struct B2SSegmentDigitMsg
 {
   int digit;
@@ -392,7 +402,7 @@ void ConvertAudioUpdateToS16(const AudioUpdateMsg& msg,
   const float volume = std::isfinite(msg.volume)
                            ? std::clamp(msg.volume, 0.0f, 1.0f)
                            : 0.0f;
-  if (msg.format == CTLPI_AUDIO_FORMAT_SAMPLE_FLOAT)
+  if (msg.sampleFormat == CTLPI_AUDIO_FORMAT_SAMPLE_FLOAT)
   {
     const size_t count = msg.bufferSize / sizeof(float);
     const auto* input = reinterpret_cast<const float*>(msg.buffer);
@@ -404,7 +414,7 @@ void ConvertAudioUpdateToS16(const AudioUpdateMsg& msg,
     return;
   }
 
-  if (msg.format == CTLPI_AUDIO_FORMAT_SAMPLE_INT16)
+  if (msg.sampleFormat == CTLPI_AUDIO_FORMAT_SAMPLE_INT16)
   {
     const size_t count = msg.bufferSize / sizeof(int16_t);
     const auto* input = reinterpret_cast<const int16_t*>(msg.buffer);
@@ -523,7 +533,7 @@ private:
   void ReleaseB2SServer();
   bool CallB2SMember(const char* name, std::initializer_list<const char*> argTypes,
                      ScriptVariant* args);
-  void DispatchB2SEvent(const PUPQueueEventMsg& event);
+  void DispatchB2SEvent(const PpucPluginEvent& event);
   void DispatchB2SSegmentDigit(const B2SSegmentDigitMsg& digit);
   void DispatchB2SPlayerScore(const B2SPlayerScoreMsg& score);
   bool EnsureBackglassWindow();
@@ -532,7 +542,7 @@ private:
   AudioOutput* audioOutput_ = nullptr;
   PluginBus& bus_;
   std::mutex pendingMutex_;
-  std::vector<PUPQueueEventMsg> pendingEvents_;
+  std::vector<PpucPluginEvent> pendingEvents_;
   std::vector<B2SSegmentDigitMsg> pendingB2SSegmentDigits_;
   std::vector<B2SPlayerScoreMsg> pendingB2SPlayerScores_;
   std::vector<std::pair<int, int>> pendingSoundCommands_;
@@ -560,11 +570,11 @@ private:
   unsigned int getAudioSrcId_ = 0;
   unsigned int audioUpdateId_ = 0;
   unsigned int getAuxRendererId_ = 0;
-  unsigned int onControllerGameStartId_ = 0;
-  unsigned int onControllerGameEndId_ = 0;
   unsigned int onVpxGameEndId_ = 0;
-  unsigned int onSoundCommandId_ = 0;
-  unsigned int pupQueueEventId_ = 0;
+  unsigned int onAudioCmdId_ = 0;
+  std::unique_ptr<PinballPlugin::Controller::CtrlItemProvider<ControllerDef>> controllerProvider_;
+  std::string controllerGameId_;
+  unsigned int b2sStateChangeId_ = 0;
 
   AudioSrcId pinmameAudioSrc_ = {};
   uint32_t nextAudioResId_ = 1;
@@ -661,14 +671,20 @@ bool MediaPluginHost::Impl::Initialize(const Options& options,
   getAudioSrcId_ = api.GetMsgID(CTLPI_NAMESPACE, CTLPI_AUDIO_GET_SRC_MSG);
   audioUpdateId_ = api.GetMsgID(CTLPI_NAMESPACE, CTLPI_AUDIO_ON_UPDATE_MSG);
   getAuxRendererId_ = api.GetMsgID(VPXPI_NAMESPACE, VPXPI_MSG_GET_AUX_RENDERER);
-  onControllerGameStartId_ =
-      api.GetMsgID(CTLPI_NAMESPACE, CTLPI_EVT_ON_GAME_START);
-  onControllerGameEndId_ =
-      api.GetMsgID(CTLPI_NAMESPACE, CTLPI_EVT_ON_GAME_END);
   onVpxGameEndId_ = api.GetMsgID(VPXPI_NAMESPACE, VPXPI_EVT_ON_GAME_END);
-  onSoundCommandId_ =
-      api.GetMsgID(CTLPI_NAMESPACE, CTLPI_EVT_ON_SOUND_COMMAND);
-  pupQueueEventId_ = api.GetMsgID(PUPPI_NAMESPACE, PUPPI_MSG_QUEUE_EVENT);
+  onAudioCmdId_ = api.GetMsgID(PMPI_NAMESPACE, PMPI_EVT_ON_AUDIO_CMD);
+
+  controllerProvider_ = std::make_unique<
+      PinballPlugin::Controller::CtrlItemProvider<ControllerDef>>(
+      &api, bus_.HostEndpointId(), CTLPI_CONTROLLERS_GET_MSG,
+      CTLPI_CONTROLLERS_ON_CHG_MSG);
+  // PUPPI_MSG_QUEUE_EVENT was a PPUC-only addition to the fork and no longer
+  // exists: PUP discovers controller state from the bus instead of being
+  // pushed events. B2SPluginEventStream -- which drives both PUP and DOF --
+  // still subscribes unconditionally to this message, so it stays the way to
+  // inject the state no controller can know: rules-authored triggers, and the
+  // board-local switches PinMAME never sees.
+  b2sStateChangeId_ = api.GetMsgID("B2S", "OnStateChange:1");
 
   api.SubscribeMsg(bus_.HostEndpointId(), getVpxApiId_, OnGetVpxApi, this);
   api.SubscribeMsg(bus_.HostEndpointId(), getAudioSrcId_, OnGetAudioSrc, this);
@@ -693,9 +709,9 @@ bool MediaPluginHost::Impl::Initialize(const Options& options,
   pinmameAudioSrc_.id.endpointId = bus_.HostEndpointId();
   pinmameAudioSrc_.id.resId = nextAudioResId_++;
   pinmameAudioSrc_.overrideId.id = 0;
-  pinmameAudioSrc_.type = CTLPI_AUDIO_SRC_BACKGLASS_STEREO;
-  pinmameAudioSrc_.format = CTLPI_AUDIO_FORMAT_SAMPLE_INT16;
-  pinmameAudioSrc_.sampleRate = 44100;
+  pinmameAudioSrc_.name = "PPUC";
+  pinmameAudioSrc_.desc = "PPUC game audio";
+  pinmameAudioSrc_.target = CTLPI_AUDIO_TARGET_BACKGLASS;
 
   initialized_ = true;
   return true;
@@ -740,30 +756,22 @@ void MediaPluginHost::Impl::Shutdown()
     api.ReleaseMsgID(getAuxRendererId_);
     getAuxRendererId_ = 0;
   }
-  if (onControllerGameStartId_ != 0)
+  // The provider must go before the endpoint that owns it.
+  controllerProvider_.reset();
+  if (onAudioCmdId_ != 0)
   {
-    api.ReleaseMsgID(onControllerGameStartId_);
-    onControllerGameStartId_ = 0;
-  }
-  if (onControllerGameEndId_ != 0)
-  {
-    api.ReleaseMsgID(onControllerGameEndId_);
-    onControllerGameEndId_ = 0;
+    api.ReleaseMsgID(onAudioCmdId_);
+    onAudioCmdId_ = 0;
   }
   if (onVpxGameEndId_ != 0)
   {
     api.ReleaseMsgID(onVpxGameEndId_);
     onVpxGameEndId_ = 0;
   }
-  if (onSoundCommandId_ != 0)
+  if (b2sStateChangeId_ != 0)
   {
-    api.ReleaseMsgID(onSoundCommandId_);
-    onSoundCommandId_ = 0;
-  }
-  if (pupQueueEventId_ != 0)
-  {
-    api.ReleaseMsgID(pupQueueEventId_);
-    pupQueueEventId_ = 0;
+    api.ReleaseMsgID(b2sStateChangeId_);
+    b2sStateChangeId_ = 0;
   }
 
   initialized_ = false;
@@ -787,12 +795,21 @@ void MediaPluginHost::Impl::OnGameStart()
     return;
   }
   gameStarted_ = true;
-  CtlOnGameStartMsg msg{
-      .gameId = gameId_.c_str(),
-      .hardwareGen = options_.hardwareGen,
-  };
-  const MsgPluginAPI& api = bus_.Api();
-  api.BroadcastMsg(bus_.HostEndpointId(), onControllerGameStartId_, &msg);
+
+  // A controller appearing IS the game-start signal now; there is no start
+  // event any more. AltSound, PUP, B2S, DOF and Serum all bind by consuming
+  // CTLPI_CONTROLLERS_GET_MSG and filtering on the gameId prefix, so without
+  // this provider none of them ever activate.
+  //
+  // The prefix is "pinmame::" rather than something PPUC-specific because
+  // gameId names *what is emulated and how it is exposed*, not who is
+  // emulating it (ControllerPlugin.h). PPUC runs the same ROMs and its
+  // AltSound/PUP/B2S assets are keyed by the same names, so this is accurate.
+  controllerGameId_ = std::string(PMPI_GAMEID_PREFIX) + gameId_;
+  controllerProvider_->SetItem({
+      .endpointId = bus_.HostEndpointId(),
+      .gameId = controllerGameId_.c_str(),
+  });
 }
 
 void MediaPluginHost::Impl::OnGameEnd()
@@ -801,9 +818,10 @@ void MediaPluginHost::Impl::OnGameEnd()
   {
     return;
   }
-  const MsgPluginAPI& api = bus_.Api();
-  api.BroadcastMsg(bus_.HostEndpointId(), onControllerGameEndId_, nullptr);
-  api.BroadcastMsg(bus_.HostEndpointId(), onVpxGameEndId_, nullptr);
+  // Withdrawing the controller is the game-end signal.
+  controllerProvider_->ClearItems();
+  controllerGameId_.clear();
+  bus_.Api().BroadcastMsg(bus_.HostEndpointId(), onVpxGameEndId_, nullptr);
   gameStarted_ = false;
 }
 
@@ -816,7 +834,7 @@ void MediaPluginHost::Impl::QueueEvent(char source, int id, int value)
   std::lock_guard<std::mutex> lock(pendingMutex_);
   if (pendingEvents_.size() < 1024)
   {
-    pendingEvents_.push_back(PUPQueueEventMsg{source, id, value});
+    pendingEvents_.push_back(PpucPluginEvent{static_cast<uint8_t>(source), id, value});
   }
 }
 
@@ -854,7 +872,7 @@ void MediaPluginHost::Impl::QueueDmdTrigger(uint16_t id)
 
 void MediaPluginHost::Impl::OnSoundCommand(int boardNo, int cmd)
 {
-  if (!initialized_ || onSoundCommandId_ == 0)
+  if (!initialized_ || onAudioCmdId_ == 0)
   {
     return;
   }
@@ -871,7 +889,7 @@ void MediaPluginHost::Impl::Process()
   {
     return;
   }
-  std::vector<PUPQueueEventMsg> events;
+  std::vector<PpucPluginEvent> events;
   std::vector<B2SSegmentDigitMsg> b2sSegmentDigits;
   std::vector<B2SPlayerScoreMsg> b2sPlayerScores;
   std::vector<std::pair<int, int>> soundCommands;
@@ -882,12 +900,11 @@ void MediaPluginHost::Impl::Process()
     b2sPlayerScores.swap(pendingB2SPlayerScores_);
     soundCommands.swap(pendingSoundCommands_);
   }
-  for (PUPQueueEventMsg& event : events)
+  for (PpucPluginEvent& event : events)
   {
-    if (pupQueueEventId_ != 0)
+    if (b2sStateChangeId_ != 0)
     {
-      bus_.Api().BroadcastMsg(bus_.HostEndpointId(), pupQueueEventId_,
-                                              &event);
+      bus_.Api().BroadcastMsg(bus_.HostEndpointId(), b2sStateChangeId_, &event);
     }
     DispatchB2SEvent(event);
   }
@@ -901,12 +918,13 @@ void MediaPluginHost::Impl::Process()
   }
   for (const auto& [boardNo, cmd] : soundCommands)
   {
-    CtlOnSoundCommandMsg msg{
-        .boardNo = static_cast<unsigned int>(boardNo),
-        .cmd = static_cast<unsigned int>(cmd),
+    // CTLPI_EVT_ON_SOUND_COMMAND is gone; sound commands are a PinMAME-level
+    // event now, and that is what AltSound subscribes to.
+    PinMAMEChildBoardEventMsg msg{
+        .boardNo = static_cast<uint32_t>(boardNo),
+        .cmd = static_cast<uint32_t>(cmd),
     };
-    bus_.Api().BroadcastMsg(bus_.HostEndpointId(), onSoundCommandId_,
-                                            &msg);
+    bus_.Api().BroadcastMsg(bus_.HostEndpointId(), onAudioCmdId_, &msg);
   }
   // PluginBus::Process() drains async callbacks once per main-loop tick.
 
@@ -1055,14 +1073,14 @@ void MediaPluginHost::Impl::OnAudioUpdate(unsigned int, void* userData,
   auto* self = static_cast<Impl*>(userData);
   auto* msg = static_cast<AudioUpdateMsg*>(msgData);
   if (self == nullptr || msg == nullptr || self->audioOutput_ == nullptr ||
-      msg->id.endpointId == self->bus_.HostEndpointId())
+      msg->sourceId.endpointId == self->bus_.HostEndpointId())
   {
     return;
   }
 
   if (msg->buffer == nullptr || msg->bufferSize == 0)
   {
-    self->audioOutput_->StopPluginStream(msg->id.id);
+    self->audioOutput_->StopPluginStream(msg->streamId.id);
     return;
   }
 
@@ -1073,10 +1091,12 @@ void MediaPluginHost::Impl::OnAudioUpdate(unsigned int, void* userData,
     return;
   }
 
+  // A source may carry several streams -- PUP runs one per media player --
+  // so the mixer is keyed on streamId, not sourceId.
   const int channels =
-      msg->type == CTLPI_AUDIO_SRC_BACKGLASS_MONO ? 1 : 2;
+      msg->channelFormat == CTLPI_AUDIO_FORMAT_CHANNEL_MONO ? 1 : 2;
   self->audioOutput_->QueuePluginSamples(
-      msg->id.id, samples.data(), samples.size(),
+      msg->streamId.id, samples.data(), samples.size(),
       static_cast<int>(msg->sampleRate), channels);
 }
 
@@ -1450,19 +1470,19 @@ bool MediaPluginHost::Impl::CallB2SMember(
   return EnsureB2SServer() && b2sServer_.Call(name, argTypes, args);
 }
 
-void MediaPluginHost::Impl::DispatchB2SEvent(const PUPQueueEventMsg& event)
+void MediaPluginHost::Impl::DispatchB2SEvent(const PpucPluginEvent& event)
 {
   if (!options_.enableB2S)
   {
     return;
   }
-  if (event.source != 'L' && event.source != 'S' && event.source != 'G')
+  if (event.type != 'L' && event.type != 'S' && event.type != 'G')
   {
     return;
   }
 
   ScriptVariant args[2] = {};
-  args[0].vInt = event.id;
+  args[0].vInt = event.index;
   args[1].vInt = event.value;
   CallB2SMember("B2SSetData", {"int", "int"}, args);
 }
