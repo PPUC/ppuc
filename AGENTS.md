@@ -109,8 +109,24 @@ Dependency pins live in `platforms/config.sh` (`PINMAME_SHA`, `VPINBALL_SHA`,
 `../io-boards` do not reach a normal build until those pins are bumped.
 
 CI is `.github/workflows/ppuc.yml`: win-mingw x64, macOS arm64, linux x64.
-macOS x64 and linux aarch64 are currently commented out. There are **no
-automated tests** — CI only proves that the applications compile.
+macOS x64 and linux aarch64 are currently commented out. CI proves that the
+applications compile; it does not yet run the tests below.
+
+Tests build with `-DPPUC_BUILD_TESTS=ON` and run under `ctest`, in three tiers:
+
+- `ppuc_tests` — units. Must keep linking without libppuc, libpinmame,
+  yaml-cpp, SDL or DMDUtil; when a unit needs one of those, split the
+  dependency-free logic into its own translation unit rather than linking it.
+- `ppuc_plugin_smoke` — drives `PluginBus` and `MediaPluginHost` headlessly
+  against `tests/fakectl`, a stub CTLPI provider. Needs SDL, hence a separate
+  target.
+- `ppuc_tmwrp_coldstart` — the only test that runs a real ROM. Boots Time Warp,
+  presents a ball in the outhole, a coin and the start button, and asserts the
+  ball-release coil energizes. This is the sole end-to-end coverage of
+  `PluginEngine`'s 1 kHz solenoid poll thread and its quiesce gate: a wedged
+  poll thread and an idle attract-mode machine both look like silence, so the
+  test makes the ROM produce an edge on demand. Skips itself when `ppuc_games`
+  is not checked out beside this repo.
 
 Format with `.clang-format` before committing.
 

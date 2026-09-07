@@ -800,4 +800,18 @@ if(PPUC_BUILD_TESTS)
    endif()
 
    add_test(NAME ppuc_tests COMMAND ppuc_tests)
+
+   # The one test that runs a real ROM. It is the only check that a solenoid
+   # edge produced by the emulator actually reaches a host sink -- the RT poll
+   # thread and the quiesce gate have no other end-to-end coverage. It skips
+   # itself (exit 77) when ppuc_games is not checked out beside this repo, so it
+   # is safe to leave enabled everywhere.
+   add_test(NAME ppuc_tmwrp_coldstart
+      COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/tmwrp_coldstart.sh")
+   # Deliberately not $<TARGET_FILE:ppuc-pinmame>: the build-tree binary has no
+   # usable rpath and aborts on libppuc. Only the packaged tree under ppuc/ can
+   # be run, which is what the script defaults to.
+   set_tests_properties(ppuc_tmwrp_coldstart PROPERTIES
+      SKIP_RETURN_CODE 77
+      TIMEOUT 120)
 endif()
