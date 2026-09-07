@@ -625,7 +625,19 @@ ppuc_prepare_vpinball_media_dependencies() {
    # the PinMAME event messages. vpinball's own build gets it by staging pinmame;
    # PPUC builds the plugins against its own pinmame checkout instead, so it has
    # to put the header where they expect it.
+   # PinMAMEPlugin links libpinmame out of vpinball's own runtime-libs. PPUC
+   # already built it in external.sh, so reuse that rather than build it twice.
+   if [ "${platform}" = "macos" ]; then
+      ppuc_copy_dylib_link_chain "${PPUC_SOURCE_ROOT}/third-party/runtime-libs/${platform_tag}" \
+         "libpinmame.dylib" "${runtime_dir}"
+   else
+      ppuc_vpinball_media_glob_copy \
+         "${PPUC_SOURCE_ROOT}/third-party/runtime-libs/${platform_tag}/libpinmame.so*" "${runtime_dir}"
+   fi
    mkdir -p "${include_dir}/pinmame"
+   # Under pinmame/, not at the include root: the plugin sources include
+   # "pinmame/libpinmame.h", matching how vpinball stages its own pinmame.
+   cp -a "${PPUC_SOURCE_ROOT}/third-party/include/libpinmame.h" "${include_dir}/pinmame/"
    cp -a "${PPUC_SOURCE_ROOT}/external/pinmame/pinmame/src/libpinmame/PinMAMEPlugin.h" \
       "${include_dir}/pinmame/"
    # PUPPlugin.h is not staged: PUPPI_MSG_QUEUE_EVENT was a PPUC-only addition
@@ -722,11 +734,14 @@ ppuc_build_vpinball_media_plugins() {
    # Upstream derives the plugin folder from the app bundle, which creates it as
    # a side effect. Building the plugins without the app means nothing does, and
    # the plugin.cfg copy is the first thing to notice.
-   mkdir -p "${plugin_package_dir}/pup" "${plugin_package_dir}/altsound" "${plugin_package_dir}/b2s"
+   mkdir -p "${plugin_package_dir}/pup" "${plugin_package_dir}/altsound" "${plugin_package_dir}/b2s" \
+      "${plugin_package_dir}/pinmame"
 
    # B2SLegacyPlugin is deliberately not built: MediaPluginHost only ever
    # loads "PUP", "AltSound" and "B2S". --b2s uses the modern B2S plugin.
-   for plugin_target in PUPPlugin AltSoundPlugin B2SPlugin; do
+   # PinMAMEPlugin first: it is what actually runs the ROM, so a link failure
+   # there should surface before the long PUP/ffmpeg build.
+   for plugin_target in PinMAMEPlugin PUPPlugin AltSoundPlugin B2SPlugin; do
       cmake --build "${vpinball_build_dir}" --target "${plugin_target}"
    done
 
@@ -750,9 +765,13 @@ ppuc_build_vpinball_media_plugins() {
       if [ -f "${plugin_package_dir}/pup/plugin-pup.dylib" ]; then
          install_name_tool -add_rpath "@loader_path/../.." "${plugin_package_dir}/pup/plugin-pup.dylib" 2>/dev/null || true
       fi
-      if [ -f "${plugin_package_dir}/b2s/plugin-b2s.dylib" ]; then
-         install_name_tool -add_rpath "@loader_path/../.." "${plugin_package_dir}/b2s/plugin-b2s.dylib" 2>/dev/null || true
-      fi
+      # Reaches the shared dylibs in ppuc/, two levels up from plugins/<name>/.
+      for plugin_using_shared_libs in b2s pinmame; do
+         if [ -f "${plugin_package_dir}/${plugin_using_shared_libs}/plugin-${plugin_using_shared_libs}.dylib" ]; then
+            install_name_tool -add_rpath "@loader_path/../.." \
+               "${plugin_package_dir}/${plugin_using_shared_libs}/plugin-${plugin_using_shared_libs}.dylib" 2>/dev/null || true
+         fi
+      done
       # Added rather than set through CMAKE_INSTALL_RPATH: setting it would
       # replace the rpaths upstream gives every plugin, which the app-bundle
       # layout depends on.
@@ -767,6 +786,9 @@ ppuc_build_vpinball_media_plugins() {
       rm -f "${plugin_package_dir}"/pup/libSDL3_image*.dylib
       rm -f "${plugin_package_dir}"/pup/libSDL3_mixer*.dylib
       rm -f "${plugin_package_dir}"/pup/libpupdmd*.dylib
+      # libpinmame is in ppuc/ beside the executables, reached through the
+      # @loader_path/../.. rpath added below.
+      rm -f "${plugin_package_dir}"/pinmame/libpinmame*.dylib
 
       # The glob copy resolves symlinks, so the unversioned aliases a consumer
       # links against have to be recreated.

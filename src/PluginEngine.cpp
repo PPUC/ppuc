@@ -203,9 +203,15 @@ void PluginEngine::PollThreadMain()
   std::vector<uint8_t> last;
   std::vector<uint8_t> raw;
 
+  uint64_t ticks = 0;
+  uint64_t fetches = 0;
+  uint64_t worstLateUs = 0;
+  uint64_t nextReportMs = NowMs() + 1000;
+
   while (!m_stopRequested.load(std::memory_order_acquire))
   {
     deadline += period;
+    ++ticks;
 
     // --- fetch phase: inside the gate, touching provider memory ---
     m_gateActive.fetch_add(1, std::memory_order_seq_cst);
@@ -228,6 +234,7 @@ void PluginEngine::PollThreadMain()
         plan.entries[i].Get(plan.entries[i].context, &raw[i]);
       }
       m_gateActive.fetch_sub(1, std::memory_order_release);
+      ++fetches;
 
       // --- dispatch phase: outside the gate, PPUC-owned memory only ---
       for (size_t i = 0; i < numbers.size(); ++i)
@@ -259,6 +266,30 @@ void PluginEngine::PollThreadMain()
     {
       m_gateActive.fetch_sub(1, std::memory_order_release);
       localGeneration = 0;
+    }
+
+    // The mean is uninteresting -- it is dominated by the source's own 60 Hz
+    // quantization. The tail is what would hurt, so report the worst overshoot.
+    const auto now = std::chrono::steady_clock::now();
+    if (now > deadline)
+    {
+      const auto lateUs =
+          static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(now - deadline).count());
+      worstLateUs = std::max(worstLateUs, lateUs);
+    }
+    if (m_options.debugCoils)
+    {
+      const uint64_t nowMs = NowMs();
+      if (nowMs >= nextReportMs)
+      {
+        nextReportMs = nowMs + 1000;
+        std::printf("Coil poll: %llu ticks/s, %llu fetches/s, worst overshoot %llu us\n",
+                    static_cast<unsigned long long>(ticks), static_cast<unsigned long long>(fetches),
+                    static_cast<unsigned long long>(worstLateUs));
+        ticks = 0;
+        fetches = 0;
+        worstLateUs = 0;
+      }
     }
 
     std::this_thread::sleep_until(deadline);
