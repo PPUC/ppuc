@@ -34,6 +34,10 @@ uint32_t g_endpointId = 0;
 unsigned int g_onAudioCmdId = 0;
 unsigned int g_onStateChangeId = 0;
 std::unique_ptr<CtrlItemConsumer<ControllerDef>> g_controllers;
+// Two audio sources where the second overrides the first, mirroring what
+// libpinmame and AltSound publish at runtime. Without a pack installed there is
+// no other way to exercise the host's override handling.
+std::unique_ptr<CtrlItemProvider<AudioSrcId>> g_audioSources;
 std::mutex g_logMutex;
 
 void Observe(const char* format, ...)
@@ -63,9 +67,17 @@ void Observe(const char* format, ...)
 // and strip the prefix to get the game id.
 void OnControllersChanged()
 {
+  // The count matters as much as the entry. AltSound, PUP, DOF and B2S all take
+  // items.front() with no tie-break, so two endpoints claiming the same game is
+  // not a duplicate to shrug at: whichever happens to be first decides which
+  // audio source AltSound tries to override.
+  size_t count = 0;
   const ControllerDef controller = g_controllers->With(
-      [](const std::vector<ControllerDef>& items)
-      { return items.empty() ? ControllerDef {} : items.front(); });
+      [&count](const std::vector<ControllerDef>& items)
+      {
+        count = items.size();
+        return items.empty() ? ControllerDef{} : items.front();
+      });
 
   if (controller.gameId == nullptr || controller.endpointId == 0)
   {
@@ -74,7 +86,8 @@ void OnControllersChanged()
   }
   const std::string prefix(PMPI_GAMEID_PREFIX);
   const std::string gameId = std::string(controller.gameId).substr(prefix.length());
-  Observe("controller endpoint=%u gameId=%s game=%s", controller.endpointId, controller.gameId, gameId.c_str());
+  Observe("controller endpoint=%u gameId=%s game=%s count=%zu", controller.endpointId, controller.gameId,
+          gameId.c_str(), count);
 }
 
 void MSGPIAPI OnAudioCmd(const unsigned int, void*, void* msgData)
@@ -122,6 +135,21 @@ MSGPI_EXPORT void MSGPIAPI FakeCtlPluginLoad(const uint32_t sessionId, const Msg
       []() {}, []() { OnControllersChanged(); });
   g_controllers->Subscribe();
 
+  g_audioSources = std::make_unique<CtrlItemProvider<AudioSrcId>>(g_api, g_endpointId, CTLPI_AUDIO_GET_SRC_MSG,
+                                                                  CTLPI_AUDIO_ON_SRC_CHG_MSG);
+  g_audioSources->AddItems({
+      {.id = {g_endpointId, 0},
+       .overrideId = {0, 0},
+       .name = "FakeRom",
+       .desc = "Stands in for the PinMAME ROM stream",
+       .target = CTLPI_AUDIO_TARGET_BACKGLASS},
+      {.id = {g_endpointId, 1},
+       .overrideId = {g_endpointId, 0},
+       .name = "FakePack",
+       .desc = "Stands in for an AltSound pack overriding the ROM",
+       .target = CTLPI_AUDIO_TARGET_BACKGLASS},
+  });
+
   g_onAudioCmdId = g_api->GetMsgID(PMPI_NAMESPACE, PMPI_EVT_ON_AUDIO_CMD);
   g_api->SubscribeMsg(g_endpointId, g_onAudioCmdId, OnAudioCmd, nullptr);
 
@@ -132,6 +160,7 @@ MSGPI_EXPORT void MSGPIAPI FakeCtlPluginLoad(const uint32_t sessionId, const Msg
 MSGPI_EXPORT void MSGPIAPI FakeCtlPluginUnload()
 {
   Observe("unloaded");
+  g_audioSources.reset();
   g_controllers->Unsubscribe();
   g_controllers.reset();
   g_api->UnsubscribeMsg(g_onStateChangeId, OnStateChange, nullptr);

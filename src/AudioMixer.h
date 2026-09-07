@@ -60,4 +60,12 @@ void Enqueue(Queue& queue, std::vector<int16_t> samples, size_t maxBufferedSampl
 // because the caller is mixing several queues into one buffer.
 bool Mix(Queue& queue, int16_t* mixBuffer, size_t sampleCount);
 
+// Consumes up to `sampleCount` samples without mixing them anywhere, returning
+// the same audibility answer Mix would have. A source that is currently
+// overridden must be drained rather than stalled: it keeps producing at the
+// emulator's rate whether or not anyone is listening, and a stalled queue would
+// grow to the overflow cap and then play back stale audio the moment the
+// override lifts.
+bool Discard(Queue& queue, size_t sampleCount);
+
 }  // namespace AudioMixer

@@ -47,6 +47,7 @@
 #else
 #include "SDLDMD/SDLDMD.h"
 #endif
+#include "AudioLanes.h"
 #include "AudioOutput.h"
 #include "LuaRulesEngine.h"
 #include "MediaPluginHost.h"
@@ -280,6 +281,12 @@ bool opt_debug_coils = false;
 bool opt_debug_lamps = false;
 bool opt_debug_effects = false;
 bool opt_debug_sound_commands = false;
+bool opt_debug_audio = false;
+// AltSound replaces the ROM stream by default, which is what PinMAME used to do
+// internally. Mode 1 lets the ROM back through where the pack is silent; it is
+// opt-in because it infers "the pack has nothing for this command" from silence
+// and that inference is not always right.
+int opt_altsound_mode = 0;
 bool opt_no_serial = false;
 bool opt_no_sound = false;
 // "pinmame" runs an original ROM under libpinmame; "script" runs the ROM-less
@@ -2362,6 +2369,14 @@ static struct cag_option options[] = {
      .access_name = "debug-sound-commands",
      .value_name = NULL,
      .description = "Print PinMAME sound command IDs for building altsound packs (optional)"},
+    {.identifier = '}',
+     .access_name = "debug-audio",
+     .value_name = NULL,
+     .description = "Print the plugin audio source topology and per-lane buffer depth (optional)"},
+    {.identifier = '<',
+     .access_name = "altsound-mode",
+     .value_name = "VALUE",
+     .description = "0 = AltSound replaces ROM sound (default), 1 = ROM sound where the pack is silent"},
     {.identifier = '0', .access_name = "switch-test", .value_name = NULL, .description = "Run switch test"},
     {.identifier = '1', .access_name = "coil-test", .value_name = NULL, .description = "Run coil test"},
     {.identifier = '2', .access_name = "lamp-test", .value_name = NULL, .description = "Run lamp test"},
@@ -3012,6 +3027,10 @@ int main(int argc, char** argv)
           opt_debug_effects = ParseIniBool(value);
         else if (key == "DebugSoundCommands")
           opt_debug_sound_commands = ParseIniBool(value);
+        else if (key == "DebugAudio")
+          opt_debug_audio = ParseIniBool(value);
+        else if (key == "AltSoundMode")
+          opt_altsound_mode = atoi(value.c_str());
         else if (key == "Serum" || key == "AltColor")
           opt_serum = ParseIniBool(value);
         else if (key == "Rules")
@@ -3366,6 +3385,12 @@ int main(int argc, char** argv)
       case '{':
         opt_debug_sound_commands = true;
         break;
+      case '}':
+        opt_debug_audio = true;
+        break;
+      case '<':
+        opt_altsound_mode = atoi(cag_option_get_value(&cag_context));
+        break;
       case '0':
         opt_switch_test = true;
         break;
@@ -3692,6 +3717,9 @@ int main(int argc, char** argv)
       }
       pAudioOutput->SetMusicEnabled(false);
     }
+
+    pAudioOutput->SetOverrideMode(opt_altsound_mode == 1 ? AudioLanes::OverrideMode::Fallback
+                                                         : AudioLanes::OverrideMode::Replace);
   }
 
   // The bus is no longer a media-only concern: the PinMAME engine runs as a
@@ -3711,7 +3739,12 @@ int main(int argc, char** argv)
       printf("Loading extra plugin: %s\n", id.c_str());
       pPluginBus->LoadPluginById(id);
     }
-    if (opt_pup || opt_altsound || opt_b2s)
+    // Not gated on the media flags any more. MediaPluginHost is also the audio
+    // sink for the ROM stream, which now arrives over the bus rather than
+    // through GameEngine::OnAudioFrames -- so without it a plugin-driven ROM
+    // plays no sound at all. With every media flag off it opens no window and
+    // loads no plugin; it just wires up audio, the controller definition and
+    // sound commands.
     {
     pMediaPluginHost = std::make_unique<MediaPluginHost>(pAudioOutput.get(), *pPluginBus);
     MediaPluginHost::Options mediaOptions;
@@ -3719,6 +3752,10 @@ int main(int argc, char** argv)
     mediaOptions.enableAltSound = opt_altsound;
     mediaOptions.enableB2S = opt_b2s;
     mediaOptions.debug = opt_debug;
+    mediaOptions.debugAudio = opt_debug_audio;
+    // libpinmame publishes the controller when a ROM runs; PPUC only needs to
+    // when there is no ROM.
+    mediaOptions.provideController = useScriptEngine;
     mediaOptions.pluginDir = opt_plugin_dir;
     mediaOptions.pupFolder = opt_pup_folder;
     mediaOptions.altSoundFolder = opt_altsound_folder;

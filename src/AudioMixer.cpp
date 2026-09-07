@@ -87,4 +87,35 @@ bool Mix(Queue& queue, int16_t* mixBuffer, size_t sampleCount)
   return hadAudibleSamples;
 }
 
+bool Discard(Queue& queue, size_t sampleCount)
+{
+  bool hadAudibleSamples = false;
+  size_t droppedSamples = 0;
+
+  while (droppedSamples < sampleCount && !queue.empty())
+  {
+    PendingBuffer& front = queue.front();
+    const size_t available = front.samples.size() - front.offsetSamples;
+    const size_t chunkSamples = std::min(available, sampleCount - droppedSamples);
+    const int16_t* source = front.samples.data() + front.offsetSamples;
+
+    for (size_t i = 0; i < chunkSamples && !hadAudibleSamples; ++i)
+    {
+      if (std::abs(static_cast<int>(source[i])) >= kAudibleSampleThreshold)
+      {
+        hadAudibleSamples = true;
+      }
+    }
+
+    droppedSamples += chunkSamples;
+    front.offsetSamples += chunkSamples;
+    if (front.offsetSamples >= front.samples.size())
+    {
+      queue.pop_front();
+    }
+  }
+
+  return hadAudibleSamples;
+}
+
 }  // namespace AudioMixer

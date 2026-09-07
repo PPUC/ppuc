@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <sstream>
 
 #include "AudioMixer.h"
@@ -60,7 +61,7 @@ void AudioOutput::Shutdown()
 {
   std::lock_guard<std::mutex> lock(mutex_);
   gameQueue_.clear();
-  pluginQueues_.clear();
+  pluginStreams_.clear();
   speechQueue_.clear();
 #if defined(PPUC_HAS_SDL3_MIXER)
   DestroyMusicTracksLocked();
@@ -208,7 +209,8 @@ void AudioOutput::QueueGameFrames(const int16_t* samples, size_t frameCount)
                      gameFrequency_, gameChannels_);
 }
 
-void AudioOutput::QueuePluginSamples(uint64_t streamId, const int16_t* samples,
+void AudioOutput::QueuePluginSamples(uint64_t sourceId, uint64_t streamId,
+                                     const int16_t* samples,
                                      size_t sampleCount, int frequency,
                                      int channels)
 {
@@ -218,20 +220,81 @@ void AudioOutput::QueuePluginSamples(uint64_t streamId, const int16_t* samples,
   }
 
   std::lock_guard<std::mutex> lock(mutex_);
-  QueueSamplesLocked(pluginQueues_[streamId], samples, sampleCount, frequency,
-                     channels);
+  PluginStream& stream = pluginStreams_[streamId];
+  stream.sourceId = sourceId;
+  QueueSamplesLocked(stream.queue, samples, sampleCount, frequency, channels);
 }
 
 void AudioOutput::StopPluginStream(uint64_t streamId)
 {
   std::lock_guard<std::mutex> lock(mutex_);
-  pluginQueues_.erase(streamId);
+  pluginStreams_.erase(streamId);
 }
 
 void AudioOutput::QueuePluginSamples(const int16_t* samples, size_t sampleCount,
                                      int frequency, int channels)
 {
-  QueuePluginSamples(0, samples, sampleCount, frequency, channels);
+  QueuePluginSamples(0, 0, samples, sampleCount, frequency, channels);
+}
+
+void AudioOutput::SetAudioSources(const std::vector<AudioLanes::Source>& sources)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  lanes_.SetSources(sources, SDL_GetTicks());
+}
+
+void AudioOutput::SetOverrideMode(AudioLanes::OverrideMode mode)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  lanes_.SetMode(mode);
+}
+
+void AudioOutput::SetFallbackHoldMs(uint64_t holdMs)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  lanes_.SetFallbackHoldMs(holdMs);
+}
+
+std::string AudioOutput::DescribeLanes() const
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+
+  // Depth in milliseconds rather than samples: the point of watching it is to
+  // see whether the bus drain keeps up with the producers, and only the time
+  // form answers that independently of format.
+  const double samplesPerMs = static_cast<double>(deviceSpec_.freq) *
+                              static_cast<double>(deviceSpec_.channels) / 1000.0;
+  const uint64_t nowMs = SDL_GetTicks();
+
+  std::string out;
+  for (const AudioLanes::Lane& lane : lanes_.Lanes())
+  {
+    size_t buffered = 0;
+    unsigned int streams = 0;
+    for (const auto& entry : pluginStreams_)
+    {
+      if (entry.second.sourceId == lane.id)
+      {
+        buffered += AudioMixer::BufferedSamples(entry.second.queue);
+        ++streams;
+      }
+    }
+    out += "  " + (lane.name.empty() ? std::string("(unnamed)") : lane.name);
+    out += lane.overridden ? " [overridden]" : "";
+    out += lanes_.ShouldPlay(lane.id, nowMs) ? " heard" : " silent";
+    out += ", " + std::to_string(streams) + " stream(s), ";
+    out += std::to_string(samplesPerMs > 0.0 ? static_cast<int>(buffered / samplesPerMs) : 0);
+    out += " ms buffered\n";
+  }
+
+  const size_t gameBuffered = AudioMixer::BufferedSamples(gameQueue_);
+  if (gameBuffered != 0)
+  {
+    out += "  PPUC game audio, " +
+           std::to_string(samplesPerMs > 0.0 ? static_cast<int>(gameBuffered / samplesPerMs) : 0) +
+           " ms buffered\n";
+  }
+  return out;
 }
 
 void AudioOutput::QueueSpeechSamples(const int16_t* samples, size_t sampleCount,
@@ -262,23 +325,53 @@ void SDLCALL AudioOutput::OnDeviceNeedsAudio(void* userdata,
 
   {
     std::lock_guard<std::mutex> lock(self->mutex_);
+    const uint64_t nowMs = SDL_GetTicks();
     const bool gameActive = AudioMixer::Mix(self->gameQueue_, mixBuffer.data(), sampleCount);
     bool pluginActive = false;
-    for (auto it = self->pluginQueues_.begin();
-         it != self->pluginQueues_.end();)
+
+    // Lanes come back ordered so that an overrider is always decided before
+    // whatever it overrides: ShouldPlay for a lower lane reads audibility that
+    // is already current for this block.
+    for (const AudioLanes::Lane& lane : self->lanes_.Lanes())
     {
-      pluginActive =
-          AudioMixer::Mix(it->second, mixBuffer.data(), sampleCount) ||
-          pluginActive;
-      if (it->second.empty())
+      const bool play = self->lanes_.ShouldPlay(lane.id, nowMs);
+      bool laneActive = false;
+      for (auto& entry : self->pluginStreams_)
       {
-        it = self->pluginQueues_.erase(it);
+        if (entry.second.sourceId != lane.id)
+        {
+          continue;
+        }
+        // A silenced lane is drained, never stalled. Its producer runs at the
+        // emulator's rate regardless of who is listening, so holding the queue
+        // back would fill it to the overflow cap and then dump stale audio the
+        // moment the override lifted.
+        laneActive = (play ? AudioMixer::Mix(entry.second.queue, mixBuffer.data(), sampleCount)
+                           : AudioMixer::Discard(entry.second.queue, sampleCount)) ||
+                     laneActive;
       }
-      else
-      {
-        ++it;
-      }
+      self->lanes_.NoteMixed(lane.id, laneActive, nowMs);
+      pluginActive = pluginActive || (play && laneActive);
     }
+
+    // Streams whose source has not been published yet. Audio can arrive before
+    // the source list that describes it; dropping it over that ordering would
+    // be worse than briefly ignoring an override.
+    for (auto& entry : self->pluginStreams_)
+    {
+      if (self->lanes_.Knows(entry.second.sourceId))
+      {
+        continue;
+      }
+      pluginActive =
+          AudioMixer::Mix(entry.second.queue, mixBuffer.data(), sampleCount) || pluginActive;
+    }
+
+    for (auto it = self->pluginStreams_.begin(); it != self->pluginStreams_.end();)
+    {
+      it = it->second.queue.empty() ? self->pluginStreams_.erase(it) : std::next(it);
+    }
+
     const bool speechActive = AudioMixer::Mix(self->speechQueue_, mixBuffer.data(), sampleCount);
     self->MixMusicLocked(mixBuffer.data(), sampleCount, gameActive || pluginActive || speechActive);
   }

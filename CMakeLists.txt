@@ -269,6 +269,7 @@ if(NOT (PLATFORM STREQUAL "win" OR PLATFORM STREQUAL "win-mingw"))
 endif()
 
 add_executable(ppuc-pinmame
+   src/AudioLanes.cpp
    src/AudioMixer.cpp
    src/AudioOutput.cpp
    src/Uf2Image.cpp
@@ -529,6 +530,7 @@ endif()
 
 if(PPUC_BUILD_MENU)
 add_executable(ppuc-menu
+   src/AudioLanes.cpp
    src/AudioMixer.cpp
    src/AudioOutput.cpp
    src/menu.cpp
@@ -707,6 +709,7 @@ if(PPUC_BUILD_TESTS)
    # Separate from ppuc_tests on purpose: that target must keep linking without
    # SDL, and this one needs the real MediaPluginHost.
    add_executable(ppuc_plugin_smoke
+      src/AudioLanes.cpp
       src/AudioMixer.cpp
       src/AudioOutput.cpp
       src/MediaPluginHost.cpp
@@ -751,6 +754,7 @@ if(PPUC_BUILD_TESTS)
    # reader, while map loading lives in PinmameNvramMapLoader.cpp and is not
    # part of this target.
    add_executable(ppuc_tests
+      src/AudioLanes.cpp
       src/AudioMixer.cpp
       src/LuaGameApi.cpp
       src/LuaRulesEngine.cpp
@@ -775,6 +779,7 @@ if(PPUC_BUILD_TESTS)
       tests/test_lua_rules_engine.cpp
       tests/test_lua_rules_timing.cpp
       tests/test_pinmame_nvram_tracking.cpp
+      tests/test_audio_lanes.cpp
       tests/test_audio_mixer.cpp
       tests/test_plugin_switch_map.cpp
       tests/test_script_object.cpp

@@ -15,13 +15,29 @@ struct SDL_Window;
 
 class MediaPluginHost
 {
-public:
+ public:
   struct Options
   {
     bool enablePup = false;
     bool enableAltSound = false;
     bool enableB2S = false;
     bool debug = false;
+    // Prints the published audio-source topology and, once a second, per-lane
+    // buffered depth. The depth is the gating measurement for this whole
+    // design: every plugin audio buffer is marshalled through
+    // ProcessAsyncCallbacks on the main loop, and a depth that only grows means
+    // that drain cannot keep up with the producers.
+    bool debugAudio = false;
+    // Whether PPUC declares itself the controller for this game.
+    //
+    // Only true for ROM-less games. When PinMAME runs as a plugin, libpinmame
+    // publishes its own ControllerDef with the identical "pinmame::<rom>" game
+    // id, and a second one from PPUC does not add information -- it adds a
+    // coin flip. AltSound, PUP, DOF and B2S all bind with items.front() and no
+    // tie-break, and AltSound derives the audio source it overrides from
+    // whichever it got, so the wrong pick silently leaves the ROM audible
+    // underneath the pack.
+    bool provideController = true;
     const char* pluginDir = nullptr;
     const char* pupFolder = nullptr;
     const char* altSoundFolder = nullptr;
@@ -52,7 +68,7 @@ public:
   void OnSoundCommand(int boardNo, int cmd);
   void Process();
 
-private:
+ private:
   class Impl;
   std::unique_ptr<Impl> impl_;
 };

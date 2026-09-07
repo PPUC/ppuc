@@ -10,21 +10,17 @@
 // docs/PLUGIN_MIGRATION.md will use to decide when an overriding source has
 // gone quiet.
 
-#include "doctest.h"
-
 #include <cstdint>
 #include <limits>
 #include <vector>
 
 #include "AudioMixer.h"
+#include "doctest.h"
 
 namespace
 {
 
-std::vector<int16_t> Block(size_t count, int16_t value)
-{
-  return std::vector<int16_t>(count, value);
-}
+std::vector<int16_t> Block(size_t count, int16_t value) { return std::vector<int16_t>(count, value); }
 
 }  // namespace
 
@@ -251,4 +247,42 @@ TEST_CASE("Mix tolerates a null buffer")
   CHECK_FALSE(AudioMixer::Mix(queue, nullptr, 4));
   // The queue must not have been consumed by a call that mixed nothing.
   CHECK(AudioMixer::BufferedSamples(queue) == 4);
+}
+
+TEST_CASE("Discard drains a queue without touching the mix buffer")
+{
+  // An overridden source keeps producing at the emulator's rate whether or not
+  // anyone is listening. Stalling its queue would push it to the overflow cap
+  // and then play stale audio the instant the override lifts.
+  AudioMixer::Queue queue;
+  AudioMixer::Enqueue(queue, Block(8, 4000));
+  AudioMixer::Enqueue(queue, Block(8, 4000));
+
+  std::vector<int16_t> mixBuffer(12, 111);
+  const bool audible = AudioMixer::Discard(queue, 12);
+
+  CHECK(audible);
+  CHECK(AudioMixer::BufferedSamples(queue) == 4);
+  for (int16_t sample : mixBuffer)
+  {
+    CHECK(sample == 111);
+  }
+}
+
+TEST_CASE("Discard reports audibility on the same threshold as Mix")
+{
+  AudioMixer::Queue quiet;
+  AudioMixer::Enqueue(quiet, Block(16, AudioMixer::kAudibleSampleThreshold - 1));
+  CHECK_FALSE(AudioMixer::Discard(quiet, 16));
+
+  AudioMixer::Queue loud;
+  AudioMixer::Enqueue(loud, Block(16, AudioMixer::kAudibleSampleThreshold));
+  CHECK(AudioMixer::Discard(loud, 16));
+}
+
+TEST_CASE("Discard on an empty queue is silent and harmless")
+{
+  AudioMixer::Queue queue;
+  CHECK_FALSE(AudioMixer::Discard(queue, 64));
+  CHECK(queue.empty());
 }

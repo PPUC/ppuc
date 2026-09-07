@@ -486,6 +486,8 @@ private:
   static void MSGPIAPI OnGetBackglassRenderer(unsigned int, void*,
                                               void* msgData);
 
+  void OnAudioSrcChanged();
+
 
 
   static void MSGPIAPI GetVpxInfo(VPXInfo* info);
@@ -540,6 +542,8 @@ private:
   void DestroyBackglassWindow();
 
   AudioOutput* audioOutput_ = nullptr;
+  bool debugAudio_ = false;
+  uint64_t lastAudioDebugMs_ = 0;
   PluginBus& bus_;
   std::mutex pendingMutex_;
   std::vector<PpucPluginEvent> pendingEvents_;
@@ -573,11 +577,11 @@ private:
   unsigned int onVpxGameEndId_ = 0;
   unsigned int onAudioCmdId_ = 0;
   std::unique_ptr<PinballPlugin::Controller::CtrlItemProvider<ControllerDef>> controllerProvider_;
+  std::unique_ptr<PinballPlugin::Controller::CtrlItemConsumer<AudioSrcId>> audioSources_;
   std::string controllerGameId_;
   unsigned int b2sStateChangeId_ = 0;
 
   AudioSrcId pinmameAudioSrc_ = {};
-  uint32_t nextAudioResId_ = 1;
   ScriptObject b2sServer_;
 
   static Impl* instance_;
@@ -664,6 +668,7 @@ bool MediaPluginHost::Impl::Initialize(const Options& options,
   prefPath_ = options.prefPath && options.prefPath[0] != '\0'
                   ? options.prefPath
                   : (std::getenv("HOME") ? std::getenv("HOME") : ".");
+  debugAudio_ = options.debugAudio;
   SetGameInfo(options.gameId, options.hardwareGen);
 
   const MsgPluginAPI& api = bus_.Api();
@@ -674,10 +679,13 @@ bool MediaPluginHost::Impl::Initialize(const Options& options,
   onVpxGameEndId_ = api.GetMsgID(VPXPI_NAMESPACE, VPXPI_EVT_ON_GAME_END);
   onAudioCmdId_ = api.GetMsgID(PMPI_NAMESPACE, PMPI_EVT_ON_AUDIO_CMD);
 
-  controllerProvider_ = std::make_unique<
-      PinballPlugin::Controller::CtrlItemProvider<ControllerDef>>(
-      &api, bus_.HostEndpointId(), CTLPI_CONTROLLERS_GET_MSG,
-      CTLPI_CONTROLLERS_ON_CHG_MSG);
+  if (options.provideController)
+  {
+    controllerProvider_ = std::make_unique<
+        PinballPlugin::Controller::CtrlItemProvider<ControllerDef>>(
+        &api, bus_.HostEndpointId(), CTLPI_CONTROLLERS_GET_MSG,
+        CTLPI_CONTROLLERS_ON_CHG_MSG);
+  }
   // PUPPI_MSG_QUEUE_EVENT was a PPUC-only addition to the fork and no longer
   // exists: PUP discovers controller state from the bus instead of being
   // pushed events. B2SPluginEventStream -- which drives both PUP and DOF --
@@ -685,6 +693,14 @@ bool MediaPluginHost::Impl::Initialize(const Options& options,
   // inject the state no controller can know: rules-authored triggers, and the
   // board-local switches PinMAME never sees.
   b2sStateChangeId_ = api.GetMsgID("B2S", "OnStateChange:1");
+
+  // Overriding is declared source to source, so the host has to see the whole
+  // published topology to know which lanes AltSound (or anything else) is
+  // claiming. Nothing pushes that; it has to be consumed.
+  audioSources_ = std::make_unique<PinballPlugin::Controller::CtrlItemConsumer<AudioSrcId>>(
+      &api, bus_.HostEndpointId(), CTLPI_AUDIO_GET_SRC_MSG, CTLPI_AUDIO_ON_SRC_CHG_MSG,
+      [](std::vector<AudioSrcId>&) {}, []() {}, [this]() { OnAudioSrcChanged(); });
+  audioSources_->Subscribe();
 
   api.SubscribeMsg(bus_.HostEndpointId(), getVpxApiId_, OnGetVpxApi, this);
   api.SubscribeMsg(bus_.HostEndpointId(), getAudioSrcId_, OnGetAudioSrc, this);
@@ -707,7 +723,10 @@ bool MediaPluginHost::Impl::Initialize(const Options& options,
   }
 
   pinmameAudioSrc_.id.endpointId = bus_.HostEndpointId();
-  pinmameAudioSrc_.id.resId = nextAudioResId_++;
+  // resId 0 by convention: an overrider names its target as {endpointId, 0},
+  // which is what AltSound publishes and what libpinmame uses for the ROM
+  // stream. Numbering from 1 here would make PPUC's own audio unoverridable.
+  pinmameAudioSrc_.id.resId = 0;
   pinmameAudioSrc_.overrideId.id = 0;
   pinmameAudioSrc_.name = "PPUC";
   pinmameAudioSrc_.desc = "PPUC game audio";
@@ -756,6 +775,12 @@ void MediaPluginHost::Impl::Shutdown()
     api.ReleaseMsgID(getAuxRendererId_);
     getAuxRendererId_ = 0;
   }
+  // Mandatory: CtrlItemConsumer's destructor asserts it is not still subscribed.
+  if (audioSources_)
+  {
+    audioSources_->Unsubscribe();
+    audioSources_.reset();
+  }
   // The provider must go before the endpoint that owns it.
   controllerProvider_.reset();
   if (onAudioCmdId_ != 0)
@@ -798,14 +823,22 @@ void MediaPluginHost::Impl::OnGameStart()
 
   // A controller appearing IS the game-start signal now; there is no start
   // event any more. AltSound, PUP, B2S, DOF and Serum all bind by consuming
-  // CTLPI_CONTROLLERS_GET_MSG and filtering on the gameId prefix, so without
-  // this provider none of them ever activate.
+  // CTLPI_CONTROLLERS_GET_MSG and filtering on the gameId prefix.
+  //
+  // For a ROM-less game nothing else publishes one, so this is what makes them
+  // activate at all. When PinMAME runs as a plugin libpinmame publishes its own
+  // and PPUC stays out of the way rather than making the list ambiguous -- see
+  // Options::provideController.
   //
   // The prefix is "pinmame::" rather than something PPUC-specific because
   // gameId names *what is emulated and how it is exposed*, not who is
   // emulating it (ControllerPlugin.h). PPUC runs the same ROMs and its
   // AltSound/PUP/B2S assets are keyed by the same names, so this is accurate.
   controllerGameId_ = std::string(PMPI_GAMEID_PREFIX) + gameId_;
+  if (!controllerProvider_)
+  {
+    return;
+  }
   controllerProvider_->SetItem({
       .endpointId = bus_.HostEndpointId(),
       .gameId = controllerGameId_.c_str(),
@@ -819,7 +852,10 @@ void MediaPluginHost::Impl::OnGameEnd()
     return;
   }
   // Withdrawing the controller is the game-end signal.
-  controllerProvider_->ClearItems();
+  if (controllerProvider_)
+  {
+    controllerProvider_->ClearItems();
+  }
   controllerGameId_.clear();
   bus_.Api().BroadcastMsg(bus_.HostEndpointId(), onVpxGameEndId_, nullptr);
   gameStarted_ = false;
@@ -889,6 +925,20 @@ void MediaPluginHost::Impl::Process()
   {
     return;
   }
+  if (debugAudio_ && audioOutput_ != nullptr)
+  {
+    const uint64_t nowMs = SDL_GetTicks();
+    if (nowMs - lastAudioDebugMs_ >= 1000)
+    {
+      lastAudioDebugMs_ = nowMs;
+      const std::string lanes = audioOutput_->DescribeLanes();
+      if (!lanes.empty())
+      {
+        printf("Audio lanes:\n%s", lanes.c_str());
+      }
+    }
+  }
+
   std::vector<PpucPluginEvent> events;
   std::vector<B2SSegmentDigitMsg> b2sSegmentDigits;
   std::vector<B2SPlayerScoreMsg> b2sPlayerScores;
@@ -1091,13 +1141,58 @@ void MediaPluginHost::Impl::OnAudioUpdate(unsigned int, void* userData,
     return;
   }
 
-  // A source may carry several streams -- PUP runs one per media player --
-  // so the mixer is keyed on streamId, not sourceId.
+  // A source may carry several streams -- PUP runs one per media player -- so
+  // the mixer is keyed on streamId. The sourceId rides along because overriding
+  // is declared between sources, not streams.
   const int channels =
       msg->channelFormat == CTLPI_AUDIO_FORMAT_CHANNEL_MONO ? 1 : 2;
   self->audioOutput_->QueuePluginSamples(
-      msg->streamId.id, samples.data(), samples.size(),
+      msg->sourceId.id, msg->streamId.id, samples.data(), samples.size(),
       static_cast<int>(msg->sampleRate), channels);
+}
+
+void MediaPluginHost::Impl::OnAudioSrcChanged()
+{
+  if (audioOutput_ == nullptr || !audioSources_)
+  {
+    return;
+  }
+
+  std::vector<AudioLanes::Source> lanes = audioSources_->With(
+      [](const std::vector<AudioSrcId>& items)
+      {
+        std::vector<AudioLanes::Source> out;
+        out.reserve(items.size());
+        for (const AudioSrcId& item : items)
+        {
+          // The name is copied, not borrowed: it points into the publishing
+          // plugin and is only guaranteed valid until the next change event.
+          out.push_back({item.id.id, item.overrideId.id,
+                         item.name != nullptr ? std::string(item.name) : std::string()});
+        }
+        return out;
+      });
+
+  audioOutput_->SetAudioSources(lanes);
+
+  if (debugAudio_)
+  {
+    printf("Audio sources (%zu):\n", lanes.size());
+    for (const AudioLanes::Source& source : lanes)
+    {
+      // CtlResId packs endpointId in the low word and resId in the high one.
+      printf("  %s [endpoint %u, res %u]\n",
+             source.name.empty() ? "(unnamed)" : source.name.c_str(),
+             static_cast<unsigned int>(source.id),
+             static_cast<unsigned int>(source.id >> 32));
+      if (source.overrideId != 0)
+      {
+        printf("    overrides [endpoint %u, res %u]\n",
+               static_cast<unsigned int>(source.overrideId),
+               static_cast<unsigned int>(source.overrideId >> 32));
+      }
+    }
+  }
 }
 
 void MediaPluginHost::Impl::OnGetBackglassRenderer(unsigned int, void* userData,

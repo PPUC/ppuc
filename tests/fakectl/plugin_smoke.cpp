@@ -17,6 +17,7 @@
 #include <string>
 #include <vector>
 
+#include "AudioLanes.h"
 #include "AudioOutput.h"
 #include "MediaPluginHost.h"
 #include "PluginBus.h"
@@ -99,10 +100,25 @@ int main(int argc, char** argv)
   Check(log.find("loaded endpoint=") != std::string::npos, "FakeCtl loaded and reached the bus");
   Check(log.find("gameId=pinmame::emdemo") != std::string::npos,
         "a plugin binding like AltSound sees the controller, prefix included");
+  Check(log.find("count=1") != std::string::npos,
+        "exactly one endpoint claims the game: items.front() has nothing to get wrong");
   Check(log.find("game=emdemo") != std::string::npos, "stripping the prefix yields the ROM name AltSound looks up");
   Check(log.find("audio-cmd board=1 cmd=42") != std::string::npos, "sound commands arrive on PMPI_EVT_ON_AUDIO_CMD");
   Check(log.find("state-change type=W index=207 value=1") != std::string::npos,
         "injected state arrives on B2S/OnStateChange:1");
+
+  // The override is declared source to source and nothing pushes it, so the
+  // host has to consume the topology to notice. When it does not, the symptom
+  // is that AltSound and the ROM both play -- audible, but only on hardware.
+  const std::string lanes = audio.DescribeLanes();
+  Check(lanes.find("FakeRom [overridden] silent") != std::string::npos,
+        "a source another plugin overrides is silenced in Replace mode");
+  Check(lanes.find("FakePack heard") != std::string::npos, "the overriding source is heard");
+
+  audio.SetOverrideMode(AudioLanes::OverrideMode::Fallback);
+  audio.SetFallbackHoldMs(0);
+  Check(audio.DescribeLanes().find("FakeRom [overridden] heard") != std::string::npos,
+        "in Fallback mode a silent overrider lets the source underneath through");
 
   host.OnGameEnd();
   for (int i = 0; i < 2; ++i)

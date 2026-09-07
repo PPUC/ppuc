@@ -10,6 +10,7 @@
 
 #include "SDL3/SDL.h"
 
+#include "AudioLanes.h"
 #include "AudioMixer.h"
 
 #if defined(PPUC_HAS_SDL3_MIXER)
@@ -32,9 +33,20 @@ public:
   void SetMusicTrackGapMs(Uint64 gapMs);
   void SetMusicEnabled(bool enabled);
   void QueueGameFrames(const int16_t* samples, size_t frameCount);
-  void QueuePluginSamples(uint64_t streamId, const int16_t* samples,
-                          size_t sampleCount, int frequency, int channels);
+  void QueuePluginSamples(uint64_t sourceId, uint64_t streamId,
+                          const int16_t* samples, size_t sampleCount,
+                          int frequency, int channels);
   void StopPluginStream(uint64_t streamId);
+
+  // Replaces the published audio-source topology. Called from the plugin bus
+  // whenever OnAudioSrcChanged fires.
+  void SetAudioSources(const std::vector<AudioLanes::Source>& sources);
+  void SetOverrideMode(AudioLanes::OverrideMode mode);
+  void SetFallbackHoldMs(uint64_t holdMs);
+  // One line per lane: buffered depth and whether it is currently heard. A
+  // depth that grows without bound means the bus callbacks are draining slower
+  // than the producers fill them.
+  std::string DescribeLanes() const;
   void QueuePluginSamples(const int16_t* samples, size_t sampleCount,
                           int frequency, int channels);
   void QueueSpeechSamples(const int16_t* samples, size_t sampleCount,
@@ -75,7 +87,7 @@ private:
   void HandleMusicTrackStoppedLocked(MIX_Track* track);
 #endif
 
-  std::mutex mutex_;
+  mutable std::mutex mutex_;
   SDL_AudioStream* stream_ = nullptr;
   SDL_AudioSpec deviceSpec_{
       .format = SDL_AUDIO_S16LE,
@@ -84,8 +96,20 @@ private:
   };
   int gameFrequency_ = 48000;
   int gameChannels_ = 2;
+  // PPUC's own audio, from GameEngine::OnAudioFrames. Only ScriptEngine feeds
+  // it: under PluginEngine the ROM stream arrives over the bus like any other
+  // plugin's, so it is a lane rather than this queue. Deliberately not part of
+  // the lane table -- nothing publishes an override against it.
   AudioMixer::Queue gameQueue_;
-  std::unordered_map<uint64_t, AudioMixer::Queue> pluginQueues_;
+  // One entry per CTLPI audio stream, tagged with the source it belongs to. A
+  // source may own several streams; overriding is decided per source.
+  struct PluginStream
+  {
+    uint64_t sourceId = 0;
+    AudioMixer::Queue queue;
+  };
+  std::unordered_map<uint64_t, PluginStream> pluginStreams_;
+  AudioLanes::Table lanes_;
   AudioMixer::Queue speechQueue_;
   std::vector<MusicTrack> musicTracks_;
 #if defined(PPUC_HAS_SDL3_MIXER)

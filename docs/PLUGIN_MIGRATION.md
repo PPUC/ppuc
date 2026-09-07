@@ -103,6 +103,14 @@ either. So "delete the COM shim" becomes **"promote the COM shim"**: extract
 
 ### Provider scope: PPUC must become a provider
 
+> **Revised.** This section was written before it was established that
+> libpinmame publishes its own `ControllerDef`. That makes PPUC's
+> `ControllerDef` correct **only for ROM-less games** — with a ROM, publishing a
+> second one for the same game id is a coin flip for every plugin that binds
+> with `items.front()`. See "Two things the plan had wrong" under the audio
+> section. The `DisplaySrcId` / `SegSrcId` / `StateSrcId` rows below are
+> unaffected and still stand.
+
 PPUC publishes no `ControllerDef` today. Master's `serum.cpp::SelectController`
 and `vni.cpp` both bind through `CTLPI_CONTROLLERS_GET_MSG`, so **serum and vni
 cannot activate in PPUC at all** until it does. This is not optional polish;
@@ -272,29 +280,64 @@ wrapper that rebuilds the mask **with hysteresis** (on if `> 0.20`, off if
 `coreGlobals.nAlphaSegs` set, luminances dip well below 1.0 during multiplexing;
 `> 0.0` latches everything on, `>= 1.0` blanks the display.
 
-### Audio: how mode 1 actually works
+### Audio: how mode 1 actually works — **done**
 
-Topology becomes: every audio producer is a bus source; PPUC is purely a sink.
-`AudioOutput` gains a two-level **lane (source) / stream** model mirroring
-`Player::m_audioLanes` in `vpinball` `src/core/player.cpp:2347-2445`.
-`gameQueue_` disappears — ROM audio is just another lane.
+Topology is now: every audio producer is a bus source; PPUC is purely a sink.
+`AudioOutput` carries a two-level **lane (source) / stream** model, and the
+decision of which lane is heard lives in `src/AudioLanes.{h,cpp}` with no SDL in
+it. `gameQueue_` survives but is ScriptEngine-only: with a ROM, PinMAME's audio
+arrives over the bus like any other plugin's.
 
-On `CTLPI_AUDIO_ON_SRC_CHG_MSG`, enumerate sources and mark any lane named by
-another lane's `overrideId` as `overridden`. Then:
+On `CTLPI_AUDIO_ON_SRC_CHG_MSG` the host enumerates sources and marks any lane
+named by another lane's `overrideId` as `overridden`. Then:
 
 - **Mode 0 (`Replace`, default)** — overridden lanes are hard-muted. Today's
-  behaviour.
-- **Mode 1 (`Fallback`)** — the overridden lane is unmuted while the overriding
-  lane has been silent for longer than `kFallbackHoldMs` (~250 ms).
-  `MixQueueLocked` already returns "had audible samples" using a 512-LSB
-  threshold, so the signal exists and needs no new plumbing.
+  behaviour, and what `PinmameSetSoundMode` used to do inside the emulator.
+- **Mode 1 (`Fallback`, `--altsound-mode 1`)** — the overridden lane is unmuted
+  while everything above it in the override chain has been silent for longer
+  than `kFallbackHoldMs` (250 ms). `AudioMixer::Mix` already returns "had
+  audible samples" on a 512-LSB threshold, so the signal needed no new plumbing.
 
-Overridden lanes must be **drained silently**, not stalled, or PinMAME's 60 Hz
-production grows the deque without bound.
+Overridden lanes are **drained silently** via `AudioMixer::Discard`, not
+stalled: PinMAME produces at 60 Hz whether or not anyone is listening, and a
+stalled deque would hit the overflow cap and then dump stale audio the moment
+the override lifted.
 
-Honest limits to document: the hold window is a heuristic; packs with long
-near-silent ambience will leak ROM music; there is a `kFallbackHoldMs` delay
-before ROM sound returns. Default stays mode 0.
+Honest limits: the hold window is a heuristic; packs with long near-silent
+ambience will leak ROM music; there is up to `kFallbackHoldMs` of delay before
+ROM sound returns. A fresh overrider is given one hold window before the lane
+under it is let through, so a game start does not leak a burst of ROM audio
+while a pack is still loading. Default stays mode 0.
+
+#### What the measurements said
+
+The plan's top risk was that `ProcessAsyncCallbacks` — through which every
+plugin audio buffer is marshalled, once per main-loop iteration — could not
+drain as fast as PinMAME fills. `--debug-audio` prints per-lane buffered depth
+once a second; on Time Warp it holds at **130–200 ms and does not grow**. No
+dedicated drain thread is needed. That depth is also the audio latency, which is
+worth revisiting on hardware but is not a correctness problem.
+
+#### Two things the plan had wrong
+
+**libpinmame is already a full CTLPI provider.** It publishes its own
+`AudioSrcId` `{endpointId, 0}` named "PinMAME", streams ROM audio on
+`AudioUpdate:1`, and publishes its own `ControllerDef` with the identical
+`pinmame::<rom>` game id (`libpinmame.cpp:2683`, `:2779`). The PinMAME *plugin*
+leaves `cb_OnAudioAvailable`/`cb_OnAudioUpdated` null precisely because
+libpinmame broadcasts directly. So there was nothing to add upstream for ROM
+audio to reach the bus.
+
+**PPUC publishing its own `ControllerDef` was therefore actively harmful.** With
+a ROM running, two endpoints claimed `pinmame::tmwrp_l2` — observed as
+`count=2` from the fakectl plugin. AltSound, PUP, DOF and B2S all bind with
+`items.front()` and no tie-break, and AltSound derives the audio source it
+overrides from whichever it got (`overrideId = {controller.endpointId, 0}`). Pick
+PPUC's and the override resolves to nothing, so the pack and the ROM both play —
+a failure that is audible only on hardware. `Options::provideController` is now
+false whenever a ROM controller is on the bus; PPUC declares itself the
+controller only for ROM-less games. PPUC's own audio source also moved to
+`resId 0`, the convention an overrider names, so it is overridable at all.
 
 ### Teardown
 
