@@ -52,7 +52,8 @@
 #include "MediaPluginHost.h"
 #include "PluginBus.h"
 #include "GameEngine.h"
-#include "PinmameEngine.h"
+#include "PinmameNvramMapLoader.h"
+#include "PluginEngine.h"
 #include "ScriptEngine.h"
 #include "game/GameConfigYaml.h"
 #include "LuaGameApi.h"
@@ -3693,7 +3694,10 @@ int main(int argc, char** argv)
     }
   }
 
-  if (opt_pup || opt_altsound || opt_b2s)
+  // The bus is no longer a media-only concern: the PinMAME engine runs as a
+  // plugin on it, so it must exist whenever a ROM is being driven.
+  const bool needPluginBus = opt_pup || opt_altsound || opt_b2s || !useScriptEngine;
+  if (needPluginBus)
   {
     pPluginBus = std::make_unique<PluginBus>();
     std::string busError;
@@ -3707,6 +3711,8 @@ int main(int argc, char** argv)
       printf("Loading extra plugin: %s\n", id.c_str());
       pPluginBus->LoadPluginById(id);
     }
+    if (opt_pup || opt_altsound || opt_b2s)
+    {
     pMediaPluginHost = std::make_unique<MediaPluginHost>(pAudioOutput.get(), *pPluginBus);
     MediaPluginHost::Options mediaOptions;
     mediaOptions.enablePup = opt_pup;
@@ -3739,7 +3745,9 @@ int main(int argc, char** argv)
     {
       fprintf(stderr, "Media plugin init failed: %s\n", mediaError.c_str());
       pMediaPluginHost.reset();
-      pPluginBus.reset();
+      // The bus stays: the PinMAME engine runs on it, so losing media must not
+      // take the engine down with it.
+    }
     }
   }
 
@@ -4312,18 +4320,34 @@ int main(int argc, char** argv)
   }
   else
   {
-    PinmameEngineOptions engineOptions;
+    if (pPluginBus == nullptr)
+    {
+      fprintf(stderr,
+              "The PinMAME engine now runs as a plugin and needs the plugin bus. "
+              "Enable a media feature (--pup/--altsound/--b2s) or pass --plugin-dir.\n");
+      return 1;
+    }
+    // PinMAME no longer runs in this process: plugin-pinmame does, and it needs
+    // to be told where the ROMs are before it is loaded, because the setting is
+    // read at plugin load.
+    pPluginBus->SetSettingOverride("PinMAME", "PinMAMEPath",
+                                   ResolveVpmPath(opt_pinmame_path ? opt_pinmame_path : ""));
+    if (!pPluginBus->LoadPluginById("PinMAME"))
+    {
+      fprintf(stderr, "PinMAME plugin not found in the plugin directory\n");
+      return 1;
+    }
+
+    PluginEngine::Options engineOptions;
     engineOptions.rom = opt_rom ? opt_rom : "";
     engineOptions.pinmamePath = opt_pinmame_path ? opt_pinmame_path : "";
     engineOptions.platform = pPpuc->GetPlatform();
     engineOptions.gameOnSolenoid = pPpuc->GetGameOnSolenoid();
-    engineOptions.altsound = opt_altsound;
     engineOptions.noSound = opt_no_sound;
     engineOptions.debug = opt_debug;
     engineOptions.debugCoils = opt_debug_coils;
     engineOptions.debugSoundCommands = opt_debug_sound_commands;
-    engineOptions.debugErrors = opt_debug_errors;
-    pEngine = std::make_unique<PinmameEngine>(std::move(engineOptions));
+    pEngine = std::make_unique<PluginEngine>(*pPluginBus, std::move(engineOptions));
   }
 
   pEngine->SetHost(&engineHost);

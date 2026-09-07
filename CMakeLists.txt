@@ -278,7 +278,6 @@ add_executable(ppuc-pinmame
    src/PluginBus.cpp
    src/PluginEngine.cpp
    src/ScriptObject.cpp
-   src/PinmameEngine.cpp
    src/PinmameNvramMapLoader.cpp
    src/PinmameNvramTracking.cpp
    src/ScriptEngine.cpp
@@ -437,7 +436,6 @@ if(PLATFORM STREQUAL "win" OR PLATFORM STREQUAL "win-mingw")
    )
    if(ARCH STREQUAL "x64")
       target_link_libraries(ppuc-pinmame LINK_PUBLIC
-         pinmame64
          ppuc64
          dmdutil64
          sdldmd64
@@ -450,7 +448,6 @@ if(PLATFORM STREQUAL "win" OR PLATFORM STREQUAL "win-mingw")
       )
    else()
       target_link_libraries(ppuc-pinmame LINK_PUBLIC
-         pinmame
          ppuc
          dmdutil
          sdldmd
@@ -481,7 +478,6 @@ else()
 
    if(PPUC_USE_KMSDMD)
       target_link_libraries(ppuc-pinmame LINK_PUBLIC
-         pinmame
          ppuc
          dmdutil
          kmsdmd
@@ -493,7 +489,6 @@ else()
       )
    else()
       target_link_libraries(ppuc-pinmame LINK_PUBLIC
-         pinmame
          ppuc
          dmdutil
          sdldmd

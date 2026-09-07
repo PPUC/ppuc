@@ -563,3 +563,32 @@ bool TryLoadPinmameTrackingConfig(const char* rom, const uint64_t hardwareGen, c
   pConfig->mapPath = relativeMapPath;
   return true;
 }
+
+std::string ResolveVpmPath(const std::string& pinmamePath)
+{
+  char buffer[PINMAME_MAX_PATH];
+  const char* path = pinmamePath.empty() ? nullptr : pinmamePath.c_str();
+
+#if defined(_WIN32) || defined(_WIN64)
+  if (path != nullptr)
+  {
+    snprintf(buffer, sizeof(buffer), "%s%s", path,
+             (path[0] != '\0' && path[strlen(path) - 1] != '\\' && path[strlen(path) - 1] != '/') ? "\\" : "");
+  }
+  else
+  {
+    snprintf(buffer, sizeof(buffer), "%s%s\\pinmame\\", getenv("HOMEDRIVE"), getenv("HOMEPATH"));
+  }
+#else
+  if (path != nullptr)
+  {
+    snprintf(buffer, sizeof(buffer), "%s%s", path, (path[0] != '\0' && path[strlen(path) - 1] != '/') ? "/" : "");
+  }
+  else
+  {
+    snprintf(buffer, sizeof(buffer), "%s/.pinmame/", getenv("HOME"));
+  }
+#endif
+
+  return std::string(buffer);
+}

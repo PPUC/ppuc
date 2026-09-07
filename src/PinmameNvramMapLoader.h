@@ -22,3 +22,10 @@ std::string DescribeHardwareGen(uint64_t hardwareGen);
 // normal outcome for a ROM nobody has mapped, not a failure worth aborting on.
 bool TryLoadPinmameTrackingConfig(const char* rom, uint64_t hardwareGen, const char* pinmamePath,
                                   PinmameTrackingConfig* pConfig, std::string* pError);
+
+// The PinMAME base directory with a trailing separator, exactly as libpinmame
+// expects it. An empty `pinmamePath` means the per-user default. Lives here
+// rather than with an engine because the host needs the same string to locate
+// the Serum altcolor folder, and both engines need it to point the PinMAME
+// plugin at its ROMs.
+std::string ResolveVpmPath(const std::string& pinmamePath);
