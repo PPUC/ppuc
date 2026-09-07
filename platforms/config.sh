@@ -16,7 +16,7 @@ PINMAME_NVRAM_MAPS_SHA=d8693b9ca59a1b871d2a473be3adb0392471a8e3
 LIBPPUC_SHA=b514db24d7867b5ad4bbb565dfb382b0f483d5fb
 DOCTEST_VERSION=2.4.11
 LIBSDLDMD_SHA=6091a7157af07efe6fc8278a36bda63efe80f15a
-VPINBALL_SHA=5719049ebb40fb9bfbc8c2d26a43e67cc92dd8ec
+VPINBALL_SHA=f7c545b362c140373b9975de224d1afcbf0a08d9
 VPINBALL_SDL_SHA=f87239e71e42da91ca317a12eefb82cfbf3393eb
 VPINBALL_SDL_IMAGE_SHA="${VPINBALL_SDL_IMAGE_SHA:-${SDL_IMAGE_SHA}}"
 VPINBALL_SDL_TTF_SHA=a1ce3670aec736ecbf0936c43f2f0cc53aa61e5b
@@ -620,6 +620,14 @@ ppuc_prepare_vpinball_media_dependencies() {
       ppuc_vpinball_media_glob_copy "${PPUC_SOURCE_ROOT}/third-party/runtime-libs/${platform_tag}/libpupdmd.so*" "${runtime_dir}"
    fi
    cp -a "${PPUC_SOURCE_ROOT}/third-party/include/pupdmd.h" "${include_dir}/"
+   # Six plugins include pinmame/PinMAMEPlugin.h -- b2s, dof, altsound, pinmame,
+   # b2slegacy and the shared B2SPluginEventStream -- for PMPI_GAMEID_PREFIX and
+   # the PinMAME event messages. vpinball's own build gets it by staging pinmame;
+   # PPUC builds the plugins against its own pinmame checkout instead, so it has
+   # to put the header where they expect it.
+   mkdir -p "${include_dir}/pinmame"
+   cp -a "${PPUC_SOURCE_ROOT}/external/pinmame/pinmame/src/libpinmame/PinMAMEPlugin.h" \
+      "${include_dir}/pinmame/"
    # PUPPlugin.h is not staged: PUPPI_MSG_QUEUE_EVENT was a PPUC-only addition
    # to the fork and no longer exists. PUP discovers controller state from the
    # bus now, so nothing here includes that header.
@@ -711,11 +719,32 @@ ppuc_build_vpinball_media_plugins() {
       ${cmake_platform_args} \
       "${plugin_rpath_args[@]}" \
       -DVPINBALL_PLUGIN_PACKAGE_DIR="${plugin_package_dir}"
+   # Upstream derives the plugin folder from the app bundle, which creates it as
+   # a side effect. Building the plugins without the app means nothing does, and
+   # the plugin.cfg copy is the first thing to notice.
+   mkdir -p "${plugin_package_dir}/pup" "${plugin_package_dir}/altsound" "${plugin_package_dir}/b2s"
+
    # B2SLegacyPlugin is deliberately not built: MediaPluginHost only ever
    # loads "PUP", "AltSound" and "B2S". --b2s uses the modern B2S plugin.
    for plugin_target in PUPPlugin AltSoundPlugin B2SPlugin; do
       cmake --build "${vpinball_build_dir}" --target "${plugin_target}"
    done
+
+   # Libraries that have no shared home. Everything a plugin needs is either in
+   # ppuc/ next to the executables, reached through the @loader_path/../.. rpath
+   # added below, or nowhere -- in which case it has to sit beside the plugin.
+   # Which libraries fall on which side is a fact about PPUC's layout, not about
+   # the plugins, so it is decided here rather than upstream.
+   if [ "${platform}" = "macos" ]; then
+      ppuc_vpinball_media_glob_copy \
+         "${vpinball_root}/third-party/runtime-libs/${platform}-${arch}/libaltsound*.dylib" \
+         "${plugin_package_dir}/altsound"
+      for lib in libSDL3_ttf libavcodec libavformat libavutil libswresample libswscale; do
+         ppuc_vpinball_media_glob_copy \
+            "${vpinball_root}/third-party/runtime-libs/${platform}-${arch}/${lib}*.dylib" \
+            "${plugin_package_dir}/pup"
+      done
+   fi
 
    if [ "${platform}" = "macos" ]; then
       if [ -f "${plugin_package_dir}/pup/plugin-pup.dylib" ]; then
@@ -724,12 +753,24 @@ ppuc_build_vpinball_media_plugins() {
       if [ -f "${plugin_package_dir}/b2s/plugin-b2s.dylib" ]; then
          install_name_tool -add_rpath "@loader_path/../.." "${plugin_package_dir}/b2s/plugin-b2s.dylib" 2>/dev/null || true
       fi
+      # Added rather than set through CMAKE_INSTALL_RPATH: setting it would
+      # replace the rpaths upstream gives every plugin, which the app-bundle
+      # layout depends on.
+      for plugin_with_local_libs in altsound pup; do
+         if [ -f "${plugin_package_dir}/${plugin_with_local_libs}/plugin-${plugin_with_local_libs}.dylib" ]; then
+            install_name_tool -add_rpath "@loader_path" \
+               "${plugin_package_dir}/${plugin_with_local_libs}/plugin-${plugin_with_local_libs}.dylib" 2>/dev/null || true
+         fi
+      done
       rm -f "${plugin_package_dir}"/pup/libSDL3.dylib
       rm -f "${plugin_package_dir}"/pup/libSDL3.[0-9]*.dylib
       rm -f "${plugin_package_dir}"/pup/libSDL3_image*.dylib
       rm -f "${plugin_package_dir}"/pup/libSDL3_mixer*.dylib
       rm -f "${plugin_package_dir}"/pup/libpupdmd*.dylib
 
+      # The glob copy resolves symlinks, so the unversioned aliases a consumer
+      # links against have to be recreated.
+      ppuc_relink_macos_dylib_alias "${plugin_package_dir}/altsound" "libaltsound.dylib" "libaltsound.[0-9]*.dylib"
       ppuc_relink_macos_dylib_alias "${plugin_package_dir}/pup" "libSDL3_ttf.0.dylib" "libSDL3_ttf.0.*.dylib"
       ppuc_relink_macos_dylib_alias "${plugin_package_dir}/pup" "libSDL3_ttf.dylib" "libSDL3_ttf.0.dylib"
       ppuc_relink_macos_dylib_alias "${plugin_package_dir}/pup" "libavcodec.dylib" "libavcodec.[0-9]*.dylib"
