@@ -76,6 +76,13 @@ class GameEngineHost
   // layout is PinMAME's data format, not a host concern -- and cross the seam
   // already reduced to "digit N shows value V".
   virtual void OnDmdFrame(const uint8_t* pData, int depth, int width, int height) = 0;
+  // Already-colorized frames, from a colorizer plugin at the end of the display
+  // override chain. Kept separate from OnDmdFrame rather than folded into it
+  // with a format argument: these skip the host's own colorization entirely,
+  // which is a different decision from what pixel format the data happens to be
+  // in, and one the host has to make deliberately.
+  virtual void OnDmdRgb16Frame(const uint16_t* pData, int width, int height) = 0;
+  virtual void OnDmdRgb24Frame(const uint8_t* pData, int width, int height) = 0;
   virtual void OnSegmentDigit(int digit, int value) = 0;
   virtual void OnPlayerScore(int player, int score) = 0;
 

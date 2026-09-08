@@ -289,6 +289,10 @@ std::vector<std::string> opt_plugin_settings;
 // opt-in because it infers "the pack has nothing for this command" from silence
 // and that inference is not always right.
 int opt_altsound_mode = 0;
+// 32 or 64 forces the Serum plugin to produce only that height. Left at 0 it
+// produces both, which is what a host that does not know its panel wants -- and
+// is wasted work on one that does.
+int opt_serum_resolution = 0;
 bool opt_no_serial = false;
 bool opt_no_sound = false;
 // "pinmame" runs an original ROM under libpinmame; "script" runs the ROM-less
@@ -2375,6 +2379,10 @@ static struct cag_option options[] = {
      .access_name = "debug-sound-commands",
      .value_name = NULL,
      .description = "Print PinMAME sound command IDs for building altsound packs (optional)"},
+    {.identifier = ':',
+     .access_name = "serum-resolution",
+     .value_name = "VALUE",
+     .description = "Colorize at 32 or 64 rows only; 0 (default) produces both (optional)"},
     {.identifier = '>',
      .access_name = "debug-segments",
      .value_name = NULL,
@@ -2595,6 +2603,19 @@ struct PpucEngineHost final : GameEngineHost
   void OnDmdFrame(const uint8_t* pData, int depth, int width, int height) override
   {
     pDmd->UpdateData(const_cast<uint8_t*>(pData), depth, width, height, 255, 255, 255);
+  }
+
+  // Already colorized by a plugin, so it goes in past libdmdutil's own
+  // colorizer rather than through it. Sending it to UpdateData instead would
+  // hand a Serum output to Serum a second time.
+  void OnDmdRgb16Frame(const uint16_t* pData, int width, int height) override
+  {
+    pDmd->UpdateRGB16Data(pData, static_cast<uint16_t>(width), static_cast<uint16_t>(height));
+  }
+
+  void OnDmdRgb24Frame(const uint8_t* pData, int width, int height) override
+  {
+    pDmd->UpdateRGB24Data(pData, static_cast<uint16_t>(width), static_cast<uint16_t>(height));
   }
 
   void OnSegmentDigit(int digit, int value) override
@@ -3052,6 +3073,8 @@ int main(int argc, char** argv)
           opt_rules_enabled = ParseIniBool(value);
         else if (key == "SerumTimeout")
           opt_serum_timeout = static_cast<uint8_t>(atoi(value.c_str()));
+        else if (key == "SerumResolution")
+          opt_serum_resolution = atoi(value.c_str());
         else if (key == "SerumSkipFrames")
           opt_serum_skip_frames = static_cast<uint8_t>(atoi(value.c_str()));
         else if (key == "PUP")
@@ -3408,6 +3431,9 @@ int main(int argc, char** argv)
         break;
       case '>':
         opt_debug_segments = true;
+        break;
+      case ':':
+        opt_serum_resolution = atoi(cag_option_get_value(&cag_context));
         break;
       case '<':
         opt_altsound_mode = atoi(cag_option_get_value(&cag_context));
@@ -4159,6 +4185,11 @@ int main(int argc, char** argv)
     g_ruleScripts = ruleScripts;
   }
 
+  // Set below: whether colorization is the Serum plugin's job this run, and the
+  // folder it should look in.
+  bool serumViaPlugin = false;
+  std::string serumAltColorPath;
+
   // The engine owns the PinMAME configuration now; the host only needs the
   // resolved PinMAME directory to locate the Serum altcolor folder.
   const std::string vpmPath = ResolveVpmPath(opt_pinmame_path ? opt_pinmame_path : "");
@@ -4182,7 +4213,19 @@ int main(int argc, char** argv)
     dmdConfig->SetLogCallback(DMDUtilLogCallback);
     dmdConfig->SetLogLevel(DMDUtil_LogLevel_INFO);
     dmdConfig->SetAltColorPath(altcolorPath);
-    dmdConfig->SetAltColor(true);
+    serumAltColorPath = altcolorPath;
+
+    // Colorization moves to the Serum plugin whenever a ROM is running. The
+    // plugin consumes the controller's display straight off the bus and
+    // publishes its colorized output as an override, which PluginEngine then
+    // renders -- so libdmdutil must not colorize as well, or the same frame
+    // would be handed to Serum twice.
+    //
+    // A ROM-less Lua game keeps libdmdutil's colorizer, because there is no
+    // controller display for the plugin to consume: those frames come from
+    // DmdCanvas through OnDmdFrame and only exist inside PPUC.
+    serumViaPlugin = !useScriptEngine;
+    dmdConfig->SetAltColor(!serumViaPlugin);
 
     if (opt_serum_timeout)
     {
@@ -4424,6 +4467,30 @@ int main(int argc, char** argv)
     {
       fprintf(stderr,
               "AlphaDMD plugin not found; segment displays will not be rendered on a DMD.\n");
+    }
+    if (serumViaPlugin)
+    {
+      // Same altcolor folder libdmdutil would have used, so a colorization that
+      // worked before this moved to the plugin still resolves. SerumPath is
+      // read at plugin load, hence the override before LoadPluginById.
+      pPluginBus->SetSettingOverride("Serum", "SerumPath", serumAltColorPath);
+      if (opt_serum_resolution == 32 || opt_serum_resolution == 64)
+      {
+        pPluginBus->SetSettingOverride("Serum", "Resolution", std::to_string(opt_serum_resolution));
+      }
+      if (opt_serum_timeout)
+      {
+        pPluginBus->SetSettingOverride("Serum", "IgnoreUnknownFramesTimeout", std::to_string(opt_serum_timeout));
+      }
+      if (opt_serum_skip_frames)
+      {
+        pPluginBus->SetSettingOverride("Serum", "MaximumUnknownFramesToSkip",
+                                       std::to_string(opt_serum_skip_frames));
+      }
+      if (!pPluginBus->LoadPluginById("Serum"))
+      {
+        fprintf(stderr, "Serum plugin not found; the DMD will not be colorized.\n");
+      }
     }
 
     PluginEngine::Options engineOptions;

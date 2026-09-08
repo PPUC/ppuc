@@ -31,18 +31,46 @@
 namespace DmdSourceSelect
 {
 
+// What PPUC will read a chosen display through.
+enum class FrameSource
+{
+  None,
+  // Raw indexed bytes, one per pixel. What DMDUtil::UpdateData has always taken.
+  Identify,
+  // Already-colorized pixels, from a colorizer at the end of the override chain.
+  RenderRgb16,
+  RenderRgb24,
+};
+
 // One published display, reduced to what the choice needs.
 struct Candidate
 {
+  uint64_t id = 0;
+  // The display this one replaces, 0 if none. A colorizer publishes its output
+  // as an override of the frame it colorized.
+  uint64_t overrideId = 0;
   uint32_t resId = 0;
   unsigned int width = 0;
   unsigned int height = 0;
   unsigned int identifyFormat = 0;
   bool hasIdentifyFrame = false;
+  unsigned int frameFormat = 0;
+  bool hasRenderFrame = false;
 };
 
 // Index into `candidates` of the display to render, or -1 when none qualifies.
+//
+// Prefers the end of the override chain. A colorizer publishes its output as an
+// override of the frame it colorized, so when one is running the display nothing
+// else overrides is the colorized one -- taking the raw frame instead would show
+// an uncolorized DMD while a colorizer sat there working for nothing.
 int SelectMainDisplay(const std::vector<Candidate>& candidates);
+
+// How to read the chosen display: its colorized output if it has one, otherwise
+// its identify frame. Never the render frame of a raw controller display -- that
+// is LUM32F, which would change every ROM's look and break the keying a
+// colorization depends on.
+FrameSource SourceFor(const Candidate& candidate);
 
 // Bits per pixel for a CTLPI identify format, or 0 if PPUC cannot render it.
 //

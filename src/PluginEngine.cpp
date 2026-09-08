@@ -51,6 +51,8 @@ struct PluginEngine::Impl
   {
     void* context = nullptr;
     DisplayFrame(MSGPIAPI* GetIdentifyFrame)(void*) = nullptr;
+    DisplayFrame(MSGPIAPI* GetRenderFrame)(void*) = nullptr;
+    DmdSourceSelect::FrameSource source = DmdSourceSelect::FrameSource::None;
     unsigned int width = 0;
     unsigned int height = 0;
     int depth = 0;
@@ -468,48 +470,38 @@ void PluginEngine::OnSegSrcChanged()
 void PluginEngine::OnDisplaySrcChanged()
 {
   static_assert(CTLPI_DISPLAY_ID_FORMAT_BITPLANE2 == 1u && CTLPI_DISPLAY_ID_FORMAT_BITPLANE4 == 2u,
-                "DmdSourceSelect mirrors these values to stay free of the plugin SDK");
+                "DmdSourceSelect mirrors these identify formats to stay free of the plugin SDK");
+  static_assert(CTLPI_DISPLAY_FORMAT_SRGB888 == 2u && CTLPI_DISPLAY_FORMAT_SRGB565 == 3u,
+                "DmdSourceSelect mirrors these frame formats to stay free of the plugin SDK");
 
   m_impl->hasDmd = false;
 
   m_impl->displaySources->With(
       [&](const std::vector<DisplaySrcId>& sources)
       {
-        // The controller's own displays first. An alphanumeric machine has
-        // none: libpinmame publishes only CORE_DMD and CORE_VIDEO layouts, and
-        // the DMD representation of its segment displays comes from the
-        // alphadmd plugin instead -- which is what Time Warp's Serum
-        // colorization needs to key on.
-        //
-        // Preferring the controller rather than merging the two keeps a real
-        // DMD game unaffected, and means a renderer that publishes alongside a
-        // machine that already has a DMD cannot displace it. Nothing on the wire
-        // says which controller a renderer derives from -- alphadmd encodes it
-        // in an overrideId sentinel that no lookup can resolve -- but PPUC runs
-        // exactly one controller, so there is nothing to confuse it with.
-        std::vector<const DisplaySrcId*> mine;
+        // Every published display is a candidate, whichever endpoint it came
+        // from. PPUC runs exactly one controller, so there is nothing to confuse
+        // its displays with, and the alternatives all get something wrong: the
+        // controller's own displays are absent on an alphanumeric machine, where
+        // alphadmd supplies them, and they are the *wrong* pick when a colorizer
+        // is running, because the colorized output lives on the colorizer's
+        // endpoint. Selection sorts it out from the override chain.
+        std::vector<const DisplaySrcId*> published;
         std::vector<DmdSourceSelect::Candidate> candidates;
-        std::vector<const DisplaySrcId*> others;
-        std::vector<DmdSourceSelect::Candidate> otherCandidates;
         for (const DisplaySrcId& src : sources)
         {
-          const DmdSourceSelect::Candidate candidate{src.id.resId, src.width, src.height, src.identifyFormat,
-                                                     src.GetIdentifyFrame != nullptr};
-          if (src.id.endpointId == m_pinmameEndpoint)
-          {
-            mine.push_back(&src);
-            candidates.push_back(candidate);
-          }
-          else
-          {
-            others.push_back(&src);
-            otherCandidates.push_back(candidate);
-          }
-        }
-        if (DmdSourceSelect::SelectMainDisplay(candidates) < 0)
-        {
-          mine.swap(others);
-          candidates.swap(otherCandidates);
+          DmdSourceSelect::Candidate candidate;
+          candidate.id = src.id.id;
+          candidate.overrideId = src.overrideId.id;
+          candidate.resId = src.id.resId;
+          candidate.width = src.width;
+          candidate.height = src.height;
+          candidate.identifyFormat = src.identifyFormat;
+          candidate.hasIdentifyFrame = src.GetIdentifyFrame != nullptr;
+          candidate.frameFormat = src.frameFormat;
+          candidate.hasRenderFrame = src.GetRenderFrame != nullptr;
+          published.push_back(&src);
+          candidates.push_back(candidate);
         }
 
         const int chosen = DmdSourceSelect::SelectMainDisplay(candidates);
@@ -518,10 +510,12 @@ void PluginEngine::OnDisplaySrcChanged()
           return;
         }
 
-        const DisplaySrcId& src = *mine[static_cast<size_t>(chosen)];
+        const DisplaySrcId& src = *published[static_cast<size_t>(chosen)];
         m_impl->dmd = {};
         m_impl->dmd.context = src.callContext;
         m_impl->dmd.GetIdentifyFrame = src.GetIdentifyFrame;
+        m_impl->dmd.GetRenderFrame = src.GetRenderFrame;
+        m_impl->dmd.source = DmdSourceSelect::SourceFor(candidates[static_cast<size_t>(chosen)]);
         m_impl->dmd.width = src.width;
         m_impl->dmd.height = src.height;
         m_impl->dmd.depth = DmdSourceSelect::DepthForIdentifyFormat(src.identifyFormat);
@@ -529,8 +523,11 @@ void PluginEngine::OnDisplaySrcChanged()
 
         if (m_options.debug)
         {
-          std::printf("PluginEngine: DMD display %u, %ux%u, depth %d (of %zu published)\n", src.id.resId, src.width,
-                      src.height, m_impl->dmd.depth, candidates.size());
+          const char* how = m_impl->dmd.source == DmdSourceSelect::FrameSource::Identify      ? "indexed"
+                            : m_impl->dmd.source == DmdSourceSelect::FrameSource::RenderRgb16 ? "colorized RGB16"
+                                                                                              : "colorized RGB24";
+          std::printf("PluginEngine: DMD display %u.%u, %ux%u, %s (of %zu published)\n", src.id.endpointId,
+                      src.id.resId, src.width, src.height, how, candidates.size());
         }
       });
 }
@@ -544,7 +541,9 @@ void PluginEngine::SampleDmd()
 
   Impl::DmdSource& dmd = m_impl->dmd;
   ++dmd.pollsSinceReport;
-  const DisplayFrame frame = dmd.GetIdentifyFrame(dmd.context);
+
+  const bool colorized = dmd.source != DmdSourceSelect::FrameSource::Identify;
+  const DisplayFrame frame = colorized ? dmd.GetRenderFrame(dmd.context) : dmd.GetIdentifyFrame(dmd.context);
   if (frame.frame == nullptr)
   {
     return;
@@ -556,8 +555,23 @@ void PluginEngine::SampleDmd()
   dmd.lastFrameId = frame.frameId;
   dmd.hasFrame = true;
 
-  m_pHost->OnDmdFrame(static_cast<const uint8_t*>(frame.frame), dmd.depth, static_cast<int>(dmd.width),
-                      static_cast<int>(dmd.height));
+  switch (dmd.source)
+  {
+    case DmdSourceSelect::FrameSource::Identify:
+      m_pHost->OnDmdFrame(static_cast<const uint8_t*>(frame.frame), dmd.depth, static_cast<int>(dmd.width),
+                          static_cast<int>(dmd.height));
+      break;
+    case DmdSourceSelect::FrameSource::RenderRgb16:
+      m_pHost->OnDmdRgb16Frame(static_cast<const uint16_t*>(frame.frame), static_cast<int>(dmd.width),
+                               static_cast<int>(dmd.height));
+      break;
+    case DmdSourceSelect::FrameSource::RenderRgb24:
+      m_pHost->OnDmdRgb24Frame(static_cast<const uint8_t*>(frame.frame), static_cast<int>(dmd.width),
+                               static_cast<int>(dmd.height));
+      break;
+    case DmdSourceSelect::FrameSource::None:
+      break;
+  }
   ++dmd.framesSinceReport;
 }
 
@@ -588,8 +602,18 @@ void PluginEngine::ReportDmdRate()
   // rate means the loop itself is stalling and the frame count below it is an
   // undercount rather than a quiet ROM -- a distinction the callback-driven
   // engine never had to make.
-  std::printf("DMD: %u frames/s (%u polls/s), %ux%u depth %d\n", dmd.framesSinceReport, dmd.pollsSinceReport, dmd.width,
-              dmd.height, dmd.depth);
+  // Depth only means anything for an indexed frame; a colorized one carries its
+  // own colour, and "depth 0" printed beside it just looks like a fault.
+  if (dmd.source == DmdSourceSelect::FrameSource::Identify)
+  {
+    std::printf("DMD: %u frames/s (%u polls/s), %ux%u depth %d\n", dmd.framesSinceReport, dmd.pollsSinceReport,
+                dmd.width, dmd.height, dmd.depth);
+  }
+  else
+  {
+    std::printf("DMD: %u frames/s (%u polls/s), %ux%u colorized\n", dmd.framesSinceReport, dmd.pollsSinceReport,
+                dmd.width, dmd.height);
+  }
   dmd.framesSinceReport = 0;
   dmd.pollsSinceReport = 0;
   dmd.nextReportMs = now + 1000;

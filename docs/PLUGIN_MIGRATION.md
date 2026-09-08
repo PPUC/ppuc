@@ -673,6 +673,47 @@ for frames — a 32 KB datagram is ~22 IP fragments and losing one drops the fra
 
 **Size:** ~900-1,300 lines.
 
+## Colorization runs in the Serum plugin
+
+**Done for ROM games.** `--serum` now loads vpinball's Serum plugin and turns
+libdmdutil's own colorizer off. The plugin consumes the controller's display
+straight off the bus and publishes its colorized output as an override;
+`PluginEngine` renders that instead of the raw frame, through
+`OnDmdRgb16Frame`/`OnDmdRgb24Frame` into `DMDUtil::UpdateRGB16Data`/
+`UpdateRGB24Data`. libdmdutil still drives the panels; it just no longer colorizes.
+
+Selection follows the override chain. `DmdSourceSelect` prefers a display that
+nothing else overrides, because a colorizer's output and the frame it colorized
+are the same size and only the chain can tell them apart. That also resolves a
+two-step chain — alphadmd renders segments, serum colorizes, upscaledmd could
+scale — to its far end. Verified on `afm_113b` (controller → serum) and
+`flash_l1` (segments → alphadmd → serum).
+
+A ROM-less Lua game keeps libdmdutil's colorizer: its frames come from
+`DmdCanvas` through `OnDmdFrame` and exist only inside PPUC, so there is no
+controller display for the plugin to consume.
+
+### The sizing gap this exposes, and the honest state of it
+
+libdmdutil asked the ZeDMD its height and requested only that size from Serum
+(`DMD.cpp:1561`). The plugin cannot: it publishes 32 and 64 row outputs and
+leaves consumers to choose, and PPUC — like `DMDUtilPlugin` — takes the largest.
+**So a 128x32 panel now receives the 256x64 colorization unless told otherwise.**
+
+`--serum-resolution 32` (or `64`) is the answer for a host that knows its panel:
+only that size is computed and only it is published, so nothing is left to
+choose and the other half is never computed. On a Raspberry Pi that is also the
+point — it halves the colorization work.
+
+It is a knob rather than a negotiation, and that is the gap. The automatic
+version is `DisplaySinkId`: the colorizer asks the sink its geometry instead of
+the host being told twice. Until that exists, an SD panel needs the flag.
+
+A cheaper interim fix, if the wait is long: give libdmdutil a public
+`GetPreferredHeight()` and have PPUC set `Serum:Resolution` from it. That moves
+the same knowledge libdmdutil already has into the plugin's hands without any
+bus API change.
+
 ## TODO: render a machine's auxiliary displays
 
 PPUC renders exactly one display per machine. `DmdSourceSelect::SelectMainDisplay`
