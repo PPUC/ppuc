@@ -336,6 +336,16 @@ ROM sound returns. A fresh overrider is given one hold window before the lane
 under it is let through, so a game start does not leak a burst of ROM audio
 while a pack is still loading. Default stays mode 0.
 
+#### Latency
+
+Every plugin audio buffer is marshalled through `ProcessAsyncCallbacks` once per
+main-loop iteration, and the queue settles at **180-240 ms** on both Time Warp
+and Terminator 2. That is not a drain problem -- the depth is stable, see below
+-- but it *is* the audio latency, and it is high enough to be worth looking at
+before this runs on a real playfield where a sound effect follows a coil hit.
+`--debug-audio` prints it per lane, along with whether the lane is unmuted
+("heard"/"muted") and whether it actually carries signal.
+
 #### What the measurements said
 
 The plan's top risk was that `ProcessAsyncCallbacks` — through which every
@@ -662,6 +672,74 @@ and push on change.
 for frames — a 32 KB datagram is ~22 IP fragments and losing one drops the frame.
 
 **Size:** ~900-1,300 lines.
+
+## TODO: render a machine's auxiliary displays
+
+PPUC renders exactly one display per machine. `DmdSourceSelect::SelectMainDisplay`
+picks the largest and silently discards the rest, which is right for the main
+DMD and wrong for every machine that has more than one physical display.
+
+**These are real playfield hardware, not internal state.** The `CORE_NODISP`
+flag they carry means "PinMAME's own renderer does not draw this", not "this is
+not a display" — PinMAME has no window layout for them, so it skips them and
+leaves them to a host that does. `sam.c:982-1000` submits them frame by frame
+from the emulated LED latches, and even rotates rows into columns first, which
+is not work anyone does for a debug artefact.
+
+Known cases, all currently dropped:
+
+| Game | Layout | Geometry |
+|---|---|---|
+| World Poker Tour | `sammini1_dmd128x32` | 14 displays of 5x7, two rows of seven characters (`top` 34 and 43, `left` 10..52 step 7) |
+| Wheel of Fortune | `sammini2_dmd128x32` | one 35x5 strip |
+| Various Sega/Stern | `segames.c:669,1041,1206,1908` | a 15x7 strip; a 21x5 strip; a green and a red 14x10 pair; three 5x7 characters |
+
+So the feature is "auxiliary displays", not "the WPT displays". A design that
+only fits fourteen 5x7 cells will not fit Wheel of Fortune's single strip.
+
+### What is already in place
+
+- Each auxiliary display is published as its own `DisplaySrcId` with a working
+  `GetIdentifyFrame`, on the same endpoint as the main DMD. `wpt_140a` publishes
+  fifteen. Nothing new is needed from the bus to *read* them.
+- `PluginEngine::SampleDmd` already polls one display at 120 Hz and dispatches
+  through `GameEngineHost::OnDmdFrame`. Polling several is a loop, not a redesign.
+- `libsdldmd`'s `SDLDMD` takes a window, geometry, a rendering mode and a
+  rotation, so a second window is a second `CreateSDLDMD` call.
+
+### What has to be decided
+
+1. **`OnDmdFrame` carries no display identity.** It is `(data, depth, width,
+   height)`, which was enough when there was only ever one. Auxiliary displays
+   need either an id parameter or a separate sink; the first is less churn but
+   touches `ScriptEngine` and `DmdCanvas` too.
+
+2. **Grouping.** WPT's fourteen cells are one logical 2x7 panel and should be
+   composited into a single 35x14 surface (plus gaps) rather than opened as
+   fourteen windows. The layout to composite by is in `left`/`top`, which CTLPI
+   does **not** carry — `DisplaySrcId` has width, height and hardware, and no
+   position. Either upstream gains a position hint, or PPUC groups by observed
+   geometry and orders by `resId`, which happens to follow layout order.
+
+3. **Output routing.** One extra window, one extra screen, or a region of the
+   existing DMD window. This wants a config surface — probably an `[AuxDisplay]`
+   INI section mirroring `[VirtualDMD]` — rather than a flag.
+
+4. **Whether they should be colorized.** Almost certainly not: they are LED
+   matrices with a fixed colour, and pushing them through Serum would key
+   against a colorization built for the main DMD.
+
+5. **Cost.** Fourteen more `GetIdentifyFrame` calls per poll at 120 Hz. Each is
+   an indirect call plus a `frameId` compare when nothing changed, so this is
+   small, but it is not free and belongs in the same budget as the coil poll.
+
+### Suggested first step
+
+Extend `DmdSourceSelect` to return *all* renderable displays ranked, rather than
+one index, and have `PluginEngine` keep the main one on today's path while
+publishing the rest through a new sink that nothing consumes yet. That separates
+the selection change from the rendering work and keeps the main DMD's behaviour
+provably unchanged — `test_dmd_source_select.cpp` already pins it.
 
 ## Alphanumeric games
 

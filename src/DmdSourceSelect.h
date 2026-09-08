@@ -21,6 +21,13 @@
 //
 // The principled fix is `DisplaySinkId` plus a NODISP hint -- see
 // docs/PLUGIN_MIGRATION.md.
+//
+// Note that the displays this discards are not junk. On World Poker Tour they
+// are the fourteen 5x7 LED matrices on the playfield, and other machines carry
+// strips and mini-DMDs of their own. Rendering them is a wanted feature; see
+// "TODO: render a machine's auxiliary displays" in docs/PLUGIN_MIGRATION.md,
+// which is also where the first step is sketched -- returning all renderable
+// displays ranked instead of one index.
 namespace DmdSourceSelect
 {
 

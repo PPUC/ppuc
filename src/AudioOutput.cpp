@@ -281,7 +281,13 @@ std::string AudioOutput::DescribeLanes() const
     }
     out += "  " + (lane.name.empty() ? std::string("(unnamed)") : lane.name);
     out += lane.overridden ? " [overridden]" : "";
-    out += lanes_.ShouldPlay(lane.id, nowMs) ? " heard" : " silent";
+    out += lanes_.ShouldPlay(lane.id, nowMs) ? " heard" : " muted";
+    // Whether the lane is unmuted and whether it carries any signal are
+    // different questions, and only the second one answers "why can I not hear
+    // anything". A lane that is heard but has not been audible for seconds is
+    // producing silence, not being suppressed.
+    const uint64_t silentForMs = nowMs > lane.lastAudibleMs ? nowMs - lane.lastAudibleMs : 0;
+    out += silentForMs < 500 ? ", signal" : ", silent for " + std::to_string(silentForMs / 1000) + "s";
     out += ", " + std::to_string(streams) + " stream(s), ";
     out += std::to_string(samplesPerMs > 0.0 ? static_cast<int>(buffered / samplesPerMs) : 0);
     out += " ms buffered\n";
