@@ -55,6 +55,8 @@ struct PluginEngine::Impl
     int depth = 0;
     unsigned int lastFrameId = 0;
     bool hasFrame = false;
+    unsigned int framesSinceReport = 0;
+    uint64_t nextReportMs = 0;
   };
   DmdSource dmd;
   bool hasDmd = false;
@@ -510,6 +512,35 @@ void PluginEngine::SampleDmd()
 
   m_pHost->OnDmdFrame(static_cast<const uint8_t*>(frame.frame), dmd.depth, static_cast<int>(dmd.width),
                       static_cast<int>(dmd.height));
+  ++dmd.framesSinceReport;
+}
+
+void PluginEngine::ReportDmdRate()
+{
+  // Reported on a wall clock rather than when a frame arrives, so a display
+  // producing nothing prints "0 frames/s" instead of printing nothing at all.
+  // Silence is the case worth seeing: a wrongly selected display, a stalled
+  // emulation and a machine sitting on a static screen all look identical, and
+  // only the number tells them apart from a report that never ran.
+  if (!m_options.debug || !m_impl->hasDmd)
+  {
+    return;
+  }
+
+  Impl::DmdSource& dmd = m_impl->dmd;
+  const uint64_t now = NowMs();
+  if (dmd.nextReportMs == 0)
+  {
+    dmd.nextReportMs = now + 1000;
+    return;
+  }
+  if (now < dmd.nextReportMs)
+  {
+    return;
+  }
+  std::printf("DMD: %u frames/s, %ux%u depth %d\n", dmd.framesSinceReport, dmd.width, dmd.height, dmd.depth);
+  dmd.framesSinceReport = 0;
+  dmd.nextReportMs = now + 1000;
 }
 
 void PluginEngine::SampleSegments()
@@ -929,6 +960,7 @@ void PluginEngine::Update()
     m_nextDmdSampleMs = now + 8;
     SampleDmd();
   }
+  ReportDmdRate();
 
   PollTrackedState();
 }

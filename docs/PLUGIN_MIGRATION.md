@@ -665,7 +665,9 @@ for frames — a 32 KB datagram is ~22 IP fragments and losing one drops the fra
 
 ## Alphanumeric games
 
-> **Now a live regression, not future work.** libpinmame's plugin path publishes
+> **Now a live regression, not future work.** Confirmed with `flash_l1`: six
+> segment displays decode correctly and no `DisplaySrcId` is published at all.
+> libpinmame's plugin path publishes
 > only `CORE_DMD` and `CORE_VIDEO` layouts; it no longer synthesizes the
 > `PINMAME_DISPLAY_TYPE_DMD | DMDSEG` frame that `PinmameEngine` rendered. PPUC
 > has no segment-to-DMD renderer of its own, so **an alphanumeric game
@@ -981,5 +983,20 @@ maintainers' attention is on this area — the first is the one with real teeth 
 - **No `PMPI_SET_MEMMAP`** — a bus client cannot supply the NVRAM map, so
   `PMPI_GROUP_GAMESTATE` availability is unknowable to PPUC.
 - **No NODISP hint on `DisplaySrcId`**, and no way to identify the main DMD.
+  Hit in practice. libpinmame publishes every `CORE_DMD` layout, including the
+  fourteen 5x7 `CORE_NODISP` mini-displays a Stern SAM game carries, and nothing
+  on the wire says which is the score display. `src/DmdSourceSelect.cpp` works
+  around it by taking the largest, tie-broken by `resId`. Both plausible rules
+  agree on `sam.c` — the 128x32 is imported first *and* the extras are 5x7 — but
+  that is luck, not a contract. Confirmed against a real ROM: `wpt_140a`
+  publishes **15 displays** and the right one is chosen.
+
+- **The PinMAME plugin ignores an explicitly configured `PinMAMEPath`** whenever
+  `<tabledir>/pinmame/roms` exists — `PinMAMEPlugin.cpp`'s `CreateObject` probes
+  table-relative first and only falls back to the setting PPUC hands it. Right
+  for VPX, wrong for an embedding host that sets the path deliberately. Listed
+  in the risk table as a guess; now observed. Low severity for PPUC, whose game
+  folders normally carry their own ROMs, but it makes `--pinmame-path` a silent
+  no-op in exactly the case someone would reach for it.
 - **May a bridge publish sources whose `id.endpointId` is not its own?** Today
   no — which forces id remapping, which forces `controllerId` (PR #4).

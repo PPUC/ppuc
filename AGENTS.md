@@ -128,6 +128,17 @@ Tests build with `-DPPUC_BUILD_TESTS=ON` and run under `ctest`, in three tiers:
   test makes the ROM produce an edge on demand. Skips itself when `ppuc_games`
   is not checked out beside this repo.
 
+Testing a ROM other than the game folder's own — the way to exercise the DMD,
+since only Time Warp has a complete game folder: point `--game` at a folder whose
+`pinmame/roms` holds (or symlinks) the ROM library, and pass `--rom <name>`. The
+board mapping will be wrong for that ROM, which does not matter for display work.
+
+Note that `--pinmame-path` will **not** do this. The PinMAME plugin probes
+`<tabledir>/pinmame/roms` first and only falls back to the `PinMAMEPath` setting
+PPUC hands it, so whenever the game folder has its own `pinmame/roms` the flag is
+silently ignored. That precedence is right for VPX and wrong for an embedding
+host; it only bites when both paths exist.
+
 Format with `.clang-format` before committing.
 
 ## Configuration Model

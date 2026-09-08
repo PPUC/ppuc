@@ -101,6 +101,7 @@ class PluginEngine final : public GameEngine
   void SampleSegments();
   void OnDisplaySrcChanged();
   void SampleDmd();
+  void ReportDmdRate();
   void OnControllersChanged();
   void PollThreadMain();
   void SampleOutputs();
