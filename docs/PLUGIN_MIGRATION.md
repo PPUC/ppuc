@@ -271,14 +271,41 @@ on a loaded Pi can overshoot to 5–10 ms.
 | `OnSoundCommand` | `PMPI_EVT_ON_AUDIO_CMD` — replaces both the callback *and* the `PinmameGetNewSoundCommands` polling |
 | `OnLogMessage` | `PluginBus::SetLogSink` — the va_list-vs-`char*` portability hack dies with the callback |
 
-**Segment decoding**: `SegDisplayFrame` gives 16 floats per element, and
-`GetSegDisplay` fills them from the **same bit index** the old 16-bit word used
-— so the existing 7-segment table is correct; only the input encoding changed.
-Move it to a dependency-free `src/SegmentDigitDecode.{h,cpp}` with a float
-wrapper that rebuilds the mask **with hysteresis** (on if `> 0.20`, off if
-`< 0.50`, latching). Hysteresis is mandatory, not polish: with
-`coreGlobals.nAlphaSegs` set, luminances dip well below 1.0 during multiplexing;
-`> 0.0` latches everything on, `>= 1.0` blanks the display.
+**Segment decoding** — **done**. `SegDisplayFrame` gives 16 floats per element,
+and `GetSegDisplay` fills them from the **same bit index** the old 16-bit word
+used — so the existing 7-segment table is correct; only the input encoding
+changed. It now lives in a dependency-free `src/SegmentDigitDecode.{h,cpp}` with
+a float wrapper that rebuilds the mask with hysteresis.
+
+Two corrections to what this section originally said:
+
+- The thresholds given here were inverted (an "on" threshold *below* the "off"
+  one describes no reachable state). The on threshold is now **0.5, matching
+  `alphadmd.cpp:189`** — that is what builds the identify frame Serum keys an
+  alphanumeric colorization on, and a display whose digits PPUC and the
+  colorizer disagree about is worse than either choice alone. Segments hold
+  until they fall below 0.3.
+- The rebuild must read only the **first `nSegments[elementType]`** floats of
+  each element. The provider leaves the rest of the sixteen untouched, so they
+  are stale rather than zero; folding them in produces a mask the table has no
+  digit for, and the display renders blank.
+
+On System 6 `coreGlobals.nAlphaSegs` is unset and the provider writes strictly
+0.0 or 1.0, so the hysteresis band never comes into play there. **It is untested
+against a game that does set it** — if a modulated game renders blank, that pair
+of thresholds is the first thing to suspect.
+
+Digit bases are assigned by walking displays in **`resId` order with an
+`nElements` stride**, replacing PinmameEngine's first-seen numbering. libpinmame
+assigns `resId` in sorted layout order (top, then left), so the numbering the
+backglass sees is stable across runs and matches reading order.
+
+Segments are polled from `Update()` on the main thread at 60 Hz and need **no
+quiesce gate**, unlike the solenoids: libpinmame publishes its sources from
+`OnGameStart` via `RunOnMainThread`, so a source change and a poll cannot
+overlap. That invariant is what makes the borrowed accessors safe, and it is
+stated in `PluginEngine.h` — segment polling must not move off the main thread
+without a gate of its own.
 
 ### Audio: how mode 1 actually works — **done**
 

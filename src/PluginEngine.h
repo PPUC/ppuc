@@ -47,6 +47,7 @@ class PluginEngine final : public GameEngine
     bool noSound = false;
     bool debug = false;
     bool debugCoils = false;
+    bool debugSegments = false;
     bool debugSoundCommands = false;
     int coilPollHz = 1000;
     int outputPollHz = 120;
@@ -96,6 +97,8 @@ class PluginEngine final : public GameEngine
 
   void OnStateSrcAboutToChange();
   void OnStateSrcChanged();
+  void OnSegSrcChanged();
+  void SampleSegments();
   void OnControllersChanged();
   void PollThreadMain();
   void SampleOutputs();
@@ -123,6 +126,18 @@ class PluginEngine final : public GameEngine
   std::vector<GameEngineOutputChange> m_lampChanges;
   std::vector<GameEngineOutputChange> m_giChanges;
   uint64_t m_nextOutputSampleMs = 0;
+
+  // Segment displays live in Impl, not here: their accessor is a
+  // SegSrcId::GetState function pointer returning a struct by value, and
+  // retyping that to keep the plugin SDK out of this header would be an ABI
+  // gamble for no benefit.
+  //
+  // They are polled from Update() on the main thread, and are safe there
+  // without the coil gate: libpinmame publishes its sources from OnGameStart
+  // via RunOnMainThread, so a source change and a poll cannot overlap. That is
+  // the invariant this borrows -- if segment polling ever moves off the main
+  // thread it needs a gate of its own, exactly like the solenoids.
+  uint64_t m_nextSegmentSampleMs = 0;
 
   // The coil plan and the gate that keeps the poll thread out of provider
   // memory while the provider is rebuilding it.

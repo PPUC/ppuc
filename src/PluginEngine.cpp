@@ -5,8 +5,9 @@
 #include <cstdio>
 #include <cstring>
 
-#include "PluginBus.h"
 #include "PinmameNvramMapLoader.h"
+#include "PluginBus.h"
+#include "SegmentDigitDecode.h"
 #include "pinmame/PinMAMEPlugin.h"
 #include "plugins/ControllerPlugin.h"
 
@@ -38,6 +39,30 @@ struct PluginEngine::Impl
 {
   std::unique_ptr<CtrlItemConsumer<ControllerDef>> controllers;
   std::unique_ptr<CtrlItemConsumer<StateSrcId>> states;
+  std::unique_ptr<CtrlItemConsumer<SegSrcId>> segSources;
+
+  // One published segment display, resolved to the provider's accessor.
+  struct SegmentDisplay
+  {
+    uint32_t resId = 0;
+    unsigned int elements = 0;
+    // Where this display's first element lands in the flat digit numbering the
+    // B2S host expects. Assigned by walking displays in resId order with an
+    // nElements stride: libpinmame numbers them in sorted layout order (top,
+    // then left), so this is stable across runs and matches reading order.
+    int digitBase = 0;
+    void* context = nullptr;
+    // Per element: how many of its sixteen floats the provider actually writes.
+    std::vector<int> segmentCounts;
+    SegDisplayFrame(MSGPIAPI* Get)(void*) = nullptr;
+    unsigned int lastFrameId = 0;
+    bool hasFrame = false;
+    // Per element, carried across polls: the mask feeds the hysteresis and the
+    // digit suppresses repeat dispatches.
+    std::vector<uint16_t> lastMask;
+    std::vector<int> lastDigit;
+  };
+  std::vector<SegmentDisplay> segments;
 };
 
 PluginEngine::PluginEngine(PluginBus& bus, Options options)
@@ -171,7 +196,8 @@ void PluginEngine::OnStateSrcChanged()
 
 void PluginEngine::OnControllersChanged()
 {
-  const bool present = m_impl->controllers->With([](const std::vector<ControllerDef>& items) { return !items.empty(); });
+  const bool present =
+      m_impl->controllers->With([](const std::vector<ControllerDef>& items) { return !items.empty(); });
   const int state = present ? 1 : 0;
   const int previous = m_runState.exchange(state, std::memory_order_release);
   if (previous != state && m_pHost != nullptr && !m_stopping)
@@ -325,6 +351,158 @@ void PluginEngine::SampleOutputs()
   }
 }
 
+void PluginEngine::OnSegSrcChanged()
+{
+  std::vector<Impl::SegmentDisplay> next;
+
+  m_impl->segSources->With(
+      [&](const std::vector<SegSrcId>& sources)
+      {
+        std::vector<const SegSrcId*> mine;
+        for (const SegSrcId& src : sources)
+        {
+          if (src.id.endpointId == m_pinmameEndpoint && src.GetState != nullptr && src.nElements != 0)
+          {
+            mine.push_back(&src);
+          }
+        }
+        // resId order, not publication order: the digit numbering the backglass
+        // sees must not depend on how the list happened to be assembled.
+        std::sort(mine.begin(), mine.end(),
+                  [](const SegSrcId* a, const SegSrcId* b) { return a->id.resId < b->id.resId; });
+
+        int digitBase = 0;
+        for (const SegSrcId* src : mine)
+        {
+          Impl::SegmentDisplay display;
+          display.resId = src->id.resId;
+          display.elements = src->nElements;
+          display.digitBase = digitBase;
+          display.context = src->callContext;
+          display.Get = src->GetState;
+          display.lastMask.assign(src->nElements, 0);
+          display.lastDigit.assign(src->nElements, -2);
+          display.segmentCounts.reserve(src->nElements);
+          for (unsigned int i = 0; i < src->nElements; ++i)
+          {
+            display.segmentCounts.push_back(
+                SegmentDigitDecode::SegmentCountForLayout(static_cast<int>(src->elementType[i])));
+          }
+          digitBase += static_cast<int>(src->nElements);
+          next.push_back(std::move(display));
+        }
+      });
+
+  // Carry the per-element history across a republish. Losing it would restart
+  // the hysteresis from "all off" and blink the whole display.
+  for (Impl::SegmentDisplay& display : next)
+  {
+    for (const Impl::SegmentDisplay& previous : m_impl->segments)
+    {
+      if (previous.resId == display.resId && previous.elements == display.elements)
+      {
+        display.lastMask = previous.lastMask;
+        display.lastDigit = previous.lastDigit;
+        break;
+      }
+    }
+  }
+
+  m_impl->segments = std::move(next);
+
+  if (m_options.debug)
+  {
+    std::printf("PluginEngine: %zu segment displays\n", m_impl->segments.size());
+    for (const Impl::SegmentDisplay& display : m_impl->segments)
+    {
+      std::printf("  display %u: %u elements, digits %d..%d\n", display.resId, display.elements, display.digitBase,
+                  display.digitBase + static_cast<int>(display.elements) - 1);
+    }
+  }
+}
+
+void PluginEngine::SampleSegments()
+{
+  if (m_pHost == nullptr)
+  {
+    return;
+  }
+
+  for (Impl::SegmentDisplay& display : m_impl->segments)
+  {
+    const SegDisplayFrame frame = display.Get(display.context);
+    if (frame.frame == nullptr)
+    {
+      continue;
+    }
+    // frameId only bumps when the luminances actually changed, so an idle
+    // display costs one indirect call and a compare. It is not enough on its
+    // own, though: the first frame after a source change legitimately carries
+    // the id it already had.
+    if (display.hasFrame && frame.frameId == display.lastFrameId)
+    {
+      continue;
+    }
+    display.lastFrameId = frame.frameId;
+    display.hasFrame = true;
+
+    int score = 0;
+    bool hasScoreDigit = false;
+    for (unsigned int i = 0; i < display.elements; ++i)
+    {
+      const float* luminances = frame.frame + i * SegmentDigitDecode::kSegmentsPerElement;
+      const uint16_t mask =
+          SegmentDigitDecode::MaskFromLuminance(luminances, display.segmentCounts[i], display.lastMask[i]);
+      display.lastMask[i] = mask;
+
+      const int digit = SegmentDigitDecode::DecodeDigit(mask);
+      if (digit != display.lastDigit[i])
+      {
+        display.lastDigit[i] = digit;
+        m_pHost->OnSegmentDigit(display.digitBase + static_cast<int>(i), digit);
+      }
+
+      // Preserved from PinmameEngine: leading blanks are skipped, but a blank
+      // after a digit is a trailing zero the display simply is not lighting.
+      if (digit >= 0)
+      {
+        hasScoreDigit = true;
+        score = score * 10 + digit;
+      }
+      else if (hasScoreDigit)
+      {
+        score *= 10;
+      }
+    }
+
+    if (hasScoreDigit)
+    {
+      m_pHost->OnPlayerScore(static_cast<int>(display.resId) + 1, score);
+    }
+
+    if (m_options.debugSegments)
+    {
+      std::printf("Segment display %u base=%d:", display.resId, display.digitBase);
+      for (unsigned int i = 0; i < display.elements; ++i)
+      {
+        // The mask as well as the digit: a display that renders nothing is
+        // almost always segments that never crossed the threshold, and only the
+        // mask distinguishes that from a mask the table has no digit for.
+        std::printf(" %04X", display.lastMask[i]);
+        if (display.lastDigit[i] >= 0)
+        {
+          std::printf("(%d)", display.lastDigit[i]);
+        }
+      }
+      if (hasScoreDigit)
+      {
+        std::printf(" score=%d", score);
+      }
+      std::printf("\n");
+    }
+  }
+}
+
 void PluginEngine::PollChangedLamps(std::vector<GameEngineOutputChange>& changes) { changes.swap(m_lampChanges); }
 
 void PluginEngine::PollChangedGis(std::vector<GameEngineOutputChange>& changes)
@@ -385,16 +563,22 @@ bool PluginEngine::Start(std::string& error)
   m_impl->controllers = std::make_unique<CtrlItemConsumer<ControllerDef>>(
       &api, m_bus.HostEndpointId(), CTLPI_CONTROLLERS_GET_MSG, CTLPI_CONTROLLERS_ON_CHG_MSG,
       [this](std::vector<ControllerDef>& items)
-      {
-        std::erase_if(items, [this](const ControllerDef& c) { return c.endpointId != m_pinmameEndpoint; });
-      },
-      []() {}, [this]() { OnControllersChanged(); });
+      { std::erase_if(items, [this](const ControllerDef& c) { return c.endpointId != m_pinmameEndpoint; }); }, []() {},
+      [this]() { OnControllersChanged(); });
   m_impl->controllers->Subscribe();
 
   m_impl->states = std::make_unique<CtrlItemConsumer<StateSrcId>>(
       &api, m_bus.HostEndpointId(), CTLPI_STATE_GET_SRC_MSG, CTLPI_STATE_ON_SRC_CHG_MSG,
       [](std::vector<StateSrcId>&) {}, [this]() { OnStateSrcAboutToChange(); }, [this]() { OnStateSrcChanged(); });
   m_impl->states->Subscribe();
+
+  // No about-to-change hook, unlike the solenoids: segments are only ever read
+  // from Update() on the main thread, which is the same thread this callback
+  // arrives on, so the accessors cannot go stale mid-poll.
+  m_impl->segSources = std::make_unique<CtrlItemConsumer<SegSrcId>>(
+      &api, m_bus.HostEndpointId(), CTLPI_SEG_GET_SRC_MSG, CTLPI_SEG_ON_SRC_CHG_MSG, [](std::vector<SegSrcId>&) {},
+      []() {}, [this]() { OnSegSrcChanged(); });
+  m_impl->segSources->Subscribe();
 
   // PinMAME is entered only through its COM override; there is no bus message
   // that starts a ROM, and PPUC has no table script to do it the way VPX does.
@@ -473,6 +657,12 @@ void PluginEngine::Stop()
   }
 
   // Mandatory: CtrlItemConsumer's destructor asserts it is not still subscribed.
+  if (m_impl->segSources)
+  {
+    m_impl->segSources->Unsubscribe();
+    m_impl->segSources.reset();
+  }
+  m_impl->segments.clear();
   if (m_impl->states)
   {
     m_impl->states->Unsubscribe();
@@ -549,8 +739,8 @@ void PluginEngine::PollTrackedState()
     // A ROM nobody has mapped is a normal outcome, not a failure.
     if (!TryLoadPinmameTrackingConfig(m_identity.name.c_str(), m_identity.hardwareGen,
                                       m_options.pinmamePath.empty() ? nullptr : m_options.pinmamePath.c_str(),
-                                      &m_tracking, &trackingError)
-        && m_options.debug)
+                                      &m_tracking, &trackingError) &&
+        m_options.debug)
     {
       std::printf("PluginEngine: no NVRAM map for %s: %s\n", m_identity.name.c_str(), trackingError.c_str());
     }
@@ -589,7 +779,8 @@ void PluginEngine::PollTrackedState()
     m_pHost->OnCurrentBallChanged(ball);
   }
   uint8_t player = 0;
-  if (TryDecodeTrackedPinmameValue(m_tracking.currentPlayer, read, &player) && (!m_hasLastPlayer || player != m_lastPlayer))
+  if (TryDecodeTrackedPinmameValue(m_tracking.currentPlayer, read, &player) &&
+      (!m_hasLastPlayer || player != m_lastPlayer))
   {
     m_hasLastPlayer = true;
     m_lastPlayer = player;
@@ -615,6 +806,14 @@ void PluginEngine::Update()
   {
     m_nextOutputSampleMs = now + static_cast<uint64_t>(1000 / std::max(1, m_options.outputPollHz));
     SampleOutputs();
+  }
+
+  // 60 Hz: a segment display is a 60 Hz device and sampling faster only costs
+  // PWM integrations inside libpinmame.
+  if (now >= m_nextSegmentSampleMs)
+  {
+    m_nextSegmentSampleMs = now + 16;
+    SampleSegments();
   }
 
   PollTrackedState();

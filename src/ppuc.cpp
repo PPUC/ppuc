@@ -282,6 +282,7 @@ bool opt_debug_lamps = false;
 bool opt_debug_effects = false;
 bool opt_debug_sound_commands = false;
 bool opt_debug_audio = false;
+bool opt_debug_segments = false;
 // AltSound replaces the ROM stream by default, which is what PinMAME used to do
 // internally. Mode 1 lets the ROM back through where the pack is silent; it is
 // opt-in because it infers "the pack has nothing for this command" from silence
@@ -2369,6 +2370,10 @@ static struct cag_option options[] = {
      .access_name = "debug-sound-commands",
      .value_name = NULL,
      .description = "Print PinMAME sound command IDs for building altsound packs (optional)"},
+    {.identifier = '>',
+     .access_name = "debug-segments",
+     .value_name = NULL,
+     .description = "Print segment display masks, digits and scores (optional)"},
     {.identifier = '}',
      .access_name = "debug-audio",
      .value_name = NULL,
@@ -3029,6 +3034,8 @@ int main(int argc, char** argv)
           opt_debug_sound_commands = ParseIniBool(value);
         else if (key == "DebugAudio")
           opt_debug_audio = ParseIniBool(value);
+        else if (key == "DebugSegments")
+          opt_debug_segments = ParseIniBool(value);
         else if (key == "AltSoundMode")
           opt_altsound_mode = atoi(value.c_str());
         else if (key == "Serum" || key == "AltColor")
@@ -3387,6 +3394,9 @@ int main(int argc, char** argv)
         break;
       case '}':
         opt_debug_audio = true;
+        break;
+      case '>':
+        opt_debug_segments = true;
         break;
       case '<':
         opt_altsound_mode = atoi(cag_option_get_value(&cag_context));
@@ -4383,6 +4393,7 @@ int main(int argc, char** argv)
     engineOptions.noSound = opt_no_sound;
     engineOptions.debug = opt_debug;
     engineOptions.debugCoils = opt_debug_coils;
+    engineOptions.debugSegments = opt_debug_segments;
     engineOptions.debugSoundCommands = opt_debug_sound_commands;
     pEngine = std::make_unique<PluginEngine>(*pPluginBus, std::move(engineOptions));
   }

@@ -278,6 +278,7 @@ add_executable(ppuc-pinmame
    src/MediaPluginHost.cpp
    src/PluginBus.cpp
    src/PluginEngine.cpp
+   src/SegmentDigitDecode.cpp
    src/ScriptObject.cpp
    src/PinmameNvramMapLoader.cpp
    src/PinmameNvramTracking.cpp
@@ -760,6 +761,7 @@ if(PPUC_BUILD_TESTS)
       src/LuaRulesEngine.cpp
       src/PinmameNvramTracking.cpp
       src/ScriptObject.cpp
+      src/SegmentDigitDecode.cpp
       src/Uf2Image.cpp
       src/dmd/DmdCanvas.cpp
       src/dmd/DmdDefaultScreen.cpp
@@ -783,6 +785,7 @@ if(PPUC_BUILD_TESTS)
       tests/test_audio_mixer.cpp
       tests/test_plugin_switch_map.cpp
       tests/test_script_object.cpp
+      tests/test_segment_digit_decode.cpp
       tests/test_uf2_image.cpp
    )
 

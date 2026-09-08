@@ -44,6 +44,7 @@ trap 'rm -f "${LOG}"' EXIT
    -n --no-display --no-sound \
    --plugin-dir "$(dirname "${BIN}")/plugins" \
    --rules "${RULES}" \
+   --debug-segments \
    --exit-after-ms "${RUN_MS}" >"${LOG}" 2>&1
 status=$?
 
@@ -58,6 +59,20 @@ fi
 
 echo "${verdict}"
 case "${verdict}" in
-   "TEST-RESULT: PASS"*) exit 0 ;;
+   "TEST-RESULT: PASS"*) ;;
    *) tail -n 30 "${LOG}"; exit 1 ;;
 esac
+
+# Time Warp is alphanumeric, so its score display is the whole display chain
+# here. PluginEngine polls SegSrcId, rebuilds each element's mask from sixteen
+# luminances and decodes it; every step of that is new, and a display that
+# decodes to nothing looks exactly like a display that is simply blank.
+if ! grep -q 'Segment display .* score=' "${LOG}"; then
+   echo "FAIL: no segment display decoded a score."
+   echo "      The ROM ran and started a game, so the segment poll or the"
+   echo "      luminance-to-mask rebuild is broken, not the game."
+   grep -m5 'Segment display' "${LOG}"
+   exit 1
+fi
+echo "TEST-RESULT: PASS segment displays decoded a score"
+exit 0
