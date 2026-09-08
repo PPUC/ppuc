@@ -679,6 +679,19 @@ ppuc_prepare_vpinball_media_dependencies() {
    mkdir -p "${ppuc_include_dir}/pinmame"
    cp -a "${PPUC_SOURCE_ROOT}/external/pinmame/pinmame/src/libpinmame/PinMAMEPlugin.h" \
       "${ppuc_include_dir}/pinmame/"
+
+   # SerumPlugin links libserum. PPUC already stages it for libdmdutil's own
+   # colorizer, and both come from PPUC/libserum, so reuse that build rather
+   # than fetching a second copy that could drift to a different version.
+   if [ "${platform}" = "macos" ]; then
+      ppuc_copy_dylib_link_chain "${PPUC_SOURCE_ROOT}/third-party/runtime-libs/${platform_tag}" \
+         "libserum.dylib" "${runtime_dir}"
+   else
+      ppuc_vpinball_media_glob_copy \
+         "${PPUC_SOURCE_ROOT}/third-party/runtime-libs/${platform_tag}/libserum.so*" "${runtime_dir}"
+   fi
+   cp -a "${PPUC_SOURCE_ROOT}/third-party/include/serum-decode.h" "${include_dir}/"
+   cp -a "${PPUC_SOURCE_ROOT}/third-party/include/serum.h" "${include_dir}/"
 }
 
 ppuc_prepare_vpinball_media_plugins() {
@@ -765,7 +778,7 @@ ppuc_build_vpinball_media_plugins() {
    # a side effect. Building the plugins without the app means nothing does, and
    # the plugin.cfg copy is the first thing to notice.
    mkdir -p "${plugin_package_dir}/pup" "${plugin_package_dir}/altsound" "${plugin_package_dir}/b2s" \
-      "${plugin_package_dir}/pinmame" "${plugin_package_dir}/alphadmd"
+      "${plugin_package_dir}/pinmame" "${plugin_package_dir}/alphadmd" "${plugin_package_dir}/serum"
 
    # B2SLegacyPlugin is deliberately not built: MediaPluginHost only ever
    # loads "PUP", "AltSound" and "B2S". --b2s uses the modern B2S plugin.
@@ -775,7 +788,7 @@ ppuc_build_vpinball_media_plugins() {
    # synthesize that frame itself; its plugin path does not, so without this an
    # alphanumeric game has no DMD at all -- no ZeDMD, no virtual DMD, and no
    # Serum, which for Time Warp is the whole point of its colorization.
-   for plugin_target in PinMAMEPlugin PUPPlugin AltSoundPlugin B2SPlugin AlphaDMDPlugin; do
+   for plugin_target in PinMAMEPlugin PUPPlugin AltSoundPlugin B2SPlugin AlphaDMDPlugin SerumPlugin; do
       cmake --build "${vpinball_build_dir}" --target "${plugin_target}"
    done
 
@@ -800,7 +813,7 @@ ppuc_build_vpinball_media_plugins() {
          install_name_tool -add_rpath "@loader_path/../.." "${plugin_package_dir}/pup/plugin-pup.dylib" 2>/dev/null || true
       fi
       # Reaches the shared dylibs in ppuc/, two levels up from plugins/<name>/.
-      for plugin_using_shared_libs in b2s pinmame; do
+      for plugin_using_shared_libs in b2s pinmame serum; do
          if [ -f "${plugin_package_dir}/${plugin_using_shared_libs}/plugin-${plugin_using_shared_libs}.dylib" ]; then
             install_name_tool -add_rpath "@loader_path/../.." \
                "${plugin_package_dir}/${plugin_using_shared_libs}/plugin-${plugin_using_shared_libs}.dylib" 2>/dev/null || true
