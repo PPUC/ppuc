@@ -665,6 +665,19 @@ for frames — a 32 KB datagram is ~22 IP fragments and losing one drops the fra
 
 ## Alphanumeric games
 
+> **Now a live regression, not future work.** libpinmame's plugin path publishes
+> only `CORE_DMD` and `CORE_VIDEO` layouts; it no longer synthesizes the
+> `PINMAME_DISPLAY_TYPE_DMD | DMDSEG` frame that `PinmameEngine` rendered. PPUC
+> has no segment-to-DMD renderer of its own, so **an alphanumeric game
+> configured with a physical DMD now shows nothing** — including Flash, whose
+> `flash_l1.cROMc` colorization is the Serum scene-trigger case. Loading
+> `alphadmd` and consuming its `DisplaySrcId` is the fix; PPUC currently
+> consumes displays only from the controller's own endpoint.
+>
+> Note also that the paragraph below is out of date on one point: PPUC does not
+> need to publish a `SegSrcId` provider for this. libpinmame publishes its own,
+> and `alphadmd` binds to that.
+
 libpinmame used to synthesize a DMD frame for segment ROMs; upstream now splits
 `SegSrcId` from `DisplaySrcId` and renders segments in `alphadmd`. Loading that
 plugin covers it — but note it only works once PPUC publishes a `SegSrcId`

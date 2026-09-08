@@ -277,6 +277,7 @@ add_executable(ppuc-pinmame
    src/LuaRulesEngine.cpp
    src/MediaPluginHost.cpp
    src/PluginBus.cpp
+   src/DmdSourceSelect.cpp
    src/PluginEngine.cpp
    src/SegmentDigitDecode.cpp
    src/ScriptObject.cpp
@@ -760,6 +761,7 @@ if(PPUC_BUILD_TESTS)
       src/LuaGameApi.cpp
       src/LuaRulesEngine.cpp
       src/PinmameNvramTracking.cpp
+      src/DmdSourceSelect.cpp
       src/ScriptObject.cpp
       src/SegmentDigitDecode.cpp
       src/Uf2Image.cpp
@@ -774,6 +776,7 @@ if(PPUC_BUILD_TESTS)
       tests/RulesFixture.h
       tests/test_game_core.cpp
       tests/test_dmd_canvas.cpp
+      tests/test_dmd_source_select.cpp
       tests/test_dmd_pacing.cpp
       tests/test_game_tilt.cpp
       tests/test_playfield_assist.cpp

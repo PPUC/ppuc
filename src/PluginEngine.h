@@ -99,6 +99,8 @@ class PluginEngine final : public GameEngine
   void OnStateSrcChanged();
   void OnSegSrcChanged();
   void SampleSegments();
+  void OnDisplaySrcChanged();
+  void SampleDmd();
   void OnControllersChanged();
   void PollThreadMain();
   void SampleOutputs();
@@ -138,6 +140,7 @@ class PluginEngine final : public GameEngine
   // the invariant this borrows -- if segment polling ever moves off the main
   // thread it needs a gate of its own, exactly like the solenoids.
   uint64_t m_nextSegmentSampleMs = 0;
+  uint64_t m_nextDmdSampleMs = 0;
 
   // The coil plan and the gate that keeps the poll thread out of provider
   // memory while the provider is rebuilding it.

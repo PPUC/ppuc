@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "DmdSourceSelect.h"
 #include "PinmameNvramMapLoader.h"
 #include "PluginBus.h"
 #include "SegmentDigitDecode.h"
@@ -40,6 +41,23 @@ struct PluginEngine::Impl
   std::unique_ptr<CtrlItemConsumer<ControllerDef>> controllers;
   std::unique_ptr<CtrlItemConsumer<StateSrcId>> states;
   std::unique_ptr<CtrlItemConsumer<SegSrcId>> segSources;
+  std::unique_ptr<CtrlItemConsumer<DisplaySrcId>> displaySources;
+
+  // The one display PPUC renders, resolved to the provider's accessor. Null
+  // when the machine has no DMD, which is the normal case for the alphanumeric
+  // games PPUC mostly runs.
+  struct DmdSource
+  {
+    void* context = nullptr;
+    DisplayFrame(MSGPIAPI* GetIdentifyFrame)(void*) = nullptr;
+    unsigned int width = 0;
+    unsigned int height = 0;
+    int depth = 0;
+    unsigned int lastFrameId = 0;
+    bool hasFrame = false;
+  };
+  DmdSource dmd;
+  bool hasDmd = false;
 
   // One published segment display, resolved to the provider's accessor.
   struct SegmentDisplay
@@ -421,6 +439,79 @@ void PluginEngine::OnSegSrcChanged()
   }
 }
 
+void PluginEngine::OnDisplaySrcChanged()
+{
+  static_assert(CTLPI_DISPLAY_ID_FORMAT_BITPLANE2 == 1u && CTLPI_DISPLAY_ID_FORMAT_BITPLANE4 == 2u,
+                "DmdSourceSelect mirrors these values to stay free of the plugin SDK");
+
+  m_impl->hasDmd = false;
+
+  m_impl->displaySources->With(
+      [&](const std::vector<DisplaySrcId>& sources)
+      {
+        // Only the controller's own displays. A colorizer or the alphanumeric
+        // renderer publishes displays too, and consuming those is the bus-native
+        // DMD chain -- gated on the sink-size negotiation, not started here.
+        std::vector<const DisplaySrcId*> mine;
+        std::vector<DmdSourceSelect::Candidate> candidates;
+        for (const DisplaySrcId& src : sources)
+        {
+          if (src.id.endpointId != m_pinmameEndpoint)
+          {
+            continue;
+          }
+          mine.push_back(&src);
+          candidates.push_back(
+              {src.id.resId, src.width, src.height, src.identifyFormat, src.GetIdentifyFrame != nullptr});
+        }
+
+        const int chosen = DmdSourceSelect::SelectMainDisplay(candidates);
+        if (chosen < 0)
+        {
+          return;
+        }
+
+        const DisplaySrcId& src = *mine[static_cast<size_t>(chosen)];
+        m_impl->dmd = {};
+        m_impl->dmd.context = src.callContext;
+        m_impl->dmd.GetIdentifyFrame = src.GetIdentifyFrame;
+        m_impl->dmd.width = src.width;
+        m_impl->dmd.height = src.height;
+        m_impl->dmd.depth = DmdSourceSelect::DepthForIdentifyFormat(src.identifyFormat);
+        m_impl->hasDmd = true;
+
+        if (m_options.debug)
+        {
+          std::printf("PluginEngine: DMD display %u, %ux%u, depth %d (of %zu published)\n", src.id.resId, src.width,
+                      src.height, m_impl->dmd.depth, candidates.size());
+        }
+      });
+}
+
+void PluginEngine::SampleDmd()
+{
+  if (!m_impl->hasDmd || m_pHost == nullptr)
+  {
+    return;
+  }
+
+  Impl::DmdSource& dmd = m_impl->dmd;
+  const DisplayFrame frame = dmd.GetIdentifyFrame(dmd.context);
+  if (frame.frame == nullptr)
+  {
+    return;
+  }
+  if (dmd.hasFrame && frame.frameId == dmd.lastFrameId)
+  {
+    return;
+  }
+  dmd.lastFrameId = frame.frameId;
+  dmd.hasFrame = true;
+
+  m_pHost->OnDmdFrame(static_cast<const uint8_t*>(frame.frame), dmd.depth, static_cast<int>(dmd.width),
+                      static_cast<int>(dmd.height));
+}
+
 void PluginEngine::SampleSegments()
 {
   if (m_pHost == nullptr)
@@ -580,6 +671,13 @@ bool PluginEngine::Start(std::string& error)
       []() {}, [this]() { OnSegSrcChanged(); });
   m_impl->segSources->Subscribe();
 
+  // Same main-thread argument as the segments: polled only from Update(), and
+  // this callback arrives on the same thread, so no gate is needed.
+  m_impl->displaySources = std::make_unique<CtrlItemConsumer<DisplaySrcId>>(
+      &api, m_bus.HostEndpointId(), CTLPI_DISPLAY_GET_SRC_MSG, CTLPI_DISPLAY_ON_SRC_CHG_MSG,
+      [](std::vector<DisplaySrcId>&) {}, []() {}, [this]() { OnDisplaySrcChanged(); });
+  m_impl->displaySources->Subscribe();
+
   // PinMAME is entered only through its COM override; there is no bus message
   // that starts a ROM, and PPUC has no table script to do it the way VPX does.
   const ScriptClassDef* classDef = m_bus.ComOverride("VPinMAME.Controller");
@@ -657,6 +755,12 @@ void PluginEngine::Stop()
   }
 
   // Mandatory: CtrlItemConsumer's destructor asserts it is not still subscribed.
+  if (m_impl->displaySources)
+  {
+    m_impl->displaySources->Unsubscribe();
+    m_impl->displaySources.reset();
+  }
+  m_impl->hasDmd = false;
   if (m_impl->segSources)
   {
     m_impl->segSources->Unsubscribe();
@@ -814,6 +918,16 @@ void PluginEngine::Update()
   {
     m_nextSegmentSampleMs = now + 16;
     SampleSegments();
+  }
+
+  // Faster than the segments, and not for smoothness: the identify frame is
+  // what a Serum colorization keys on, and a ROM can put out frames faster than
+  // 60 Hz. Sampling at the display's own rate would alias them, and a missed
+  // key frame is a missed scene, not a dropped one.
+  if (now >= m_nextDmdSampleMs)
+  {
+    m_nextDmdSampleMs = now + 8;
+    SampleDmd();
   }
 
   PollTrackedState();
