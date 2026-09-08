@@ -156,6 +156,7 @@ if [ "${PINMAME_EXPECTED_SHA}" != "${PINMAME_FOUND_SHA}" ]; then
    cd pinmame
    cp -a CMakeLists.txt CMakeLists.txt.orig 2>/dev/null || true
    cp -a cmake/libpinmame/CMakeLists.txt .
+   ppuc_stage_plugin_api_headers_into_pinmame
    cmake \
       -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
       -DPLATFORM=win-mingw \

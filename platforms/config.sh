@@ -16,7 +16,7 @@ PINMAME_NVRAM_MAPS_SHA=d8693b9ca59a1b871d2a473be3adb0392471a8e3
 LIBPPUC_SHA=b514db24d7867b5ad4bbb565dfb382b0f483d5fb
 DOCTEST_VERSION=2.4.11
 LIBSDLDMD_SHA=6091a7157af07efe6fc8278a36bda63efe80f15a
-VPINBALL_SHA=83cd4619c8da7b5aecb8ea41a1a0aa842e504886
+VPINBALL_SHA=c773dc379167e139cd0cc470c9839a0388181e04
 VPINBALL_SDL_SHA=f87239e71e42da91ca317a12eefb82cfbf3393eb
 VPINBALL_SDL_IMAGE_SHA="${VPINBALL_SDL_IMAGE_SHA:-${SDL_IMAGE_SHA}}"
 VPINBALL_SDL_TTF_SHA=a1ce3670aec736ecbf0936c43f2f0cc53aa61e5b
@@ -216,6 +216,36 @@ ppuc_macos_deployment_target() {
 
 ppuc_vpinball_root() {
    echo "${PPUC_SOURCE_ROOT}/external/vpinball/vpinball"
+}
+
+# libpinmame vendors its own copies of the plugin API headers, and PPUC builds it
+# from source against a vpinball checkout that may be ahead of PINMAME_SHA. A
+# difference in DisplaySrcId's layout between the two does not fail loudly: the
+# function pointers still line up and the geometry does not, so a DMD arrives
+# with nonsense dimensions instead of not arriving. Staging vpinball's copies
+# over pinmame's makes one header authoritative and takes the two SHAs out of
+# lockstep. If the headers ever become genuinely incompatible the libpinmame
+# build fails, which is the failure worth having.
+ppuc_stage_plugin_api_headers_into_pinmame() {
+   local pinmame_plugins_dir="${PPUC_SOURCE_ROOT}/external/pinmame/pinmame/src/libpinmame/plugins"
+   local vpinball_root
+   local header
+
+   if [ "${PPUC_BUILD_VPINBALL_MEDIA_PLUGINS:-1}" = "0" ]; then
+      return 0
+   fi
+   if [ ! -d "${pinmame_plugins_dir}" ]; then
+      return 0
+   fi
+
+   ppuc_stage_vpinball_source
+   vpinball_root="$(ppuc_vpinball_root)"
+
+   for header in ControllerPlugin.h MsgPlugin.h; do
+      if [ -f "${vpinball_root}/plugins/plugins/${header}" ]; then
+         cp -a "${vpinball_root}/plugins/plugins/${header}" "${pinmame_plugins_dir}/${header}"
+      fi
+   done
 }
 
 ppuc_stage_vpinball_source() {

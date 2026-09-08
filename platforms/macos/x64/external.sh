@@ -208,6 +208,7 @@ if [ "${PINMAME_EXPECTED_SHA}" != "${PINMAME_FOUND_SHA}" ]; then
    mv pinmame-${PINMAME_SHA} pinmame
    cd pinmame
    cp -a cmake/libpinmame/CMakeLists.txt .
+   ppuc_stage_plugin_api_headers_into_pinmame
    cmake \
       -DPLATFORM=macos \
       -DARCH=x64 \
