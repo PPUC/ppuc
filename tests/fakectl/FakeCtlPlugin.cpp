@@ -33,6 +33,7 @@ const MsgPluginAPI* g_api = nullptr;
 uint32_t g_endpointId = 0;
 unsigned int g_onAudioCmdId = 0;
 unsigned int g_onStateChangeId = 0;
+unsigned int g_onDmdTriggerId = 0;
 std::unique_ptr<CtrlItemConsumer<ControllerDef>> g_controllers;
 // Two audio sources where the second overrides the first, mirroring what
 // libpinmame and AltSound publish at runtime. Without a pack installed there is
@@ -116,6 +117,18 @@ void MSGPIAPI OnStateChange(const unsigned int, void*, void* msgData)
   }
 }
 
+// Serum forwards a colorization's own PUP triggers here. Observed so a test can
+// tell whether the plugin is reporting them, which is otherwise only visible by
+// its effect on PUP.
+void MSGPIAPI OnDmdTrigger(const unsigned int, void*, void* msgData)
+{
+  const auto* trigger = static_cast<const unsigned int*>(msgData);
+  if (trigger != nullptr)
+  {
+    Observe("dmd-trigger id=%u", *trigger);
+  }
+}
+
 }  // namespace
 
 MSGPI_EXPORT void MSGPIAPI FakeCtlPluginLoad(const uint32_t sessionId, const MsgPluginAPI* api)
@@ -155,6 +168,9 @@ MSGPI_EXPORT void MSGPIAPI FakeCtlPluginLoad(const uint32_t sessionId, const Msg
 
   g_onStateChangeId = g_api->GetMsgID("B2S", "OnStateChange:1");
   g_api->SubscribeMsg(g_endpointId, g_onStateChangeId, OnStateChange, nullptr);
+
+  g_onDmdTriggerId = g_api->GetMsgID("Serum", "OnDmdTrigger:1");
+  g_api->SubscribeMsg(g_endpointId, g_onDmdTriggerId, OnDmdTrigger, nullptr);
 }
 
 MSGPI_EXPORT void MSGPIAPI FakeCtlPluginUnload()
@@ -163,6 +179,8 @@ MSGPI_EXPORT void MSGPIAPI FakeCtlPluginUnload()
   g_audioSources.reset();
   g_controllers->Unsubscribe();
   g_controllers.reset();
+  g_api->UnsubscribeMsg(g_onDmdTriggerId, OnDmdTrigger, nullptr);
+  g_api->ReleaseMsgID(g_onDmdTriggerId);
   g_api->UnsubscribeMsg(g_onStateChangeId, OnStateChange, nullptr);
   g_api->ReleaseMsgID(g_onStateChangeId);
   g_api->UnsubscribeMsg(g_onAudioCmdId, OnAudioCmd, nullptr);
