@@ -735,13 +735,17 @@ ppuc_build_vpinball_media_plugins() {
    # a side effect. Building the plugins without the app means nothing does, and
    # the plugin.cfg copy is the first thing to notice.
    mkdir -p "${plugin_package_dir}/pup" "${plugin_package_dir}/altsound" "${plugin_package_dir}/b2s" \
-      "${plugin_package_dir}/pinmame"
+      "${plugin_package_dir}/pinmame" "${plugin_package_dir}/alphadmd"
 
    # B2SLegacyPlugin is deliberately not built: MediaPluginHost only ever
    # loads "PUP", "AltSound" and "B2S". --b2s uses the modern B2S plugin.
    # PinMAMEPlugin first: it is what actually runs the ROM, so a link failure
    # there should surface before the long PUP/ffmpeg build.
-   for plugin_target in PinMAMEPlugin PUPPlugin AltSoundPlugin B2SPlugin; do
+   # AlphaDMDPlugin renders segment displays as a 128x32 DMD. libpinmame used to
+   # synthesize that frame itself; its plugin path does not, so without this an
+   # alphanumeric game has no DMD at all -- no ZeDMD, no virtual DMD, and no
+   # Serum, which for Time Warp is the whole point of its colorization.
+   for plugin_target in PinMAMEPlugin PUPPlugin AltSoundPlugin B2SPlugin AlphaDMDPlugin; do
       cmake --build "${vpinball_build_dir}" --target "${plugin_target}"
    done
 

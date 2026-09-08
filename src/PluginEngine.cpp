@@ -56,6 +56,7 @@ struct PluginEngine::Impl
     unsigned int lastFrameId = 0;
     bool hasFrame = false;
     unsigned int framesSinceReport = 0;
+    unsigned int pollsSinceReport = 0;
     uint64_t nextReportMs = 0;
   };
   DmdSource dmd;
@@ -451,20 +452,41 @@ void PluginEngine::OnDisplaySrcChanged()
   m_impl->displaySources->With(
       [&](const std::vector<DisplaySrcId>& sources)
       {
-        // Only the controller's own displays. A colorizer or the alphanumeric
-        // renderer publishes displays too, and consuming those is the bus-native
-        // DMD chain -- gated on the sink-size negotiation, not started here.
+        // The controller's own displays first. An alphanumeric machine has
+        // none: libpinmame publishes only CORE_DMD and CORE_VIDEO layouts, and
+        // the DMD representation of its segment displays comes from the
+        // alphadmd plugin instead -- which is what Time Warp's Serum
+        // colorization needs to key on.
+        //
+        // Preferring the controller rather than merging the two keeps a real
+        // DMD game unaffected, and means a renderer that publishes alongside a
+        // machine that already has a DMD cannot displace it. Nothing on the wire
+        // says which controller a renderer derives from -- alphadmd encodes it
+        // in an overrideId sentinel that no lookup can resolve -- but PPUC runs
+        // exactly one controller, so there is nothing to confuse it with.
         std::vector<const DisplaySrcId*> mine;
         std::vector<DmdSourceSelect::Candidate> candidates;
+        std::vector<const DisplaySrcId*> others;
+        std::vector<DmdSourceSelect::Candidate> otherCandidates;
         for (const DisplaySrcId& src : sources)
         {
-          if (src.id.endpointId != m_pinmameEndpoint)
+          const DmdSourceSelect::Candidate candidate{src.id.resId, src.width, src.height, src.identifyFormat,
+                                                     src.GetIdentifyFrame != nullptr};
+          if (src.id.endpointId == m_pinmameEndpoint)
           {
-            continue;
+            mine.push_back(&src);
+            candidates.push_back(candidate);
           }
-          mine.push_back(&src);
-          candidates.push_back(
-              {src.id.resId, src.width, src.height, src.identifyFormat, src.GetIdentifyFrame != nullptr});
+          else
+          {
+            others.push_back(&src);
+            otherCandidates.push_back(candidate);
+          }
+        }
+        if (DmdSourceSelect::SelectMainDisplay(candidates) < 0)
+        {
+          mine.swap(others);
+          candidates.swap(otherCandidates);
         }
 
         const int chosen = DmdSourceSelect::SelectMainDisplay(candidates);
@@ -498,6 +520,7 @@ void PluginEngine::SampleDmd()
   }
 
   Impl::DmdSource& dmd = m_impl->dmd;
+  ++dmd.pollsSinceReport;
   const DisplayFrame frame = dmd.GetIdentifyFrame(dmd.context);
   if (frame.frame == nullptr)
   {
@@ -538,8 +561,14 @@ void PluginEngine::ReportDmdRate()
   {
     return;
   }
-  std::printf("DMD: %u frames/s, %ux%u depth %d\n", dmd.framesSinceReport, dmd.width, dmd.height, dmd.depth);
+  // Polls as well as frames. The sample runs from the main loop, so a low poll
+  // rate means the loop itself is stalling and the frame count below it is an
+  // undercount rather than a quiet ROM -- a distinction the callback-driven
+  // engine never had to make.
+  std::printf("DMD: %u frames/s (%u polls/s), %ux%u depth %d\n", dmd.framesSinceReport, dmd.pollsSinceReport, dmd.width,
+              dmd.height, dmd.depth);
   dmd.framesSinceReport = 0;
+  dmd.pollsSinceReport = 0;
   dmd.nextReportMs = now + 1000;
 }
 

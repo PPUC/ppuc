@@ -665,8 +665,17 @@ for frames — a 32 KB datagram is ~22 IP fragments and losing one drops the fra
 
 ## Alphanumeric games
 
-> **Now a live regression, not future work.** Confirmed with `flash_l1`: six
-> segment displays decode correctly and no `DisplaySrcId` is published at all.
+> **Fixed.** PPUC now builds and loads `AlphaDMDPlugin`, and `PluginEngine`
+> falls back to a non-controller display when the controller publishes none.
+> Verified end to end on `flash_l1`: alphadmd matches the layout
+> (`4x6+2x2`), publishes a 128x32 BITPLANE2 display, PPUC renders it, and Serum
+> loads `flash_l1.cROMc (Serum v2, concentrate v8)` with "28 frames and 2972
+> rotation scene frames" — the scene-trigger case. A machine with a real DMD is
+> unaffected: `t2_l8` and `wpt_140a` still pick the controller's own display.
+>
+> Time Warp's own `tmwrp_l2.cROMc` is **version 6** and libserum rejects it as
+> too old, with no `.cROM`/`.cRZ` beside it to regenerate from. That is a stale
+> asset, not a code path: the chain is proven by Flash.
 > libpinmame's plugin path publishes
 > only `CORE_DMD` and `CORE_VIDEO` layouts; it no longer synthesizes the
 > `PINMAME_DISPLAY_TYPE_DMD | DMDSEG` frame that `PinmameEngine` rendered. PPUC

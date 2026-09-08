@@ -4384,6 +4384,18 @@ int main(int argc, char** argv)
       fprintf(stderr, "PinMAME plugin not found in the plugin directory\n");
       return 1;
     }
+    // Renders segment displays as a 128x32 DMD. libpinmame used to synthesize
+    // that frame itself and no longer does, so without this an alphanumeric
+    // machine has no DMD at all -- and Time Warp's Serum colorization has
+    // nothing to key on. Inert on a machine that has a real DMD: it publishes
+    // only when a segment source exists, and PluginEngine prefers the
+    // controller's own display anyway. Absent is not fatal; the DMD is simply
+    // dark, exactly as it is today.
+    if (!opt_no_display && !pPluginBus->LoadPluginById("AlphaDMD"))
+    {
+      fprintf(stderr,
+              "AlphaDMD plugin not found; segment displays will not be rendered on a DMD.\n");
+    }
 
     PluginEngine::Options engineOptions;
     engineOptions.rom = opt_rom ? opt_rom : "";
