@@ -88,6 +88,12 @@ class GameEngineHost
 
   // PUSH. Consumed by MediaPluginHost (AltSound) and the sound-command debug
   // dump. boardNo == -1 means "polled, board unknown".
+  // Not driven by any engine any more. libpinmame broadcasts sound commands on
+  // PMPI_EVT_ON_AUDIO_CMD itself, so AltSound and everything else on the bus
+  // already receive them; PluginEngine only subscribes to print them under
+  // --debug-sound-commands. Calling this from an engine would deliver every
+  // command to AltSound twice. Kept because the host side of it is still the
+  // way to inject a command that no ROM produced.
   virtual void OnSoundCommand(int boardNo, int cmd) = 0;
 
   // ---- Tracked game state -----------------------------------------------

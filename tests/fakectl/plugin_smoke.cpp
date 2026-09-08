@@ -111,7 +111,7 @@ int main(int argc, char** argv)
   // host has to consume the topology to notice. When it does not, the symptom
   // is that AltSound and the ROM both play -- audible, but only on hardware.
   const std::string lanes = audio.DescribeLanes();
-  Check(lanes.find("FakeRom [overridden] silent") != std::string::npos,
+  Check(lanes.find("FakeRom [overridden] muted") != std::string::npos,
         "a source another plugin overrides is silenced in Replace mode");
   Check(lanes.find("FakePack heard") != std::string::npos, "the overriding source is heard");
 

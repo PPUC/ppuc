@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <unordered_set>
 
 #include "DmdSourceSelect.h"
 #include "PinmameNvramMapLoader.h"
@@ -84,6 +85,28 @@ struct PluginEngine::Impl
     std::vector<int> lastDigit;
   };
   std::vector<SegmentDisplay> segments;
+
+  // Sound commands already seen this run, so the debug print can flag first
+  // sightings. Lives here rather than on the engine because the bus trampoline
+  // below is all that touches it.
+  std::unordered_set<uint64_t> seenSoundCommands;
+
+  static void MSGPIAPI OnAudioCmd(unsigned int, void* userData, void* msgData)
+  {
+    auto* self = static_cast<Impl*>(userData);
+    const auto* msg = static_cast<const PinMAMEChildBoardEventMsg*>(msgData);
+    if (self == nullptr || msg == nullptr)
+    {
+      return;
+    }
+    // "new" marks the first sighting this run, which is the point when
+    // transcribing a pack: a ROM repeats the same handful of commands
+    // constantly and only the first of each is worth writing down.
+    const uint64_t key = (static_cast<uint64_t>(msg->boardNo) << 32) | msg->cmd;
+    const bool firstSeen = self->seenSoundCommands.insert(key).second;
+    std::printf("PinMAME sound command: board=%u id=%u hex=0x%X new=%d\n", msg->boardNo, msg->cmd, msg->cmd,
+                firstSeen ? 1 : 0);
+  }
 };
 
 PluginEngine::PluginEngine(PluginBus& bus, Options options)
@@ -710,6 +733,15 @@ bool PluginEngine::Start(std::string& error)
   m_getMachineStateId = api.GetMsgID(PMPI_NAMESPACE, PMPI_GET_MACHINE_STATE);
   m_readMemoryId = api.GetMsgID(PMPI_NAMESPACE, PMPI_READ_MEMORY);
   m_onAudioCmdId = api.GetMsgID(PMPI_NAMESPACE, PMPI_EVT_ON_AUDIO_CMD);
+  // Observed, never forwarded. libpinmame broadcasts this itself, so AltSound
+  // and anything else on the bus already have it; relaying it through
+  // GameEngineHost::OnSoundCommand would deliver every command twice. PPUC
+  // subscribes only to print them, which is how an AltSound pack gets built.
+  if (m_options.debugSoundCommands)
+  {
+    api.SubscribeMsg(m_bus.HostEndpointId(), m_onAudioCmdId, &Impl::OnAudioCmd, m_impl.get());
+    m_subscribedAudioCmd = true;
+  }
 
   m_impl->controllers = std::make_unique<CtrlItemConsumer<ControllerDef>>(
       &api, m_bus.HostEndpointId(), CTLPI_CONTROLLERS_GET_MSG, CTLPI_CONTROLLERS_ON_CHG_MSG,
@@ -839,6 +871,11 @@ void PluginEngine::Stop()
   }
 
   const MsgPluginAPI& api = m_bus.Api();
+  if (m_subscribedAudioCmd)
+  {
+    api.UnsubscribeMsg(m_onAudioCmdId, &Impl::OnAudioCmd, m_impl.get());
+    m_subscribedAudioCmd = false;
+  }
   for (unsigned int* id : {&m_getMachineStateId, &m_readMemoryId, &m_onAudioCmdId})
   {
     if (*id != 0)

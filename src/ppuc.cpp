@@ -2631,6 +2631,9 @@ struct PpucEngineHost final : GameEngineHost
 
   void OnSoundCommand(int boardNo, int cmd) override
   {
+    // Reached by no engine today, and deliberately so -- see GameEngine.h.
+    // libpinmame already broadcasts sound commands, so an engine wiring itself
+    // up to this would give AltSound each command twice.
     if (pMediaPluginHost != nullptr)
     {
       pMediaPluginHost->OnSoundCommand(boardNo, cmd);
