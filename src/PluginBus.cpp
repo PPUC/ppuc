@@ -1,9 +1,12 @@
 #include "PluginBus.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <stdexcept>
+#include <string>
 
 #include "SDL3/SDL.h"
 
@@ -33,7 +36,8 @@ class SDLModuleLoader final : public MsgPI::MsgModuleLoader
 
   void* GetFunction(void* dynamicModule, const std::string& functionName) override
   {
-    return reinterpret_cast<void*>(SDL_LoadFunction(static_cast<SDL_SharedObject*>(dynamicModule), functionName.c_str()));
+    return reinterpret_cast<void*>(
+        SDL_LoadFunction(static_cast<SDL_SharedObject*>(dynamicModule), functionName.c_str()));
   }
 };
 
@@ -87,7 +91,8 @@ bool PluginBus::Initialize(const std::string& pluginDir, std::string* errorMessa
     return true;
   }
 
-  m_hostPlugin = m_manager.RegisterPlugin("PPUC", "PPUC", "PPUC plugin host", "", "", "", HostPluginLoad, HostPluginUnload);
+  m_hostPlugin =
+      m_manager.RegisterPlugin("PPUC", "PPUC", "PPUC plugin host", "", "", "", HostPluginLoad, HostPluginUnload);
   m_manager.LoadPlugin(*m_hostPlugin);
   m_hostEndpointId = m_hostPlugin->m_endpointId;
   assert(m_hostEndpointId != 0 && "RegisterPlugin must assign an endpoint id");
@@ -169,6 +174,62 @@ bool PluginBus::LoadPluginById(const std::string& id)
 
 void PluginBus::Process() { m_manager.ProcessAsyncCallbacks(); }
 
+namespace
+{
+
+bool ParseSettingBool(const std::string& text, bool fallback)
+{
+  if (text == "1" || text == "true" || text == "on" || text == "yes")
+  {
+    return true;
+  }
+  if (text == "0" || text == "false" || text == "off" || text == "no")
+  {
+    return false;
+  }
+  return fallback;
+}
+
+bool ParseSettingInt(const std::string& text, int* pValue)
+{
+  try
+  {
+    size_t consumed = 0;
+    const int parsed = std::stoi(text, &consumed);
+    if (consumed != text.size())
+    {
+      return false;
+    }
+    *pValue = parsed;
+    return true;
+  }
+  catch (const std::exception&)
+  {
+    return false;
+  }
+}
+
+bool ParseSettingFloat(const std::string& text, float* pValue)
+{
+  try
+  {
+    size_t consumed = 0;
+    const float parsed = std::stof(text, &consumed);
+    if (consumed != text.size())
+    {
+      return false;
+    }
+    *pValue = parsed;
+    return true;
+  }
+  catch (const std::exception&)
+  {
+    return false;
+  }
+}
+
+}  // namespace
+
 void PluginBus::SetSettingOverride(const std::string& pluginId, const std::string& propId, const std::string& value)
 {
   m_settingOverrides[{pluginId, propId}] = value;
@@ -182,17 +243,23 @@ void PluginBus::ConfigureSetting(const std::string& pluginId, MsgPI::MsgPluginMa
     return;
   }
 
+  // An override applies to every type, not just strings. It used to reach only
+  // MSGPI_SETTING_TYPE_STRING, so an override of a numeric or boolean setting
+  // was accepted and then silently replaced by the plugin's default -- which
+  // looks exactly like the setting having no effect.
+  const std::string* override = nullptr;
+  if (settingDef->propId != nullptr)
+  {
+    const auto it = m_settingOverrides.find({pluginId, settingDef->propId});
+    if (it != m_settingOverrides.end())
+    {
+      override = &it->second;
+    }
+  }
+
   if (settingDef->type == MSGPI_SETTING_TYPE_STRING)
   {
-    const char* value = settingDef->stringDef.defVal;
-    if (settingDef->propId != nullptr)
-    {
-      const auto it = m_settingOverrides.find({pluginId, settingDef->propId});
-      if (it != m_settingOverrides.end())
-      {
-        value = it->second.c_str();
-      }
-    }
+    const char* value = override != nullptr ? override->c_str() : settingDef->stringDef.defVal;
     if (settingDef->stringDef.Set != nullptr)
     {
       settingDef->stringDef.Set(value ? value : "");
@@ -200,15 +267,29 @@ void PluginBus::ConfigureSetting(const std::string& pluginId, MsgPI::MsgPluginMa
   }
   else if (settingDef->type == MSGPI_SETTING_TYPE_BOOL && settingDef->boolDef.Set != nullptr)
   {
-    settingDef->boolDef.Set(settingDef->boolDef.defVal);
+    settingDef->boolDef.Set(override != nullptr ? ParseSettingBool(*override, settingDef->boolDef.defVal)
+                                                : settingDef->boolDef.defVal);
   }
   else if (settingDef->type == MSGPI_SETTING_TYPE_INT && settingDef->intDef.Set != nullptr)
   {
-    settingDef->intDef.Set(settingDef->intDef.defVal);
+    int value = settingDef->intDef.defVal;
+    if (override != nullptr && ParseSettingInt(*override, &value))
+    {
+      // Clamped rather than rejected: the plugin declares the range it can
+      // accept, and passing something outside it through would be a worse
+      // failure than quietly using the nearest legal value.
+      value = std::clamp(value, settingDef->intDef.minVal, settingDef->intDef.maxVal);
+    }
+    settingDef->intDef.Set(value);
   }
   else if (settingDef->type == MSGPI_SETTING_TYPE_FLOAT && settingDef->floatDef.Set != nullptr)
   {
-    settingDef->floatDef.Set(settingDef->floatDef.defVal);
+    float value = settingDef->floatDef.defVal;
+    if (override != nullptr && ParseSettingFloat(*override, &value))
+    {
+      value = std::clamp(value, settingDef->floatDef.minVal, settingDef->floatDef.maxVal);
+    }
+    settingDef->floatDef.Set(value);
   }
 }
 

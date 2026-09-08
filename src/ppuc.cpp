@@ -283,6 +283,7 @@ bool opt_debug_effects = false;
 bool opt_debug_sound_commands = false;
 bool opt_debug_audio = false;
 bool opt_debug_segments = false;
+std::vector<std::string> opt_plugin_settings;
 // AltSound replaces the ROM stream by default, which is what PinMAME used to do
 // internally. Mode 1 lets the ROM back through where the pack is silent; it is
 // opt-in because it infers "the pack has nothing for this command" from silence
@@ -2257,6 +2258,10 @@ static struct cag_option options[] = {
      .access_name = "b2s",
      .value_name = NULL,
      .description = "Enable B2S backglass rendering through the plugin host (optional)"},
+    {.identifier = '"',
+     .access_name = "plugin-setting",
+     .value_name = "VALUE",
+     .description = "Override a plugin setting as <PluginId>:<Setting>=<value>, repeatable (optional)"},
     {.identifier = '+',
      .access_name = "extra-plugin",
      .value_name = "VALUE",
@@ -3398,6 +3403,9 @@ int main(int argc, char** argv)
       case '}':
         opt_debug_audio = true;
         break;
+      case '"':
+        opt_plugin_settings.emplace_back(cag_option_get_value(&cag_context));
+        break;
       case '>':
         opt_debug_segments = true;
         break;
@@ -3746,6 +3754,24 @@ int main(int argc, char** argv)
     {
       fprintf(stderr, "Plugin bus init failed: %s\n", busError.c_str());
       return 1;
+    }
+    // Applied before any plugin loads: a plugin reads its settings at load time,
+    // so an override that arrives afterwards is ignored without complaint.
+    for (const std::string& setting : opt_plugin_settings)
+    {
+      const size_t colon = setting.find(':');
+      const size_t equals = setting.find('=', colon == std::string::npos ? 0 : colon);
+      if (colon == std::string::npos || equals == std::string::npos)
+      {
+        fprintf(stderr, "Ignoring --plugin-setting '%s': expected <PluginId>:<Setting>=<value>\n",
+                setting.c_str());
+        continue;
+      }
+      const std::string pluginId = setting.substr(0, colon);
+      const std::string propId = setting.substr(colon + 1, equals - colon - 1);
+      const std::string value = setting.substr(equals + 1);
+      printf("Plugin setting override: %s:%s=%s\n", pluginId.c_str(), propId.c_str(), value.c_str());
+      pPluginBus->SetSettingOverride(pluginId, propId, value);
     }
     for (const std::string& id : opt_extra_plugins)
     {
