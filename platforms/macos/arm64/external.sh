@@ -274,9 +274,19 @@ if [ "${PINMAME_NVRAM_MAPS_EXPECTED_SHA}" != "${PINMAME_NVRAM_MAPS_FOUND_SHA}" ]
    mkdir pinmame-nvram-maps
    cd pinmame-nvram-maps
 
-   curl -sL https://github.com/tomlogic/pinmame-nvram-maps/archive/${PINMAME_NVRAM_MAPS_SHA}.tar.gz -o pinmame-nvram-maps-${PINMAME_NVRAM_MAPS_SHA}.tar.gz
-   tar xzf pinmame-nvram-maps-${PINMAME_NVRAM_MAPS_SHA}.tar.gz
-   mv pinmame-nvram-maps-${PINMAME_NVRAM_MAPS_SHA} pinmame-nvram-maps
+   # tomlogic renamed this repository to pinball-memory-maps. The old URL still
+   # redirects, so the download succeeds, but the archive's top level directory
+   # carries the new name -- which is why moving a hard-coded one failed. Take
+   # whatever the archive unpacked instead of assuming, so the next rename is a
+   # non-event.
+   curl -sL https://github.com/tomlogic/pinball-memory-maps/archive/${PINMAME_NVRAM_MAPS_SHA}.tar.gz -o maps.tar.gz
+   tar xzf maps.tar.gz
+   extracted="$(find . -maxdepth 1 -mindepth 1 -type d | head -1)"
+   if [ -z "${extracted}" ]; then
+      echo "pinmame-nvram-maps archive did not unpack a directory; is ${PINMAME_NVRAM_MAPS_SHA} valid?" >&2
+      exit 1
+   fi
+   mv "${extracted}" pinmame-nvram-maps
 
    echo "$PINMAME_NVRAM_MAPS_EXPECTED_SHA" > cache.txt
 
