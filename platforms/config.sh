@@ -6,18 +6,17 @@ if [ "${VERBOSE:-0}" = "1" ] || [ "${PPUC_VERBOSE:-0}" = "1" ]; then
    set -x
 fi
 
-SDL_IMAGE_SHA=bec9134a26c7d0f31b36d6083c25296e04cabff5
+SDL_IMAGE_SHA=f661fa1ad24ab1b81e43662532f9a6a9fcf67ea6
 SDL_MIXER_SHA=72a81869b45e249e8e67102db4e98dd2441f05a1
 FLITE_SHA=6c9f20dc915b17f5619340069889db0aa007fcdc
 ESPEAK_NG_SHA=1.52.0
-LUA_VERSION=5.4.8
-PINMAME_SHA=65c3a8de4a3059e73894466a6376f056065073fa
-PINMAME_NVRAM_MAPS_SHA=d8693b9ca59a1b871d2a473be3adb0392471a8e3
+LUA_VERSION=5.5.1
+PINMAME_SHA=6a673a2375bf82d1998e92caf7a598f850a94a44
+PINMAME_NVRAM_MAPS_SHA=7e63610464453e1902d6de2f90529a0705fdc2a2
 LIBPPUC_SHA=b514db24d7867b5ad4bbb565dfb382b0f483d5fb
 DOCTEST_VERSION=2.4.11
-LIBSDLDMD_SHA=66bbd33c25a5352fc05d0c696deeacf59a15f430
-VPINBALL_SHA=2466399d6125981dd1f2d3a9c692179549d74d36
-VPINBALL_SDL_SHA=f87239e71e42da91ca317a12eefb82cfbf3393eb
+LIBSDLDMD_SHA=7cc037376ea1452b7d9b709343359b6f983cf740
+VPINBALL_SHA=3743753deb7fcca708f52ec1023aa8aa5018d76e
 VPINBALL_SDL_IMAGE_SHA="${VPINBALL_SDL_IMAGE_SHA:-${SDL_IMAGE_SHA}}"
 VPINBALL_SDL_TTF_SHA=a1ce3670aec736ecbf0936c43f2f0cc53aa61e5b
 VPINBALL_LIBALTSOUND_SHA=f4b790a19ae45a9f93ae0051df6933800c7a6446
@@ -184,6 +183,26 @@ ppuc_macos_deployment_target() {
    else
       echo "14.0"
    fi
+}
+
+# The SDL revision the PPUC application is built against.
+#
+# Read from libsdldmd rather than pinned here. It used to be a second constant
+# kept in step by hand, which drifted the moment libsdldmd bumped its SDL: the
+# plugin build would then have fetched a different SDL than the executable links,
+# putting two SDL3 libraries in one process -- the exact thing the reuse path
+# below exists to avoid. Worse, the reuse path's cache key named that stale
+# constant, so a change to libsdldmd's SDL did not invalidate the plugin
+# dependencies and SDL_ttf stayed linked against the previous one.
+ppuc_libsdldmd_sdl_sha() {
+   local config="${PPUC_SOURCE_ROOT}/external/libsdldmd/libsdldmd/platforms/config.sh"
+
+   if [ ! -f "${config}" ]; then
+      echo "Cannot determine the SDL revision: ${config} is missing." >&2
+      echo "libsdldmd must be staged before the VPX media plugins are built." >&2
+      return 1
+   fi
+   sed -n 's/^SDL_SHA=\(.*\)$/\1/p' "${config}" | head -1
 }
 
 ppuc_vpinball_root() {
@@ -417,6 +436,11 @@ ppuc_prepare_vpinball_media_dependencies() {
    mkdir -p "${deps_root}" "${runtime_dir}" "${include_dir}"
    ppuc_clean_runtime_lib_dir "${runtime_dir}" "${platform}"
 
+   local vpinball_sdl_sha
+   if ! vpinball_sdl_sha="$(ppuc_libsdldmd_sdl_sha)" || [ -z "${vpinball_sdl_sha}" ]; then
+      return 1
+   fi
+
    reuse_ppuc_sdl_stack=0
    if [ -d "${ppuc_include_dir}/SDL3" ] && [ -d "${ppuc_include_dir}/SDL3_image" ] && \
       [ -f "${ppuc_sdl3_cmake_dir}/SDL3Config.cmake" ]; then
@@ -432,10 +456,10 @@ ppuc_prepare_vpinball_media_dependencies() {
    fi
 
    if [ "${reuse_ppuc_sdl_stack}" = "1" ]; then
-      expected="reuse-ppuc-sdl-${VPINBALL_SDL_SHA}-${VPINBALL_SDL_IMAGE_SHA}-${VPINBALL_SDL_TTF_SHA}"
+      expected="reuse-ppuc-sdl-${vpinball_sdl_sha}-${VPINBALL_SDL_IMAGE_SHA}-${VPINBALL_SDL_TTF_SHA}"
       sdl3_cmake_dir="${ppuc_sdl3_cmake_dir}"
    else
-      expected="self-contained-sdl-${VPINBALL_SDL_SHA}-${VPINBALL_SDL_IMAGE_SHA}-${VPINBALL_SDL_TTF_SHA}"
+      expected="self-contained-sdl-${vpinball_sdl_sha}-${VPINBALL_SDL_IMAGE_SHA}-${VPINBALL_SDL_TTF_SHA}"
       sdl3_cmake_dir="${deps_root}/SDL3/SDL/build"
    fi
    found="$([ -f "${deps_root}/SDL3/cache.txt" ] && cat "${deps_root}/SDL3/cache.txt" || echo "")"
@@ -450,9 +474,9 @@ ppuc_prepare_vpinball_media_dependencies() {
       (
          cd "${deps_root}/SDL3"
          if [ "${reuse_ppuc_sdl_stack}" != "1" ]; then
-            curl -sL "https://github.com/libsdl-org/SDL/archive/${VPINBALL_SDL_SHA}.tar.gz" -o "SDL-${VPINBALL_SDL_SHA}.tar.gz"
-            tar xzf "SDL-${VPINBALL_SDL_SHA}.tar.gz"
-            mv "SDL-${VPINBALL_SDL_SHA}" SDL
+            curl -sL "https://github.com/libsdl-org/SDL/archive/${vpinball_sdl_sha}.tar.gz" -o "SDL-${vpinball_sdl_sha}.tar.gz"
+            tar xzf "SDL-${vpinball_sdl_sha}.tar.gz"
+            mv "SDL-${vpinball_sdl_sha}" SDL
             cmake -S SDL -B SDL/build \
                -DSDL_SHARED=ON \
                -DSDL_STATIC=OFF \
