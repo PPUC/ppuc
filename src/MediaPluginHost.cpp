@@ -710,6 +710,15 @@ bool MediaPluginHost::Impl::Initialize(const Options& options,
 
   if (options.enablePup)
   {
+    // The plugin reads PUPFolder at load and expects <PUPFolder>/pupvideos.
+    // Without it, it falls back to a per-table pupvideos folder that PPUC's
+    // layout does not have, logs "No global PUP folder configured", and plays
+    // nothing -- while libdmdutil, which gets the same path directly, happily
+    // loads the pack's DMD triggers. Half the pack working is worse than none.
+    if (!pupFolder_.empty())
+    {
+      bus_.SetSettingOverride("PUP", "PUPFolder", pupFolder_);
+    }
     bus_.LoadPluginById("PUP");
   }
   if (options.enableAltSound)
