@@ -65,6 +65,8 @@ class MediaPluginHost
   void QueueSegmentDisplay(int digit, int value);
   void QueuePlayerScore(int player, int score);
   void QueueDmdTrigger(uint16_t id);
+  // Asks a Serum colorizer to play a scene, on its own message.
+  void TriggerSerumScene(uint16_t id);
   void OnSoundCommand(int boardNo, int cmd);
   void Process();
 

@@ -473,6 +473,7 @@ public:
   void QueueSegmentDisplay(int digit, int value);
   void QueuePlayerScore(int player, int score);
   void QueueDmdTrigger(uint16_t id);
+  void TriggerSerumScene(uint16_t id);
   void OnSoundCommand(int boardNo, int cmd);
   void Process();
 
@@ -581,6 +582,7 @@ private:
   std::unique_ptr<PinballPlugin::Controller::CtrlItemConsumer<AudioSrcId>> audioSources_;
   std::string controllerGameId_;
   unsigned int b2sStateChangeId_ = 0;
+  unsigned int serumTriggerSceneId_ = 0;
 
   AudioSrcId pinmameAudioSrc_ = {};
   ScriptObject b2sServer_;
@@ -694,6 +696,11 @@ bool MediaPluginHost::Impl::Initialize(const Options& options,
   // inject the state no controller can know: rules-authored triggers, and the
   // board-local switches PinMAME never sees.
   b2sStateChangeId_ = api.GetMsgID("B2S", "OnStateChange:1");
+  // Serum's scene generator is reached through its own message. It used to be
+  // told via a 'D' event on the B2S message above, which happened to work only
+  // because PPUC is what publishes those -- nothing in vpinball does, so the
+  // colorizer heard nothing in any other host.
+  serumTriggerSceneId_ = api.GetMsgID("Serum", "TriggerScene:1");
 
   // Overriding is declared source to source, so the host has to see the whole
   // published topology to know which lanes AltSound (or anything else) is
@@ -809,6 +816,11 @@ void MediaPluginHost::Impl::Shutdown()
   }
   // The provider must go before the endpoint that owns it.
   controllerProvider_.reset();
+  if (serumTriggerSceneId_ != 0)
+  {
+    api.ReleaseMsgID(serumTriggerSceneId_);
+    serumTriggerSceneId_ = 0;
+  }
   if (onAudioCmdId_ != 0)
   {
     api.ReleaseMsgID(onAudioCmdId_);
@@ -930,6 +942,16 @@ void MediaPluginHost::Impl::QueueDmdTrigger(uint16_t id)
 {
   QueueEvent('D', id, 1);
   QueueEvent('D', id, 0);
+}
+
+void MediaPluginHost::Impl::TriggerSerumScene(uint16_t id)
+{
+  if (!initialized_ || serumTriggerSceneId_ == 0)
+  {
+    return;
+  }
+  unsigned int scene = id;
+  bus_.Api().BroadcastMsg(bus_.HostEndpointId(), serumTriggerSceneId_, &scene);
 }
 
 void MediaPluginHost::Impl::OnSoundCommand(int boardNo, int cmd)
@@ -1768,6 +1790,11 @@ void MediaPluginHost::QueueSegmentDisplay(int digit, int value)
 void MediaPluginHost::QueuePlayerScore(int player, int score)
 {
   impl_->QueuePlayerScore(player, score);
+}
+
+void MediaPluginHost::TriggerSerumScene(uint16_t id)
+{
+  impl_->TriggerSerumScene(id);
 }
 
 void MediaPluginHost::QueueDmdTrigger(uint16_t id)

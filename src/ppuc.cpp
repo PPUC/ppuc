@@ -4171,11 +4171,21 @@ int main(int argc, char** argv)
           if (pMediaPluginHost)
           {
             pMediaPluginHost->QueueEvent(source, id, value);
+            // A 'D' press is also how a rules script asks a Serum colorization
+            // to play a scene. The Serum plugin has its own message for that;
+            // it does not read the event above, and the window is checked at
+            // both ends.
+            if (source == 'D' && value == 1)
+            {
+              pMediaPluginHost->TriggerSerumScene(static_cast<uint16_t>(id));
+            }
           }
           if (pDmd)
           {
-            // No-ops unless Serum is loaded and this is a 'D' press; the
-            // 50000..62000 scene-id window is enforced inside libdmdutil.
+            // The same request to libdmdutil's built-in colorizer, for the
+            // ROM-less path where the Serum plugin has no controller display to
+            // work from. No-ops unless Serum is loaded and this is a 'D' press;
+            // the 50000..62000 window is enforced inside libdmdutil.
             pDmd->SetPUPTrigger(source, id, value);
           }
         });
