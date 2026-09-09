@@ -74,7 +74,7 @@ The platform scripts stage every dependency into `third-party/` and then run
 CMake:
 
 ```shell
-PPUC_DEPENDENCY_SOURCE=github platforms/macos/arm64/build.sh   # full, pinned
+platforms/macos/arm64/build.sh                                 # full, pinned
 cmake --build build                                            # incremental C++
 ```
 
@@ -98,11 +98,16 @@ Useful environment variables:
 - `BUILD_TYPE=Debug`, `PPUC_VERBOSE=1`
 - `PPUC_BUILD_VPINBALL_MEDIA_PLUGINS=0` to skip the expensive vpinball/FFmpeg
   plugin build
-- `LIBPPUC_SOURCE_DIR=../libppuc` (and equivalents) to build against a local
-  checkout instead of the pinned archive — see the workspace `AGENTS.md` for the
-  full `PPUC_DEPENDENCY_SOURCE` model. `PPUC_DEPENDENCY_SOURCE=local` is not
-  usable from the `PPUC_stack` workspace because several media dependencies
-  live elsewhere.
+- `LIBPPUC_SOURCE_DIR=../libppuc` and the other `*_SOURCE_DIR` variables build
+  against a local checkout instead of the pinned archive. One variable per
+  dependency, as in the rest of the VPX ecosystem; anything not named comes from
+  its pin. There is no switch that adopts every local checkout at once — that
+  existed and was removed, because deriving the paths from one workspace root
+  silently mixed local sources with pinned ones whenever the repositories were
+  not all siblings, which in this workspace they are not.
+
+  These are exported, so a nested build sees them too: setting
+  `LIBDMDUTIL_SOURCE_DIR` also redirects the copy `libsdldmd` stages.
 
 Dependency pins live in `platforms/config.sh` (`PINMAME_SHA`, `VPINBALL_SHA`,
 `LIBPPUC_SHA`, `LIBSDLDMD_SHA`, `LUA_VERSION`, …). Changes in `../libppuc` or

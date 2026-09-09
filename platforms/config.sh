@@ -25,9 +25,21 @@ VPINBALL_FFMPEG_SHA=239f2c733de417201d7ad3b3b8b0d9b63285b2b1
 
 PPUC_SOURCE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 SOURCE_DIR_CACHE_BUSTER="${SOURCE_DIR_CACHE_BUSTER:-$(date +%s)}"
-PPUC_DEPENDENCY_SOURCE="${PPUC_DEPENDENCY_SOURCE:-explicit}"
-PPUC_LOCAL_SOURCE_ROOT="${PPUC_LOCAL_SOURCE_ROOT:-$(cd "${PPUC_SOURCE_ROOT}/.." && pwd -P)}"
-PPUC_MANAGED_SOURCE_DIR_VARS=(
+# Local source overrides: one variable per dependency, named explicitly.
+#
+# This follows the VPX ecosystem's convention -- LIBDMDUTIL_SOURCE_DIR and
+# friends -- so a checkout is built only when it is named. PPUC previously had a
+# PPUC_DEPENDENCY_SOURCE=local mode that derived every path from a single
+# workspace root, which is convenient right up until the repositories are not
+# all siblings. In practice they are not: libdmdutil, libserum and libzedmd live
+# beside vpinball rather than beside ppuc. The mode then resolved some
+# dependencies to local checkouts and left the rest on their pins, so a build
+# could quietly use a different libserum than platforms/config.sh named, with
+# nothing in the output to say so.
+#
+# Exported rather than merely read, because nested builds resolve the same
+# variables -- libsdldmd stages its own libdmdutil, for one.
+PPUC_SOURCE_DIR_VARS=(
    LIBPPUC_SOURCE_DIR
    LIBSDLDMD_SOURCE_DIR
    VPINBALL_SOURCE_DIR
@@ -39,52 +51,12 @@ PPUC_MANAGED_SOURCE_DIR_VARS=(
    LIBFRAMEUTIL_SOURCE_DIR
 )
 
-set_dependency_source_dir_default() {
-   local var_name="$1"
-   local relative_dir="$2"
-
-   if [ -z "${!var_name:-}" ]; then
-      printf -v "${var_name}" '%s/%s' "${PPUC_LOCAL_SOURCE_ROOT}" "${relative_dir}"
+for ppuc_source_var in "${PPUC_SOURCE_DIR_VARS[@]}"; do
+   if [ -n "${!ppuc_source_var:-}" ]; then
+      export "${ppuc_source_var}"
    fi
-   export "${var_name}"
-}
-
-configure_dependency_source_mode() {
-   local source_var
-
-   case "${PPUC_DEPENDENCY_SOURCE}" in
-      explicit|manual|"")
-         for source_var in "${PPUC_MANAGED_SOURCE_DIR_VARS[@]}"; do
-            if [ -n "${!source_var:-}" ]; then
-               export "${source_var}"
-            fi
-         done
-         ;;
-      local|source|sources)
-         set_dependency_source_dir_default LIBPPUC_SOURCE_DIR libppuc
-         set_dependency_source_dir_default LIBSDLDMD_SOURCE_DIR libsdldmd
-         set_dependency_source_dir_default VPINBALL_SOURCE_DIR vpinball
-         set_dependency_source_dir_default IO_BOARDS_SOURCE_DIR io-boards
-         set_dependency_source_dir_default LIBDMDUTIL_SOURCE_DIR libdmdutil
-         set_dependency_source_dir_default LIBZEDMD_SOURCE_DIR libzedmd
-         set_dependency_source_dir_default LIBSERUM_SOURCE_DIR libserum
-         set_dependency_source_dir_default LIBVNI_SOURCE_DIR libvni
-         set_dependency_source_dir_default LIBFRAMEUTIL_SOURCE_DIR libframeutil
-         ;;
-      github|sha|archive|archives)
-         for source_var in "${PPUC_MANAGED_SOURCE_DIR_VARS[@]}"; do
-            unset "${source_var}"
-         done
-         ;;
-      *)
-         echo "Unsupported PPUC_DEPENDENCY_SOURCE: ${PPUC_DEPENDENCY_SOURCE}" >&2
-         echo "Use explicit, local, or github." >&2
-         exit 1
-         ;;
-   esac
-}
-
-configure_dependency_source_mode
+done
+unset ppuc_source_var
 
 dependency_source_dir() {
    local var_name="$1"

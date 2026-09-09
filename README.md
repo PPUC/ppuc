@@ -465,32 +465,30 @@ they use the pinned GitHub archive SHAs from `platforms/config.sh`, which keeps
 normal user builds reproducible.
 
 ```shell
-PPUC_DEPENDENCY_SOURCE=github platforms/macos/arm64/build.sh
-```
-
-For local development across the PPUC repositories, set `PPUC_DEPENDENCY_SOURCE`
-when running a build script from the `ppuc` repository root:
-
-```shell
-PPUC_DEPENDENCY_SOURCE=local platforms/macos/arm64/build.sh
-```
-
-`local` uses sibling source checkouts from the parent workspace for the managed
-PPUC dependency tree, including `../libppuc`, `../libsdldmd`, `../io-boards`,
-`../libdmdutil`, `../libzedmd`, `../libserum`, `../libvni`, `../libframeutil`,
-and `../vpinball`. Override the workspace root with `PPUC_LOCAL_SOURCE_ROOT` if
-those repositories live somewhere else:
-
-```shell
-PPUC_DEPENDENCY_SOURCE=local \
-PPUC_LOCAL_SOURCE_ROOT=/path/to/workspace \
 platforms/macos/arm64/build.sh
 ```
 
-Set `PPUC_DEPENDENCY_SOURCE=github` or `PPUC_DEPENDENCY_SOURCE=sha` to force the
-pinned archive path even when source directory variables are present. The default
-mode is `explicit`, where only manually provided `*_SOURCE_DIR` variables are
-used.
+To build a dependency from a local checkout instead of its pinned archive, name
+it. One variable per dependency, matching the convention used across the VPX
+ecosystem:
+
+```shell
+LIBDMDUTIL_SOURCE_DIR=/path/to/libdmdutil platforms/macos/arm64/build.sh
+```
+
+The available variables are `LIBPPUC_SOURCE_DIR`, `LIBSDLDMD_SOURCE_DIR`,
+`VPINBALL_SOURCE_DIR`, `IO_BOARDS_SOURCE_DIR`, `LIBDMDUTIL_SOURCE_DIR`,
+`LIBZEDMD_SOURCE_DIR`, `LIBSERUM_SOURCE_DIR`, `LIBVNI_SOURCE_DIR` and
+`LIBFRAMEUTIL_SOURCE_DIR`. Anything not named comes from the SHA pinned in
+`platforms/config.sh`, so a normal build stays reproducible and a local build
+overrides exactly what you asked for and nothing else.
+
+There is deliberately no "use all my local checkouts" switch. PPUC had one, and
+it derived every path from a single workspace root -- which stops working the
+moment the repositories are not all siblings. libdmdutil, libserum and libzedmd
+usually sit beside `vpinball` rather than beside `ppuc`, so that mode would
+resolve some dependencies locally, leave the rest on their pins, and give no
+sign that the build no longer matched `platforms/config.sh`.
 
 #### Windows (x64)
 
@@ -514,7 +512,7 @@ platforms/linux/x64/build.sh
 sudo apt install git autoconf libtool libudev-dev libpipewire-0.3-dev libwayland-dev libdecor-0-dev liburing-dev libasound2-dev libpulse-dev libaudio-dev libjack-dev libsndio-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libxtst-dev libxkbcommon-dev libdrm-dev libgbm-dev libgl1-mesa-dev libgles2-mesa-dev libegl1-mesa-dev libdbus-1-dev libibus-1.0-dev
 git clone https://github.com/PPUC/ppuc.git
 cd ppuc
-PPUC_DEPENDENCY_SOURCE=github platforms/linux/x64/build.sh
+platforms/linux/x64/build.sh
 ppuc/ppuc-pinmame --game /path/to/games/t2 -n -i
 ```
 
