@@ -278,6 +278,7 @@ if [ -n "${LIBSDLDMD_SHA}" ]; then
    cp -a ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/runtime-libs/win-mingw/x64/serum64.dll ../third-party/runtime-libs/win-mingw-x64/
    cp -a ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/include/serum.h ../third-party/include/
    cp -a ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/include/serum-decode.h ../third-party/include/
+   cp -a ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/include/vni.h ../third-party/include/
    cp -a ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/build-libs/win-mingw/x64/libserialport64.dll.a ../third-party/build-libs/win-mingw-x64/
    cp -a ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/runtime-libs/win-mingw/x64/libserialport64-0.dll ../third-party/runtime-libs/win-mingw-x64/
    cp -a ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/build-libs/win-mingw/x64/pupdmd64.dll.a ../third-party/build-libs/win-mingw-x64/

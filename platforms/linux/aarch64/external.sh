@@ -353,6 +353,7 @@ if [ -n "${LIBSDLDMD_SHA}" ]; then
    cp -a ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/runtime-libs/linux/aarch64/libserum.{so,so.*} ../third-party/runtime-libs/linux-aarch64/
    cp -a ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/include/serum.h ../third-party/include/
    cp -a ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/include/serum-decode.h ../third-party/include/
+   cp -a ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/include/vni.h ../third-party/include/
    cp -a ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/runtime-libs/linux/aarch64/libserialport.{so,so.*} ../third-party/runtime-libs/linux-aarch64/
    cp -a ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/runtime-libs/linux/aarch64/libpupdmd.{so,so.*} ../third-party/runtime-libs/linux-aarch64/
    cp -a ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/include/pupdmd.h ../third-party/include/

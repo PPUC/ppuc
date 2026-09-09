@@ -689,6 +689,13 @@ two-step chain — alphadmd renders segments, serum colorizes, upscaledmd could
 scale — to its far end. Verified on `afm_113b` (controller → serum) and
 `flash_l1` (segments → alphadmd → serum).
 
+Both colorizers move, not just Serum. Serum and VNI are different formats rather
+than alternatives -- a game has one or the other, and libdmdutil applied
+whichever it found -- so switching off its colorizer means loading `VNIPlugin`
+alongside `SerumPlugin` or every `.vni`/`.pal` game silently loses colour.
+Verified on `t2_l8`, which is VNI: the plugin loads the PAL and VNI and publishes
+an SRGB888 output, where Serum publishes SRGB565.
+
 A ROM-less Lua game keeps libdmdutil's colorizer: its frames come from
 `DmdCanvas` through `OnDmdFrame` and exist only inside PPUC, so there is no
 controller display for the plugin to consume.

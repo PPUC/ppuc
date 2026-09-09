@@ -4474,6 +4474,11 @@ int main(int argc, char** argv)
       // worked before this moved to the plugin still resolves. SerumPath is
       // read at plugin load, hence the override before LoadPluginById.
       pPluginBus->SetSettingOverride("Serum", "SerumPath", serumAltColorPath);
+      // Both plugins probe <table>/pinmame/altcolor first and find PPUC's
+      // layout that way, but only because the game folder happens to be what
+      // GetTableInfo reports. Setting the path outright means --pinmame-path
+      // still works when the two differ.
+      pPluginBus->SetSettingOverride("VNI", "VniPath", serumAltColorPath);
       if (opt_serum_resolution == 32 || opt_serum_resolution == 64)
       {
         pPluginBus->SetSettingOverride("Serum", "Resolution", std::to_string(opt_serum_resolution));
@@ -4489,7 +4494,15 @@ int main(int argc, char** argv)
       }
       if (!pPluginBus->LoadPluginById("Serum"))
       {
-        fprintf(stderr, "Serum plugin not found; the DMD will not be colorized.\n");
+        fprintf(stderr, "Serum plugin not found; Serum colorizations will not be applied.\n");
+      }
+      // Serum and VNI are different colorization formats, not alternatives to
+      // choose between: a game has one or the other, and libdmdutil applied
+      // whichever it found. Loading only Serum silently dropped colorization
+      // for every .vni/.pal game -- Terminator 2 among them.
+      if (!pPluginBus->LoadPluginById("VNI"))
+      {
+        fprintf(stderr, "VNI plugin not found; VNI colorizations will not be applied.\n");
       }
     }
 

@@ -16,7 +16,7 @@ PINMAME_NVRAM_MAPS_SHA=d8693b9ca59a1b871d2a473be3adb0392471a8e3
 LIBPPUC_SHA=b514db24d7867b5ad4bbb565dfb382b0f483d5fb
 DOCTEST_VERSION=2.4.11
 LIBSDLDMD_SHA=6091a7157af07efe6fc8278a36bda63efe80f15a
-VPINBALL_SHA=c773dc379167e139cd0cc470c9839a0388181e04
+VPINBALL_SHA=3b4ff7c1033e456d72308e511edc3953168cf880
 VPINBALL_SDL_SHA=f87239e71e42da91ca317a12eefb82cfbf3393eb
 VPINBALL_SDL_IMAGE_SHA="${VPINBALL_SDL_IMAGE_SHA:-${SDL_IMAGE_SHA}}"
 VPINBALL_SDL_TTF_SHA=a1ce3670aec736ecbf0936c43f2f0cc53aa61e5b
@@ -692,6 +692,18 @@ ppuc_prepare_vpinball_media_dependencies() {
    fi
    cp -a "${PPUC_SOURCE_ROOT}/third-party/include/serum-decode.h" "${include_dir}/"
    cp -a "${PPUC_SOURCE_ROOT}/third-party/include/serum.h" "${include_dir}/"
+
+   # VNIPlugin links libvni, for the .vni/.pal colorizations Serum does not
+   # cover. Same reasoning as libserum: PPUC already stages it for libdmdutil,
+   # and one copy cannot drift from another.
+   if [ "${platform}" = "macos" ]; then
+      ppuc_copy_dylib_link_chain "${PPUC_SOURCE_ROOT}/third-party/runtime-libs/${platform_tag}" \
+         "libvni.dylib" "${runtime_dir}"
+   else
+      ppuc_vpinball_media_glob_copy \
+         "${PPUC_SOURCE_ROOT}/third-party/runtime-libs/${platform_tag}/libvni.so*" "${runtime_dir}"
+   fi
+   cp -a "${PPUC_SOURCE_ROOT}/third-party/include/vni.h" "${include_dir}/"
 }
 
 ppuc_prepare_vpinball_media_plugins() {
@@ -778,7 +790,7 @@ ppuc_build_vpinball_media_plugins() {
    # a side effect. Building the plugins without the app means nothing does, and
    # the plugin.cfg copy is the first thing to notice.
    mkdir -p "${plugin_package_dir}/pup" "${plugin_package_dir}/altsound" "${plugin_package_dir}/b2s" \
-      "${plugin_package_dir}/pinmame" "${plugin_package_dir}/alphadmd" "${plugin_package_dir}/serum"
+      "${plugin_package_dir}/pinmame" "${plugin_package_dir}/alphadmd" "${plugin_package_dir}/serum" "${plugin_package_dir}/vni"
 
    # B2SLegacyPlugin is deliberately not built: MediaPluginHost only ever
    # loads "PUP", "AltSound" and "B2S". --b2s uses the modern B2S plugin.
@@ -788,7 +800,7 @@ ppuc_build_vpinball_media_plugins() {
    # synthesize that frame itself; its plugin path does not, so without this an
    # alphanumeric game has no DMD at all -- no ZeDMD, no virtual DMD, and no
    # Serum, which for Time Warp is the whole point of its colorization.
-   for plugin_target in PinMAMEPlugin PUPPlugin AltSoundPlugin B2SPlugin AlphaDMDPlugin SerumPlugin; do
+   for plugin_target in PinMAMEPlugin PUPPlugin AltSoundPlugin B2SPlugin AlphaDMDPlugin SerumPlugin VNIPlugin; do
       cmake --build "${vpinball_build_dir}" --target "${plugin_target}"
    done
 
@@ -813,7 +825,7 @@ ppuc_build_vpinball_media_plugins() {
          install_name_tool -add_rpath "@loader_path/../.." "${plugin_package_dir}/pup/plugin-pup.dylib" 2>/dev/null || true
       fi
       # Reaches the shared dylibs in ppuc/, two levels up from plugins/<name>/.
-      for plugin_using_shared_libs in b2s pinmame serum; do
+      for plugin_using_shared_libs in b2s pinmame serum vni; do
          if [ -f "${plugin_package_dir}/${plugin_using_shared_libs}/plugin-${plugin_using_shared_libs}.dylib" ]; then
             install_name_tool -add_rpath "@loader_path/../.." \
                "${plugin_package_dir}/${plugin_using_shared_libs}/plugin-${plugin_using_shared_libs}.dylib" 2>/dev/null || true

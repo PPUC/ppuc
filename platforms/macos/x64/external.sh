@@ -312,6 +312,7 @@ if [ -n "${LIBSDLDMD_SHA}" ]; then
    ppuc_copy_dylib_link_chain "${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/runtime-libs/macos/x64" "libserum.dylib" "${PPUC_RUNTIME_DIR}"
    cp -a ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/include/serum.h ../third-party/include/
    cp -a ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/include/serum-decode.h ../third-party/include/
+   cp -a ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/include/vni.h ../third-party/include/
    ppuc_copy_dylib_link_chain "${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/runtime-libs/macos/x64" "libserialport.dylib" "${PPUC_RUNTIME_DIR}"
    ppuc_copy_dylib_link_chain "${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/runtime-libs/macos/x64" "libpupdmd.dylib" "${PPUC_RUNTIME_DIR}"
    cp -a ${LIBSDLDMD_DMDUTIL_THIRD_PARTY}/include/pupdmd.h ../third-party/include/
