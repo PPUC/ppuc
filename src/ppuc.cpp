@@ -3765,8 +3765,17 @@ int main(int argc, char** argv)
       pAudioOutput->SetMusicEnabled(false);
     }
 
-    pAudioOutput->SetOverrideMode(opt_altsound_mode == 1 ? AudioLanes::OverrideMode::Fallback
-                                                         : AudioLanes::OverrideMode::Replace);
+    // Worth saying out loud: the difference between the two only shows when an
+    // overriding pack goes quiet, so a misplumbed flag looks exactly like a pack
+    // that never has a gap.
+    const bool altSoundFallback = opt_altsound_mode == 1;
+    pAudioOutput->SetOverrideMode(altSoundFallback ? AudioLanes::OverrideMode::Fallback
+                                                   : AudioLanes::OverrideMode::Replace);
+    if (opt_altsound)
+    {
+      printf("AltSound mode: %s\n",
+             altSoundFallback ? "1 (ROM sound where the pack is silent)" : "0 (pack replaces ROM sound)");
+    }
   }
 
   // The bus is no longer a media-only concern: the PinMAME engine runs as a

@@ -336,6 +336,33 @@ ROM sound returns. A fresh overrider is given one hold window before the lane
 under it is let through, so a game start does not leak a burst of ROM audio
 while a pack is still loading. Default stays mode 0.
 
+#### Verified on a real pack
+
+The whole design rests on ROM audio reaching the bus as a stream something can
+override, so it is worth recording what a real AltSound pack does. Terminator 2,
+616 samples, 120 seconds of attract, counting one-second windows:
+
+| mode | ROM muted | ROM heard |
+|---|---|---|
+| 0 (`Replace`, default) | 120 | 0 |
+| 1 (`Fallback`) | 113 | **7** |
+
+Mode 0 is the old all-or-nothing behaviour, and it is exact: the ROM never gets
+through. Mode 1 let the ROM through in seven of those windows -- the moments the
+pack had nothing to play. That is the thing `PinmameSetSoundMode` made
+impossible.
+
+Note what mode 0 shows in `--debug-audio` while it mutes:
+
+```
+AltSound  heard,              signal, 1 stream(s), 228 ms buffered
+PinMAME   [overridden] muted, signal, 1 stream(s), 238 ms buffered
+```
+
+The ROM lane still carries signal and its queue stays flat, which is the point:
+the stream is arriving and being drained rather than stalled, so mode 1 has
+something to unmute.
+
 #### Latency
 
 Every plugin audio buffer is marshalled through `ProcessAsyncCallbacks` once per
