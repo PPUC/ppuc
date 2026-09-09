@@ -400,6 +400,32 @@ device's clock are independent, and no fixed-ratio resampler can track that.
 Correcting it needs adaptive rate matching, and at 0.4 ms/s it is far from
 urgent.
 
+#### A stall must not become permanent latency
+
+Loading a PUP pack blocks the main loop long enough for PinMAME's audio to pile
+up, and because production and consumption then match exactly, that backlog
+never shrinks again. Measured on Terminator 2, steady-state depth of the ROM
+lane:
+
+| configuration | before | after |
+|---|---|---|
+| no plugins | ~35 ms | ~35 ms |
+| + AltSound | ~37 ms | ~37 ms |
+| + AltSound + PUP | **~480 ms** | **~220 ms** |
+
+The queue is now trimmed back to `kTargetBufferedMs` once it passes
+`kHighWaterBufferedMs`. The gap between the two matters: trimming at the target
+alone clipped every peak of the ~20 ms sawtooth a lane naturally oscillates
+through -- two dozen discontinuities in forty seconds, each an audible click, to
+save milliseconds that were about to drain anyway. With the high-water mark it
+fires once, after the stall that caused it.
+
+**Not solved, only bounded.** 220 ms is still high for a machine where a sound
+follows a coil, and the queue ratchets up on each stall rather than seeking a
+depth. The principled fix is adaptive rate matching -- nudging the resampling
+ratio to hold a target depth -- which would also absorb the residual clock drift
+above. Both want the same machinery.
+
 #### Latency
 
 Every plugin audio buffer is marshalled through `ProcessAsyncCallbacks` once per

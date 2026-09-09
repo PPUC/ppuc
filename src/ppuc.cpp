@@ -3769,6 +3769,7 @@ int main(int argc, char** argv)
     // overriding pack goes quiet, so a misplumbed flag looks exactly like a pack
     // that never has a gap.
     const bool altSoundFallback = opt_altsound_mode == 1;
+    pAudioOutput->SetDebugAudio(opt_debug_audio);
     pAudioOutput->SetOverrideMode(altSoundFallback ? AudioLanes::OverrideMode::Fallback
                                                    : AudioLanes::OverrideMode::Replace);
     if (opt_altsound)

@@ -448,6 +448,7 @@ void AudioOutput::QueueSamplesLocked(AudioMixer::Queue& queue, Resampler& resamp
   {
     DestroyResampler(resampler);
     AudioMixer::Enqueue(queue, std::vector<int16_t>(samples, samples + sampleCount));
+    TrimQueueLocked(queue);
     return;
   }
 
@@ -491,6 +492,25 @@ void AudioOutput::QueueSamplesLocked(AudioMixer::Queue& queue, Resampler& resamp
   }
   converted.resize(static_cast<size_t>(read) / sizeof(int16_t));
   AudioMixer::Enqueue(queue, std::move(converted));
+  TrimQueueLocked(queue);
+}
+
+void AudioOutput::TrimQueueLocked(AudioMixer::Queue& queue)
+{
+  const size_t samplesPerMs = static_cast<size_t>(deviceSpec_.freq) * deviceSpec_.channels / 1000u;
+  const size_t target = samplesPerMs * AudioMixer::kTargetBufferedMs;
+  const size_t highWater = samplesPerMs * AudioMixer::kHighWaterBufferedMs;
+  if (target == 0)
+  {
+    return;
+  }
+  const size_t dropped = AudioMixer::TrimToTarget(queue, target, highWater);
+  if (dropped != 0 && debugAudio_)
+  {
+    const double samplesPerMs = static_cast<double>(deviceSpec_.freq) * deviceSpec_.channels / 1000.0;
+    std::printf("Audio: dropped %d ms to catch up\n",
+                samplesPerMs > 0.0 ? static_cast<int>(dropped / samplesPerMs) : 0);
+  }
 }
 
 void AudioOutput::MixMusicLocked(int16_t* mixBuffer, size_t sampleCount, bool duckToBackground)

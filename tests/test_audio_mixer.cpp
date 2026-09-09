@@ -286,3 +286,55 @@ TEST_CASE("Discard on an empty queue is silent and harmless")
   CHECK_FALSE(AudioMixer::Discard(queue, 64));
   CHECK(queue.empty());
 }
+
+TEST_CASE("TrimToTarget leaves a queue that is already short alone")
+{
+  AudioMixer::Queue queue;
+  AudioMixer::Enqueue(queue, Block(8, 100));
+  CHECK(AudioMixer::TrimToTarget(queue, 32, 64) == 0);
+  CHECK(AudioMixer::BufferedSamples(queue) == 8);
+}
+
+TEST_CASE("TrimToTarget drops the oldest audio, landing exactly on the target")
+{
+  // Overshooting into an underrun would be worse than the latency being
+  // trimmed, so a partial block is split rather than discarded whole.
+  AudioMixer::Queue queue;
+  AudioMixer::Enqueue(queue, Block(10, 1));
+  AudioMixer::Enqueue(queue, Block(10, 2));
+  AudioMixer::Enqueue(queue, Block(10, 3));
+
+  CHECK(AudioMixer::TrimToTarget(queue, 12, 24) == 18);
+  CHECK(AudioMixer::BufferedSamples(queue) == 12);
+
+  // What survives is the newest audio: the tail of block 2, then block 3.
+  std::vector<int16_t> mixBuffer(12, 0);
+  AudioMixer::Mix(queue, mixBuffer.data(), 12);
+  CHECK(mixBuffer[0] == 2);
+  CHECK(mixBuffer[1] == 2);
+  CHECK(mixBuffer[2] == 3);
+  CHECK(mixBuffer[11] == 3);
+}
+
+TEST_CASE("TrimToTarget copes with a target of zero and an empty queue")
+{
+  AudioMixer::Queue empty;
+  CHECK(AudioMixer::TrimToTarget(empty, 0, 0) == 0);
+
+  AudioMixer::Queue queue;
+  AudioMixer::Enqueue(queue, Block(4, 7));
+  CHECK(AudioMixer::TrimToTarget(queue, 0, 0) == 4);
+  CHECK(queue.empty());
+}
+
+TEST_CASE("TrimToTarget ignores a queue between the target and the high-water mark")
+{
+  // The case that matters in practice: a lane oscillating a little above its
+  // target is about to drain anyway, and cutting it would be an audible click
+  // for nothing.
+  AudioMixer::Queue queue;
+  AudioMixer::Enqueue(queue, Block(40, 5));
+
+  CHECK(AudioMixer::TrimToTarget(queue, 20, 100) == 0);
+  CHECK(AudioMixer::BufferedSamples(queue) == 40);
+}

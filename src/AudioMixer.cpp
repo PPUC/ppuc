@@ -87,6 +87,36 @@ bool Mix(Queue& queue, int16_t* mixBuffer, size_t sampleCount)
   return hadAudibleSamples;
 }
 
+size_t TrimToTarget(Queue& queue, size_t targetSamples, size_t highWaterSamples)
+{
+  size_t buffered = BufferedSamples(queue);
+  if (buffered <= highWaterSamples || buffered <= targetSamples)
+  {
+    return 0;
+  }
+
+  size_t dropped = 0;
+  while (buffered > targetSamples && !queue.empty())
+  {
+    PendingBuffer& front = queue.front();
+    const size_t available = front.samples.size() - front.offsetSamples;
+    const size_t excess = buffered - targetSamples;
+    if (available <= excess)
+    {
+      queue.pop_front();
+      buffered -= available;
+      dropped += available;
+      continue;
+    }
+    // Drop part of a block rather than all of it, so trimming lands on the
+    // target instead of overshooting into an underrun.
+    front.offsetSamples += excess;
+    buffered -= excess;
+    dropped += excess;
+  }
+  return dropped;
+}
+
 bool Discard(Queue& queue, size_t sampleCount)
 {
   bool hadAudibleSamples = false;

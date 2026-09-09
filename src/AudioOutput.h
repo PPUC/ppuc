@@ -45,6 +45,8 @@ class AudioOutput
   // depth that grows without bound means the bus callbacks are draining slower
   // than the producers fill them.
   std::string DescribeLanes() const;
+  // Reports trimming, which is otherwise invisible.
+  void SetDebugAudio(bool debug) { debugAudio_ = debug; }
   void QueuePluginSamples(const int16_t* samples, size_t sampleCount, int frequency, int channels);
   void QueueSpeechSamples(const int16_t* samples, size_t sampleCount, int frequency, int channels);
 
@@ -88,6 +90,9 @@ class AudioOutput
   void QueueSamplesLocked(AudioMixer::Queue& queue, Resampler& resampler, const int16_t* samples, size_t sampleCount,
                           int frequency, int channels);
   static void DestroyResampler(Resampler& resampler);
+  // Keeps a lane from sitting further ahead of the device than
+  // kTargetBufferedMs once a stall has pushed it there.
+  void TrimQueueLocked(AudioMixer::Queue& queue);
   void MixMusicLocked(int16_t* mixBuffer, size_t sampleCount, bool duckToBackground);
 #if defined(PPUC_HAS_SDL3_MIXER)
   bool EnsureMusicMixerLocked(std::string* errorMessage);
@@ -100,6 +105,7 @@ class AudioOutput
 #endif
 
   mutable std::mutex mutex_;
+  bool debugAudio_ = false;
   SDL_AudioStream* stream_ = nullptr;
   SDL_AudioSpec deviceSpec_{
       .format = SDL_AUDIO_S16LE,
