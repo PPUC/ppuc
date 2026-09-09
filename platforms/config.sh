@@ -18,9 +18,15 @@ DOCTEST_VERSION=2.4.11
 LIBSDLDMD_SHA=7cc037376ea1452b7d9b709343359b6f983cf740
 VPINBALL_SHA=3743753deb7fcca708f52ec1023aa8aa5018d76e
 VPINBALL_SDL_IMAGE_SHA="${VPINBALL_SDL_IMAGE_SHA:-${SDL_IMAGE_SHA}}"
-VPINBALL_SDL_TTF_SHA=a1ce3670aec736ecbf0936c43f2f0cc53aa61e5b
-VPINBALL_LIBALTSOUND_SHA=f4b790a19ae45a9f93ae0051df6933800c7a6446
-VPINBALL_FFMPEG_SHA=239f2c733de417201d7ad3b3b8b0d9b63285b2b1
+# SDL_ttf, libaltsound and ffmpeg are not pinned here. Nothing in PPUC links
+# them -- they exist only for the VPX plugins -- so the version that matters is
+# whatever vpinball expects, and ppuc_vpinball_pin reads it from the staged
+# vpinball tree. Copies kept here by hand drifted: FFmpeg sat three revisions
+# behind vpinball's with nothing to notice it.
+#
+# SDL3 and SDL3_image are the opposite case and stay above: the plugins are
+# loaded into PPUC's process, so those must be the same build the executable
+# links, not vpinball's choice.
 
 PPUC_SOURCE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 SOURCE_DIR_CACHE_BUSTER="${SOURCE_DIR_CACHE_BUSTER:-$(date +%s)}"
@@ -203,6 +209,33 @@ ppuc_libsdldmd_sdl_sha() {
       return 1
    fi
    sed -n 's/^SDL_SHA=\(.*\)$/\1/p' "${config}" | head -1
+}
+
+# A dependency revision as pinned by vpinball itself, for the libraries only its
+# plugins use. An override of the same name still wins, for bisecting.
+ppuc_vpinball_pin() {
+   local name="$1"
+   local override="VPINBALL_${name}"
+   local config
+   local value
+
+   if [ -n "${!override:-}" ]; then
+      echo "${!override}"
+      return 0
+   fi
+
+   config="$(ppuc_vpinball_root)/platforms/config.sh"
+   if [ ! -f "${config}" ]; then
+      echo "Cannot read ${name}: ${config} is missing." >&2
+      echo "vpinball must be staged before its media plugins are built." >&2
+      return 1
+   fi
+   value="$(sed -n "s/^${name}=\\(.*\\)$/\\1/p" "${config}" | head -1)"
+   if [ -z "${value}" ]; then
+      echo "Cannot read ${name} from ${config}." >&2
+      return 1
+   fi
+   echo "${value}"
 }
 
 ppuc_vpinball_root() {
@@ -437,7 +470,11 @@ ppuc_prepare_vpinball_media_dependencies() {
    ppuc_clean_runtime_lib_dir "${runtime_dir}" "${platform}"
 
    local vpinball_sdl_sha
+   local vpinball_sdl_ttf_sha
    if ! vpinball_sdl_sha="$(ppuc_libsdldmd_sdl_sha)" || [ -z "${vpinball_sdl_sha}" ]; then
+      return 1
+   fi
+   if ! vpinball_sdl_ttf_sha="$(ppuc_vpinball_pin SDL_TTF_SHA)"; then
       return 1
    fi
 
@@ -456,10 +493,10 @@ ppuc_prepare_vpinball_media_dependencies() {
    fi
 
    if [ "${reuse_ppuc_sdl_stack}" = "1" ]; then
-      expected="reuse-ppuc-sdl-${vpinball_sdl_sha}-${VPINBALL_SDL_IMAGE_SHA}-${VPINBALL_SDL_TTF_SHA}"
+      expected="reuse-ppuc-sdl-${vpinball_sdl_sha}-${VPINBALL_SDL_IMAGE_SHA}-${vpinball_sdl_ttf_sha}"
       sdl3_cmake_dir="${ppuc_sdl3_cmake_dir}"
    else
-      expected="self-contained-sdl-${vpinball_sdl_sha}-${VPINBALL_SDL_IMAGE_SHA}-${VPINBALL_SDL_TTF_SHA}"
+      expected="self-contained-sdl-${vpinball_sdl_sha}-${VPINBALL_SDL_IMAGE_SHA}-${vpinball_sdl_ttf_sha}"
       sdl3_cmake_dir="${deps_root}/SDL3/SDL/build"
    fi
    found="$([ -f "${deps_root}/SDL3/cache.txt" ] && cat "${deps_root}/SDL3/cache.txt" || echo "")"
@@ -504,9 +541,9 @@ ppuc_prepare_vpinball_media_dependencies() {
             cmake --build SDL_image/build -- -j"${num_procs}"
          fi
 
-         curl -sL "https://github.com/libsdl-org/SDL_ttf/archive/${VPINBALL_SDL_TTF_SHA}.tar.gz" -o "SDL_ttf-${VPINBALL_SDL_TTF_SHA}.tar.gz"
-         tar xzf "SDL_ttf-${VPINBALL_SDL_TTF_SHA}.tar.gz"
-         mv "SDL_ttf-${VPINBALL_SDL_TTF_SHA}" SDL_ttf
+         curl -sL "https://github.com/libsdl-org/SDL_ttf/archive/${vpinball_sdl_ttf_sha}.tar.gz" -o "SDL_ttf-${vpinball_sdl_ttf_sha}.tar.gz"
+         tar xzf "SDL_ttf-${vpinball_sdl_ttf_sha}.tar.gz"
+         mv "SDL_ttf-${vpinball_sdl_ttf_sha}" SDL_ttf
          ( cd SDL_ttf && ./external/download.sh )
          cmake -S SDL_ttf -B SDL_ttf/build \
             -DBUILD_SHARED_LIBS=ON \
@@ -549,7 +586,11 @@ ppuc_prepare_vpinball_media_dependencies() {
    fi
    ppuc_vpinball_media_required_dir_copy "${deps_root}/SDL3/SDL_ttf/include/SDL3_ttf" "${include_dir}/"
 
-   expected="${VPINBALL_LIBALTSOUND_SHA}"
+   local vpinball_libaltsound_sha
+   if ! vpinball_libaltsound_sha="$(ppuc_vpinball_pin LIBALTSOUND_SHA)"; then
+      return 1
+   fi
+   expected="${vpinball_libaltsound_sha}"
    if [ "${platform}" = "macos" ]; then
       expected="${expected}-macos${MACOSX_DEPLOYMENT_TARGET}"
    fi
@@ -560,9 +601,9 @@ ppuc_prepare_vpinball_media_dependencies() {
       mkdir -p "${deps_root}/libaltsound"
       (
          cd "${deps_root}/libaltsound"
-         curl -sL "https://github.com/vpinball/libaltsound/archive/${VPINBALL_LIBALTSOUND_SHA}.tar.gz" -o "libaltsound-${VPINBALL_LIBALTSOUND_SHA}.tar.gz"
-         tar xzf "libaltsound-${VPINBALL_LIBALTSOUND_SHA}.tar.gz"
-         mv "libaltsound-${VPINBALL_LIBALTSOUND_SHA}" libaltsound
+         curl -sL "https://github.com/vpinball/libaltsound/archive/${vpinball_libaltsound_sha}.tar.gz" -o "libaltsound-${vpinball_libaltsound_sha}.tar.gz"
+         tar xzf "libaltsound-${vpinball_libaltsound_sha}.tar.gz"
+         mv "libaltsound-${vpinball_libaltsound_sha}" libaltsound
          cmake -S libaltsound -B libaltsound/build \
             -DPLATFORM="${platform}" \
             -DARCH="${arch}" \
@@ -581,7 +622,11 @@ ppuc_prepare_vpinball_media_dependencies() {
    fi
    cp -a "${deps_root}/libaltsound/libaltsound/src/altsound.h" "${include_dir}/"
 
-   expected="${VPINBALL_FFMPEG_SHA}"
+   local vpinball_ffmpeg_sha
+   if ! vpinball_ffmpeg_sha="$(ppuc_vpinball_pin FFMPEG_SHA)"; then
+      return 1
+   fi
+   expected="${vpinball_ffmpeg_sha}"
    if [ "${platform}" = "macos" ]; then
       expected="${expected}-macos${MACOSX_DEPLOYMENT_TARGET}"
    fi
@@ -592,9 +637,9 @@ ppuc_prepare_vpinball_media_dependencies() {
       mkdir -p "${deps_root}/ffmpeg"
       (
          cd "${deps_root}/ffmpeg"
-         curl -sL "https://github.com/FFmpeg/FFmpeg/archive/${VPINBALL_FFMPEG_SHA}.tar.gz" -o "FFmpeg-${VPINBALL_FFMPEG_SHA}.tar.gz"
-         tar xzf "FFmpeg-${VPINBALL_FFMPEG_SHA}.tar.gz"
-         mv "FFmpeg-${VPINBALL_FFMPEG_SHA}" ffmpeg
+         curl -sL "https://github.com/FFmpeg/FFmpeg/archive/${vpinball_ffmpeg_sha}.tar.gz" -o "FFmpeg-${vpinball_ffmpeg_sha}.tar.gz"
+         tar xzf "FFmpeg-${vpinball_ffmpeg_sha}.tar.gz"
+         mv "FFmpeg-${vpinball_ffmpeg_sha}" ffmpeg
          cd ffmpeg
          if [ "${platform}" = "macos" ]; then
             local ffmpeg_arch="${arch}"

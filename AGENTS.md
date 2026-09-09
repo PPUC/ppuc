@@ -110,7 +110,16 @@ Useful environment variables:
   `LIBDMDUTIL_SOURCE_DIR` also redirects the copy `libsdldmd` stages.
 
 Dependency pins live in `platforms/config.sh` (`PINMAME_SHA`, `VPINBALL_SHA`,
-`LIBPPUC_SHA`, `LIBSDLDMD_SHA`, `LUA_VERSION`, …). Changes in `../libppuc` or
+`LIBPPUC_SHA`, `LIBSDLDMD_SHA`, `LUA_VERSION`, …), but three of the VPX plugin
+dependencies are deliberately **not** pinned there. SDL_ttf, libaltsound and
+ffmpeg are read from the staged vpinball tree by `ppuc_vpinball_pin`, and SDL
+itself from libsdldmd by `ppuc_libsdldmd_sdl_sha`.
+
+The rule is which process the library ends up in. SDL3 and SDL3_image are loaded
+into PPUC's own process alongside the plugins, so they must be the build the
+executable links — libsdldmd decides. SDL_ttf, libaltsound and ffmpeg are used
+only by plugins, so vpinball decides. Copies of either kind kept here by hand
+drifted in practice. Changes in `../libppuc` or
 `../io-boards` do not reach a normal build until those pins are bumped.
 
 CI is `.github/workflows/ppuc.yml`: win-mingw x64, macOS arm64, linux x64.
