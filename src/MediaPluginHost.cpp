@@ -724,6 +724,22 @@ bool MediaPluginHost::Impl::Initialize(const Options& options,
   }
   if (options.enableAltSound)
   {
+    // The plugin reads Folder at load, takes its parent, and looks for
+    // <parent>/altsound/<rom>. So the value has to be the directory holding the
+    // per-ROM folders, not a ROM's own folder -- passing the latter would send
+    // it looking in .../altsound/altsound/<rom>.
+    //
+    // --altsound-folder accepts either form, and PPUC's own default is the ROM
+    // folder, so normalise here rather than making the caller know.
+    if (!altSoundFolder_.empty())
+    {
+      std::filesystem::path folder(altSoundFolder_);
+      if (!gameId_.empty() && folder.filename() == gameId_)
+      {
+        folder = folder.parent_path();
+      }
+      bus_.SetSettingOverride("AltSound", "Folder", folder.string());
+    }
     bus_.LoadPluginById("AltSound");
   }
   if (options.enableB2S)
