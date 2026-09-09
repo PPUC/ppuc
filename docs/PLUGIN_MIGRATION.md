@@ -420,11 +420,35 @@ through -- two dozen discontinuities in forty seconds, each an audible click, to
 save milliseconds that were about to drain anyway. With the high-water mark it
 fires once, after the stall that caused it.
 
-**Not solved, only bounded.** 220 ms is still high for a machine where a sound
-follows a coil, and the queue ratchets up on each stall rather than seeking a
-depth. The principled fix is adaptive rate matching -- nudging the resampling
-ratio to hold a target depth -- which would also absorb the residual clock drift
-above. Both want the same machinery.
+#### Steering the rate closes both
+
+Trimming bounds a backlog by discarding audio; it cannot hold a depth, and it
+cannot answer clock drift at all. Each lane's resampler now has its ratio nudged
+toward the target instead, via `SDL_SetAudioStreamFrequencyRatio`. Greater than
+1.0 consumes input faster, yielding fewer output samples and draining a lane
+that is running ahead.
+
+The correction is clamped to **0.3%** -- roughly five cents of pitch, inaudible
+on programme material, and more than an order of magnitude above the 0.04% drift
+it has to cancel. A stream is now created even when the producer already matches
+the device rate, because such a producer still drifts against the device's clock
+and needs the same steering.
+
+Measured on Terminator 2 with ROM, AltSound and a PUP pack, 170 seconds, ms
+buffered sampled every 15 s:
+
+| lane | before any of this | trim only | with steering |
+|---|---|---|---|
+| PinMAME | ~480 flat | ~220 flat | **84 94 77 79 82 84 103 106 88 77 82 102** |
+| AltSound | 0 → 805 climbing | 0 → 69 climbing | **0 51 70 90 98 95 98 100 93 92 101 103** |
+
+AltSound is the clearest result: it used to climb without bound, and now rises
+to the target once and holds there. Trimming fired once in the whole run, for
+the startup stall, and never again -- steering keeps the lanes off the
+high-water mark by itself.
+
+PUP reads about 200 ms because it runs two streams and the debug line sums them;
+each is on target.
 
 #### Latency
 

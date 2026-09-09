@@ -338,3 +338,36 @@ TEST_CASE("TrimToTarget ignores a queue between the target and the high-water ma
   CHECK(AudioMixer::TrimToTarget(queue, 20, 100) == 0);
   CHECK(AudioMixer::BufferedSamples(queue) == 40);
 }
+
+TEST_CASE("RateRatioFor leaves a lane at its target alone")
+{
+  CHECK(AudioMixer::RateRatioFor(1000, 1000) == doctest::Approx(1.0f));
+}
+
+TEST_CASE("RateRatioFor speeds up a lane running ahead and slows one running behind")
+{
+  // Greater than 1 consumes input faster, which yields fewer output samples and
+  // drains a queue that is too deep.
+  CHECK(AudioMixer::RateRatioFor(1200, 1000) > 1.0f);
+  CHECK(AudioMixer::RateRatioFor(800, 1000) < 1.0f);
+}
+
+TEST_CASE("RateRatioFor stays inaudible however far off the depth is")
+{
+  // The correction changes pitch as well as speed, so a lane that is empty or
+  // wildly overfull must still only be nudged.
+  CHECK(AudioMixer::RateRatioFor(0, 1000) == doctest::Approx(1.0f - AudioMixer::kMaxRateDeviation));
+  CHECK(AudioMixer::RateRatioFor(1000000, 1000) == doctest::Approx(1.0f + AudioMixer::kMaxRateDeviation));
+  CHECK(AudioMixer::kMaxRateDeviation < 0.01f);
+}
+
+TEST_CASE("RateRatioFor eases off as a lane approaches its target")
+{
+  // A correction that stayed saturated until the last moment would overshoot.
+  const float far = AudioMixer::RateRatioFor(1300, 1000);
+  const float near = AudioMixer::RateRatioFor(1010, 1000);
+  CHECK(near > 1.0f);
+  CHECK(near < far);
+}
+
+TEST_CASE("RateRatioFor copes with no target") { CHECK(AudioMixer::RateRatioFor(500, 0) == doctest::Approx(1.0f)); }

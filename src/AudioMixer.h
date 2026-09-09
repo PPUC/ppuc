@@ -73,6 +73,24 @@ size_t BufferedSamples(const Queue& queue);
 // back under `maxBufferedSamples`. Empty blocks are ignored.
 void Enqueue(Queue& queue, std::vector<int16_t> samples, size_t maxBufferedSamples = kMaxBufferedSamples);
 
+// The resampling ratio that steers a lane's buffered depth toward its target.
+//
+// Fixed-ratio resampling cannot hold a depth, because a producer's clock and
+// the audio device's clock are independent and drift apart -- measured at about
+// 0.4 ms per second for AltSound. Trimming bounds the damage but only by
+// discarding audio. Nudging the ratio instead lets a lane converge on its
+// target and stay there, absorbing both the drift and the backlog a stall
+// leaves behind, without dropping a sample.
+//
+// The correction is deliberately tiny. It changes pitch as well as speed, so it
+// is clamped to kMaxRateDeviation -- about five cents, well under what anyone
+// can hear on programme material, and enough to erase 0.4 ms/s many times over.
+inline constexpr float kMaxRateDeviation = 0.003f;
+
+// > 1.0 asks SDL to consume input faster, which yields fewer output samples and
+// so shrinks a queue that is running ahead.
+float RateRatioFor(size_t bufferedSamples, size_t targetSamples);
+
 // Drops the oldest samples back to `targetSamples`, but only once the queue has
 // passed `highWaterSamples`. Returns how many were dropped, which is zero in
 // the ordinary case.

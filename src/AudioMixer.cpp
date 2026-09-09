@@ -87,6 +87,20 @@ bool Mix(Queue& queue, int16_t* mixBuffer, size_t sampleCount)
   return hadAudibleSamples;
 }
 
+float RateRatioFor(size_t bufferedSamples, size_t targetSamples)
+{
+  if (targetSamples == 0)
+  {
+    return 1.0f;
+  }
+  const float error =
+      (static_cast<float>(bufferedSamples) - static_cast<float>(targetSamples)) / static_cast<float>(targetSamples);
+  // Gain chosen so the correction saturates once a lane is about a third away
+  // from target, and eases off smoothly as it closes in.
+  const float correction = std::clamp(error * 0.01f, -kMaxRateDeviation, kMaxRateDeviation);
+  return 1.0f + correction;
+}
+
 size_t TrimToTarget(Queue& queue, size_t targetSamples, size_t highWaterSamples)
 {
   size_t buffered = BufferedSamples(queue);

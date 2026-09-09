@@ -86,6 +86,7 @@ class AudioOutput
     SDL_AudioStream* stream = nullptr;
     int frequency = 0;
     int channels = 0;
+    float ratio = 1.0f;
   };
   void QueueSamplesLocked(AudioMixer::Queue& queue, Resampler& resampler, const int16_t* samples, size_t sampleCount,
                           int frequency, int channels);
@@ -93,6 +94,11 @@ class AudioOutput
   // Keeps a lane from sitting further ahead of the device than
   // kTargetBufferedMs once a stall has pushed it there.
   void TrimQueueLocked(AudioMixer::Queue& queue);
+  // Nudges a lane's resampling ratio so its depth converges on the target,
+  // rather than drifting with the producer's clock or staying wherever a stall
+  // left it.
+  void SteerQueueLocked(const AudioMixer::Queue& queue, Resampler& resampler);
+  size_t TargetBufferedSamplesLocked() const;
   void MixMusicLocked(int16_t* mixBuffer, size_t sampleCount, bool duckToBackground);
 #if defined(PPUC_HAS_SDL3_MIXER)
   bool EnsureMusicMixerLocked(std::string* errorMessage);

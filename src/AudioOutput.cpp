@@ -444,14 +444,10 @@ void AudioOutput::QueueSamplesLocked(AudioMixer::Queue& queue, Resampler& resamp
     }
   }
 
-  if (frequency == deviceSpec_.freq && channels == deviceSpec_.channels)
-  {
-    DestroyResampler(resampler);
-    AudioMixer::Enqueue(queue, std::vector<int16_t>(samples, samples + sampleCount));
-    TrimQueueLocked(queue);
-    return;
-  }
-
+  // A stream is created even when the formats already match. It is nearly free
+  // at a 1:1 ratio, and it is what the rate control below steers -- a producer
+  // that happens to share the device's rate still drifts against its clock.
+  //
   // Rebuilt only when the producer's format changes, so the resampler keeps its
   // fractional position for the whole of a stream.
   if (resampler.stream == nullptr || resampler.frequency != frequency || resampler.channels != channels)
@@ -493,12 +489,41 @@ void AudioOutput::QueueSamplesLocked(AudioMixer::Queue& queue, Resampler& resamp
   converted.resize(static_cast<size_t>(read) / sizeof(int16_t));
   AudioMixer::Enqueue(queue, std::move(converted));
   TrimQueueLocked(queue);
+  SteerQueueLocked(queue, resampler);
+}
+
+void AudioOutput::SteerQueueLocked(const AudioMixer::Queue& queue, Resampler& resampler)
+{
+  if (resampler.stream == nullptr)
+  {
+    return;
+  }
+  const size_t target = TargetBufferedSamplesLocked();
+  if (target == 0)
+  {
+    return;
+  }
+  const float ratio = AudioMixer::RateRatioFor(AudioMixer::BufferedSamples(queue), target);
+  // Only when it actually moves: the call takes a stream mutex, and this runs
+  // for every buffer every producer sends.
+  if (std::abs(ratio - resampler.ratio) > 0.00005f)
+  {
+    if (SDL_SetAudioStreamFrequencyRatio(resampler.stream, ratio))
+    {
+      resampler.ratio = ratio;
+    }
+  }
+}
+
+size_t AudioOutput::TargetBufferedSamplesLocked() const
+{
+  return static_cast<size_t>(deviceSpec_.freq) * deviceSpec_.channels * AudioMixer::kTargetBufferedMs / 1000u;
 }
 
 void AudioOutput::TrimQueueLocked(AudioMixer::Queue& queue)
 {
   const size_t samplesPerMs = static_cast<size_t>(deviceSpec_.freq) * deviceSpec_.channels / 1000u;
-  const size_t target = samplesPerMs * AudioMixer::kTargetBufferedMs;
+  const size_t target = TargetBufferedSamplesLocked();
   const size_t highWater = samplesPerMs * AudioMixer::kHighWaterBufferedMs;
   if (target == 0)
   {
