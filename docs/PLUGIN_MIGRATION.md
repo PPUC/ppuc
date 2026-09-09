@@ -363,6 +363,43 @@ The ROM lane still carries signal and its queue stays flat, which is the point:
 the stream is arriving and being drained rather than stalled, so mode 1 has
 something to unmute.
 
+#### Resampling must be stateful
+
+Running all three producers at once -- ROM, AltSound and a PUP pack -- showed
+AltSound's queue growing without bound: 0 to 805 ms over 170 seconds, about
+0.47% faster than real time. It did the same alone, so it was not contention.
+
+That number is a fingerprint. `SDL_ConvertAudioSamples` is a one-shot with no
+memory of the previous buffer, so every buffer's fractional remainder is
+rounded away independently:
+
+| producer | buffer | x 48000/44100 | error |
+|---|---|---|---|
+| PinMAME | 735 frames (one 60 Hz frame) | 800.0 exactly | none |
+| AltSound | 128 frames (`BUFFER_SIZE_FRAMES`) | 139.32 | +0.49% per buffer |
+
+PinMAME never showed it because its buffer size divides evenly. AltSound's does
+not, and half a percent of surplus audio accumulates until the overflow cap
+starts discarding sound -- heard as latency that grows the longer a game runs.
+
+Each producer now keeps an `SDL_AudioStream`, which carries the resampler's
+fractional position across calls. A stream is also kept alive while its
+resampler still holds a partial frame, or draining it on a momentary gap would
+reintroduce the same rounding.
+
+Measured over 170 seconds with all three producers running:
+
+| lane | before | after |
+|---|---|---|
+| AltSound | 0 to 805 ms | 0 to 69 ms |
+| PUP | 208 to 556 ms | oscillates 234-554 ms |
+| PinMAME | flat ~240 ms | flat ~283 ms |
+
+The residual 69 ms is a different problem: AltSound's clock and the audio
+device's clock are independent, and no fixed-ratio resampler can track that.
+Correcting it needs adaptive rate matching, and at 0.4 ms/s it is far from
+urgent.
+
 #### Latency
 
 Every plugin audio buffer is marshalled through `ProcessAsyncCallbacks` once per

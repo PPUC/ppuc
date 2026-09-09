@@ -31,10 +31,7 @@ std::string Trim(const std::string& input)
 }
 }  // namespace
 
-AudioOutput::~AudioOutput()
-{
-  Shutdown();
-}
+AudioOutput::~AudioOutput() { Shutdown(); }
 
 bool AudioOutput::Initialize()
 {
@@ -61,8 +58,14 @@ void AudioOutput::Shutdown()
 {
   std::lock_guard<std::mutex> lock(mutex_);
   gameQueue_.clear();
+  DestroyResampler(gameResampler_);
+  for (auto& entry : pluginStreams_)
+  {
+    DestroyResampler(entry.second.resampler);
+  }
   pluginStreams_.clear();
   speechQueue_.clear();
+  DestroyResampler(speechResampler_);
 #if defined(PPUC_HAS_SDL3_MIXER)
   DestroyMusicTracksLocked();
   if (musicTrack_ != nullptr)
@@ -205,14 +208,11 @@ void AudioOutput::QueueGameFrames(const int16_t* samples, size_t frameCount)
   }
 
   std::lock_guard<std::mutex> lock(mutex_);
-  QueueSamplesLocked(gameQueue_, samples, frameCount * gameChannels_,
-                     gameFrequency_, gameChannels_);
+  QueueSamplesLocked(gameQueue_, gameResampler_, samples, frameCount * gameChannels_, gameFrequency_, gameChannels_);
 }
 
-void AudioOutput::QueuePluginSamples(uint64_t sourceId, uint64_t streamId,
-                                     const int16_t* samples,
-                                     size_t sampleCount, int frequency,
-                                     int channels)
+void AudioOutput::QueuePluginSamples(uint64_t sourceId, uint64_t streamId, const int16_t* samples, size_t sampleCount,
+                                     int frequency, int channels)
 {
   if (samples == nullptr || sampleCount == 0 || frequency <= 0 || channels <= 0)
   {
@@ -222,17 +222,21 @@ void AudioOutput::QueuePluginSamples(uint64_t sourceId, uint64_t streamId,
   std::lock_guard<std::mutex> lock(mutex_);
   PluginStream& stream = pluginStreams_[streamId];
   stream.sourceId = sourceId;
-  QueueSamplesLocked(stream.queue, samples, sampleCount, frequency, channels);
+  QueueSamplesLocked(stream.queue, stream.resampler, samples, sampleCount, frequency, channels);
 }
 
 void AudioOutput::StopPluginStream(uint64_t streamId)
 {
   std::lock_guard<std::mutex> lock(mutex_);
-  pluginStreams_.erase(streamId);
+  const auto it = pluginStreams_.find(streamId);
+  if (it != pluginStreams_.end())
+  {
+    DestroyResampler(it->second.resampler);
+    pluginStreams_.erase(it);
+  }
 }
 
-void AudioOutput::QueuePluginSamples(const int16_t* samples, size_t sampleCount,
-                                     int frequency, int channels)
+void AudioOutput::QueuePluginSamples(const int16_t* samples, size_t sampleCount, int frequency, int channels)
 {
   QueuePluginSamples(0, 0, samples, sampleCount, frequency, channels);
 }
@@ -262,8 +266,8 @@ std::string AudioOutput::DescribeLanes() const
   // Depth in milliseconds rather than samples: the point of watching it is to
   // see whether the bus drain keeps up with the producers, and only the time
   // form answers that independently of format.
-  const double samplesPerMs = static_cast<double>(deviceSpec_.freq) *
-                              static_cast<double>(deviceSpec_.channels) / 1000.0;
+  const double samplesPerMs =
+      static_cast<double>(deviceSpec_.freq) * static_cast<double>(deviceSpec_.channels) / 1000.0;
   const uint64_t nowMs = SDL_GetTicks();
 
   std::string out;
@@ -297,14 +301,12 @@ std::string AudioOutput::DescribeLanes() const
   if (gameBuffered != 0)
   {
     out += "  PPUC game audio, " +
-           std::to_string(samplesPerMs > 0.0 ? static_cast<int>(gameBuffered / samplesPerMs) : 0) +
-           " ms buffered\n";
+           std::to_string(samplesPerMs > 0.0 ? static_cast<int>(gameBuffered / samplesPerMs) : 0) + " ms buffered\n";
   }
   return out;
 }
 
-void AudioOutput::QueueSpeechSamples(const int16_t* samples, size_t sampleCount,
-                                     int frequency, int channels)
+void AudioOutput::QueueSpeechSamples(const int16_t* samples, size_t sampleCount, int frequency, int channels)
 {
   if (samples == nullptr || sampleCount == 0 || frequency <= 0 || channels <= 0)
   {
@@ -312,12 +314,10 @@ void AudioOutput::QueueSpeechSamples(const int16_t* samples, size_t sampleCount,
   }
 
   std::lock_guard<std::mutex> lock(mutex_);
-  QueueSamplesLocked(speechQueue_, samples, sampleCount, frequency, channels);
+  QueueSamplesLocked(speechQueue_, speechResampler_, samples, sampleCount, frequency, channels);
 }
 
-void SDLCALL AudioOutput::OnDeviceNeedsAudio(void* userdata,
-                                             SDL_AudioStream* stream,
-                                             int additionalAmount,
+void SDLCALL AudioOutput::OnDeviceNeedsAudio(void* userdata, SDL_AudioStream* stream, int additionalAmount,
                                              int /*totalAmount*/)
 {
   auto* self = static_cast<AudioOutput*>(userdata);
@@ -369,13 +369,26 @@ void SDLCALL AudioOutput::OnDeviceNeedsAudio(void* userdata,
       {
         continue;
       }
-      pluginActive =
-          AudioMixer::Mix(entry.second.queue, mixBuffer.data(), sampleCount) || pluginActive;
+      pluginActive = AudioMixer::Mix(entry.second.queue, mixBuffer.data(), sampleCount) || pluginActive;
     }
 
     for (auto it = self->pluginStreams_.begin(); it != self->pluginStreams_.end();)
     {
-      it = it->second.queue.empty() ? self->pluginStreams_.erase(it) : std::next(it);
+      if (!it->second.queue.empty())
+      {
+        ++it;
+        continue;
+      }
+      // Keep the entry while its resampler still holds a partial frame:
+      // dropping it here would throw that fraction away every time a stream
+      // momentarily drains, reintroducing the drift this exists to prevent.
+      if (it->second.resampler.stream != nullptr && SDL_GetAudioStreamAvailable(it->second.resampler.stream) > 0)
+      {
+        ++it;
+        continue;
+      }
+      DestroyResampler(it->second.resampler);
+      it = self->pluginStreams_.erase(it);
     }
 
     const bool speechActive = AudioMixer::Mix(self->speechQueue_, mixBuffer.data(), sampleCount);
@@ -387,8 +400,7 @@ void SDLCALL AudioOutput::OnDeviceNeedsAudio(void* userdata,
 
 void AudioOutput::EnsureStreamLocked(const SDL_AudioSpec& spec)
 {
-  if (stream_ != nullptr && deviceSpec_.freq == spec.freq &&
-      deviceSpec_.channels == spec.channels &&
+  if (stream_ != nullptr && deviceSpec_.freq == spec.freq && deviceSpec_.channels == spec.channels &&
       deviceSpec_.format == spec.format)
   {
     return;
@@ -401,8 +413,7 @@ void AudioOutput::EnsureStreamLocked(const SDL_AudioSpec& spec)
   }
 
   deviceSpec_ = spec;
-  stream_ = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK,
-                                      &deviceSpec_, &AudioOutput::OnDeviceNeedsAudio,
+  stream_ = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &deviceSpec_, &AudioOutput::OnDeviceNeedsAudio,
                                       this);
   if (stream_ != nullptr)
   {
@@ -410,10 +421,19 @@ void AudioOutput::EnsureStreamLocked(const SDL_AudioSpec& spec)
   }
 }
 
-void AudioOutput::QueueSamplesLocked(AudioMixer::Queue& queue,
-                                     const int16_t* samples,
-                                     size_t sampleCount, int frequency,
-                                     int channels)
+void AudioOutput::DestroyResampler(Resampler& resampler)
+{
+  if (resampler.stream != nullptr)
+  {
+    SDL_DestroyAudioStream(resampler.stream);
+    resampler.stream = nullptr;
+  }
+  resampler.frequency = 0;
+  resampler.channels = 0;
+}
+
+void AudioOutput::QueueSamplesLocked(AudioMixer::Queue& queue, Resampler& resampler, const int16_t* samples,
+                                     size_t sampleCount, int frequency, int channels)
 {
   if (stream_ == nullptr)
   {
@@ -424,46 +444,56 @@ void AudioOutput::QueueSamplesLocked(AudioMixer::Queue& queue,
     }
   }
 
-  std::vector<int16_t> converted;
-  const bool requiresConversion = frequency != deviceSpec_.freq ||
-                                  channels != deviceSpec_.channels;
-
-  if (!requiresConversion)
+  if (frequency == deviceSpec_.freq && channels == deviceSpec_.channels)
   {
-    converted.assign(samples, samples + sampleCount);
+    DestroyResampler(resampler);
+    AudioMixer::Enqueue(queue, std::vector<int16_t>(samples, samples + sampleCount));
+    return;
   }
-  else
+
+  // Rebuilt only when the producer's format changes, so the resampler keeps its
+  // fractional position for the whole of a stream.
+  if (resampler.stream == nullptr || resampler.frequency != frequency || resampler.channels != channels)
   {
+    DestroyResampler(resampler);
     const SDL_AudioSpec sourceSpec{
         .format = SDL_AUDIO_S16LE,
         .channels = static_cast<Uint8>(channels),
         .freq = frequency,
     };
-
-    Uint8* convertedData = nullptr;
-    int convertedLength = 0;
-    if (!SDL_ConvertAudioSamples(
-            &sourceSpec, reinterpret_cast<const Uint8*>(samples),
-            static_cast<int>(sampleCount * sizeof(int16_t)), &deviceSpec_,
-            &convertedData, &convertedLength))
+    resampler.stream = SDL_CreateAudioStream(&sourceSpec, &deviceSpec_);
+    if (resampler.stream == nullptr)
     {
       return;
     }
-
-    const auto* convertedSamples =
-        reinterpret_cast<const int16_t*>(convertedData);
-    const size_t convertedSampleCount =
-        static_cast<size_t>(convertedLength) / sizeof(int16_t);
-    converted.assign(convertedSamples,
-                     convertedSamples + convertedSampleCount);
-    SDL_free(convertedData);
+    resampler.frequency = frequency;
+    resampler.channels = channels;
   }
 
+  if (!SDL_PutAudioStreamData(resampler.stream, samples, static_cast<int>(sampleCount * sizeof(int16_t))))
+  {
+    return;
+  }
+
+  const int available = SDL_GetAudioStreamAvailable(resampler.stream);
+  if (available <= 0)
+  {
+    // Normal: the resampler is holding a partial frame back rather than
+    // rounding it away, which is the entire point.
+    return;
+  }
+
+  std::vector<int16_t> converted(static_cast<size_t>(available) / sizeof(int16_t));
+  const int read = SDL_GetAudioStreamData(resampler.stream, converted.data(), available);
+  if (read <= 0)
+  {
+    return;
+  }
+  converted.resize(static_cast<size_t>(read) / sizeof(int16_t));
   AudioMixer::Enqueue(queue, std::move(converted));
 }
 
-void AudioOutput::MixMusicLocked(int16_t* mixBuffer, size_t sampleCount,
-                                 bool duckToBackground)
+void AudioOutput::MixMusicLocked(int16_t* mixBuffer, size_t sampleCount, bool duckToBackground)
 {
   if (!mixBuffer || musicTracks_.empty())
   {
@@ -496,8 +526,7 @@ void AudioOutput::MixMusicLocked(int16_t* mixBuffer, size_t sampleCount,
 
   std::vector<int16_t> musicBuffer(sampleCount, 0);
   const int generatedBytes =
-      MIX_Generate(musicMixer_, musicBuffer.data(),
-                   static_cast<int>(sampleCount * sizeof(int16_t)));
+      MIX_Generate(musicMixer_, musicBuffer.data(), static_cast<int>(sampleCount * sizeof(int16_t)));
   if (generatedBytes < 0)
   {
     musicGain_ = 0.0f;
@@ -505,9 +534,7 @@ void AudioOutput::MixMusicLocked(int16_t* mixBuffer, size_t sampleCount,
   }
 #endif
 
-  const float targetGain = musicEnabled_
-                               ? (duckToBackground ? kMusicDuckGain : kMusicBaseGain)
-                               : 0.0f;
+  const float targetGain = musicEnabled_ ? (duckToBackground ? kMusicDuckGain : kMusicBaseGain) : 0.0f;
   const float gainStep = targetGain > musicGain_ ? kMusicAttackPerSample : kMusicReleasePerSample;
 
   for (size_t i = 0; i < sampleCount; ++i)

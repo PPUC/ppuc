@@ -8,10 +8,9 @@
 #include <unordered_map>
 #include <vector>
 
-#include "SDL3/SDL.h"
-
 #include "AudioLanes.h"
 #include "AudioMixer.h"
+#include "SDL3/SDL.h"
 
 #if defined(PPUC_HAS_SDL3_MIXER)
 struct MIX_Audio;
@@ -21,7 +20,7 @@ struct MIX_Track;
 
 class AudioOutput
 {
-public:
+ public:
   AudioOutput() = default;
   ~AudioOutput();
 
@@ -33,8 +32,7 @@ public:
   void SetMusicTrackGapMs(Uint64 gapMs);
   void SetMusicEnabled(bool enabled);
   void QueueGameFrames(const int16_t* samples, size_t frameCount);
-  void QueuePluginSamples(uint64_t sourceId, uint64_t streamId,
-                          const int16_t* samples, size_t sampleCount,
+  void QueuePluginSamples(uint64_t sourceId, uint64_t streamId, const int16_t* samples, size_t sampleCount,
                           int frequency, int channels);
   void StopPluginStream(uint64_t streamId);
 
@@ -47,12 +45,10 @@ public:
   // depth that grows without bound means the bus callbacks are draining slower
   // than the producers fill them.
   std::string DescribeLanes() const;
-  void QueuePluginSamples(const int16_t* samples, size_t sampleCount,
-                          int frequency, int channels);
-  void QueueSpeechSamples(const int16_t* samples, size_t sampleCount,
-                         int frequency, int channels);
+  void QueuePluginSamples(const int16_t* samples, size_t sampleCount, int frequency, int channels);
+  void QueueSpeechSamples(const int16_t* samples, size_t sampleCount, int frequency, int channels);
 
-public:
+ public:
   struct MusicTrack
   {
     std::string path;
@@ -61,11 +57,8 @@ public:
 #endif
   };
 
-private:
-
-  static void SDLCALL OnDeviceNeedsAudio(void* userdata,
-                                         SDL_AudioStream* stream,
-                                         int additionalAmount,
+ private:
+  static void SDLCALL OnDeviceNeedsAudio(void* userdata, SDL_AudioStream* stream, int additionalAmount,
                                          int totalAmount);
 #if defined(PPUC_HAS_SDL3_MIXER)
   static void SDLCALL OnMusicTrackStopped(void* userdata, MIX_Track* track);
@@ -73,10 +66,29 @@ private:
 
   void EnsureStreamLocked(const SDL_AudioSpec& spec);
   // Converts to the device format if needed, then hands off to AudioMixer.
-  void QueueSamplesLocked(AudioMixer::Queue& queue, const int16_t* samples,
-                          size_t sampleCount, int frequency, int channels);
-  void MixMusicLocked(int16_t* mixBuffer, size_t sampleCount,
-                      bool duckToBackground);
+  // Format conversion state for one producer.
+  //
+  // Stateful on purpose. SDL_ConvertAudioSamples is a one-shot: it resamples a
+  // buffer with no memory of the last one, so a producer sending small buffers
+  // at a rate that does not divide the device rate loses the fraction on every
+  // call and the error accumulates. AltSound sends 128 frames at 44100 Hz,
+  // which is 139.32 frames at 48000 -- rounded up on every buffer, that is
+  // half a percent of surplus audio forever, and its queue grows without bound
+  // until the overflow cap starts dropping sound. PinMAME never showed it
+  // because its 735-frame buffers convert to exactly 800.
+  //
+  // An SDL_AudioStream carries the resampler's fractional position across
+  // calls, so nothing accumulates.
+  struct Resampler
+  {
+    SDL_AudioStream* stream = nullptr;
+    int frequency = 0;
+    int channels = 0;
+  };
+  void QueueSamplesLocked(AudioMixer::Queue& queue, Resampler& resampler, const int16_t* samples, size_t sampleCount,
+                          int frequency, int channels);
+  static void DestroyResampler(Resampler& resampler);
+  void MixMusicLocked(int16_t* mixBuffer, size_t sampleCount, bool duckToBackground);
 #if defined(PPUC_HAS_SDL3_MIXER)
   bool EnsureMusicMixerLocked(std::string* errorMessage);
   void DestroyMusicTracksLocked();
@@ -101,16 +113,19 @@ private:
   // plugin's, so it is a lane rather than this queue. Deliberately not part of
   // the lane table -- nothing publishes an override against it.
   AudioMixer::Queue gameQueue_;
+  Resampler gameResampler_;
   // One entry per CTLPI audio stream, tagged with the source it belongs to. A
   // source may own several streams; overriding is decided per source.
   struct PluginStream
   {
     uint64_t sourceId = 0;
     AudioMixer::Queue queue;
+    Resampler resampler;
   };
   std::unordered_map<uint64_t, PluginStream> pluginStreams_;
   AudioLanes::Table lanes_;
   AudioMixer::Queue speechQueue_;
+  Resampler speechResampler_;
   std::vector<MusicTrack> musicTracks_;
 #if defined(PPUC_HAS_SDL3_MIXER)
   MIX_Mixer* musicMixer_ = nullptr;
