@@ -567,6 +567,7 @@ private:
   bool loggedNoBackglassRenderer_ = false;
   bool loggedNoPluginBackglassRenderer_ = false;
   bool loggedBackglassRenderer_ = false;
+  bool loggedRendererContention_ = false;
   bool loggedB2SServerUnavailable_ = false;
   uint64_t lastBackglassDiagnosticMs_ = 0;
 
@@ -1016,6 +1017,18 @@ void MediaPluginHost::Impl::Process()
   }
 
   AncillaryRendererDef* renderer = nullptr;
+  // The backglass takes one renderer, and B2S wins when both are on. That may
+  // well be the wrong call for a game that ships a PUP pack -- a pack usually
+  // provides the whole backglass -- but silently picking one was the real
+  // problem: a pack loads, decodes, produces audio, and never appears, with
+  // nothing to say why.
+  if (options_.enableB2S && options_.enablePup && !loggedRendererContention_)
+  {
+    loggedRendererContention_ = true;
+    std::printf(
+        "Media backglass: B2S and PUP are both enabled; B2S renders the backglass "
+        "and the PUP pack's video will not be shown. Disable one of them.\n");
+  }
   const char* preferredRendererId = options_.enableB2S ? "B2S" : nullptr;
   if (preferredRendererId != nullptr)
   {
