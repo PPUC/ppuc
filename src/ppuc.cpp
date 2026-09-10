@@ -1764,6 +1764,30 @@ static void PerformFirmwareUpdates(PPUC* pPpuc, const std::vector<PPUCBoardVersi
     }
 }
 
+// Prints each board's own transport counters.
+//
+// The host can see that a board did not answer, but not why: a board that never
+// received the frame selecting it and one that received it and did not transmit
+// are indistinguishable from this end. These are the board's own view, read out
+// of band once the run is over.
+static void ReportBoardStats(PPUC* pPpuc, const char* when)
+{
+  const std::vector<PPUCBoardStats> stats = pPpuc->QueryBoardStats();
+  printf("PPUC: board transport counters (%s)\n", when);
+  for (const PPUCBoardStats& s : stats)
+  {
+    if (!s.responded)
+    {
+      printf("PPUC:   board %u did not answer the stats query\n", s.board);
+      continue;
+    }
+    printf("PPUC:   board %u: selected=%u txFrames=%u missedReplies=%d rxFrames=%u rxCrcFail=%u rawBytes=%u\n",
+           s.board, s.selected, s.txFrames,
+           static_cast<int>(s.selected) - static_cast<int>(s.txFrames), s.rxFrames,
+           s.rxCrcFail, s.rawBytes);
+  }
+}
+
 static void ReportBoardFirmware(PPUC* pPpuc, const char* firmwarePath, bool allowUpdate, bool allowDev,
                                 bool allowUnvalidated)
 {
@@ -4107,6 +4131,7 @@ int main(int argc, char** argv)
       pPpuc->SetSwitchState(pPpuc->GetCoinDoorClosedSwitch(), 0);
     }
     pPpuc->StopUpdates();
+    ReportBoardStats(pPpuc, "after bench test");
     pPpuc->Disconnect();
 
     return 0;
@@ -4161,32 +4186,40 @@ int main(int argc, char** argv)
             return;
           }
 
-          // Fan out, do not branch. These are two different sinks, not two
-          // ways of reaching one: QueueEvent feeds the PUP plugin (video
-          // playback), while DMD::SetPUPTrigger feeds libserum's scene
-          // generator via Serum_Scene_Trigger. A game can legitimately use
-          // both -- Flash ships flash_l1.pup.csv *and* flash_l1.cROMc -- and
-          // an `else if` here silently dropped every Serum scene trigger
-          // whenever --pup, --altsound or --b2s was enabled.
+          // Onto the bus as a B2S state change, which is where every event
+          // stream in the plugin set reads its letters from: PUP's, DOF's,
+          // b2slegacy's. A 'D' here means exactly what it means when a table
+          // script calls B2SData -- drive the pack's media -- and nothing more.
+          //
+          // A Serum scene is a separate request on a separate message; see
+          // ppuc.serumScene. It used to be inferred from any 'D' press in the
+          // scene window, which meant a script could not emit a plain trigger
+          // for a pack without also starting a scene it never authored.
           if (pMediaPluginHost)
           {
             pMediaPluginHost->QueueEvent(source, id, value);
-            // A 'D' press is also how a rules script asks a Serum colorization
-            // to play a scene. The Serum plugin has its own message for that;
-            // it does not read the event above, and the window is checked at
-            // both ends.
-            if (source == 'D' && value == 1)
-            {
-              pMediaPluginHost->TriggerSerumScene(static_cast<uint16_t>(id));
-            }
+          }
+        });
+
+    // ppuc.serumScene(id): play a scene in the colorization.
+    //
+    // Fans out to both colorizers because which one is live depends on the
+    // engine, not on the script. With a ROM, the Serum plugin holds the
+    // colorization and takes scenes on its own message. Without one, there is
+    // no controller display for the plugin to consume -- DmdCanvas frames exist
+    // only inside PPUC -- so libdmdutil keeps its built-in colorizer and reads
+    // the scene through SetPUPTrigger. Only one is ever loaded, so this is a
+    // fan-out to two sinks, not a double trigger.
+    pLuaRulesEngine->SetSerumSceneCallback(
+        [&](uint16_t id)
+        {
+          if (pMediaPluginHost)
+          {
+            pMediaPluginHost->TriggerSerumScene(id);
           }
           if (pDmd)
           {
-            // The same request to libdmdutil's built-in colorizer, for the
-            // ROM-less path where the Serum plugin has no controller display to
-            // work from. No-ops unless Serum is loaded and this is a 'D' press;
-            // the 50000..62000 window is enforced inside libdmdutil.
-            pDmd->SetPUPTrigger(source, id, value);
+            pDmd->SetPUPTrigger('D', id, 1);
           }
         });
 

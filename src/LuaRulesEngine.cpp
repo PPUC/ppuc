@@ -114,6 +114,12 @@ void LuaRulesEngine::SetTriggerCallback(TriggerCallback callback)
   m_triggerCallback = std::move(callback);
 }
 
+void LuaRulesEngine::SetSerumSceneCallback(SerumSceneCallback callback)
+{
+  std::lock_guard<std::recursive_mutex> lock(m_mutex);
+  m_serumSceneCallback = std::move(callback);
+}
+
 void LuaRulesEngine::SetSpeechCallback(SpeechCallback callback)
 {
   std::lock_guard<std::recursive_mutex> lock(m_mutex);
@@ -189,6 +195,7 @@ void LuaRulesEngine::RegisterApi()
   SetPpucFunction(m_lua, this, "after", LuaAfter);
 
   SetPpucFunction(m_lua, this, "pupTrigger", LuaPupTrigger);
+  SetPpucFunction(m_lua, this, "serumScene", LuaSerumScene);
   SetPpucFunction(m_lua, this, "speech", LuaSpeech);
   SetPpucFunction(m_lua, this, "effectTrigger", LuaEffectTrigger);
   SetPpucFunction(m_lua, this, "suppressSwitch", LuaSuppressSwitch);
@@ -908,6 +915,28 @@ int LuaRulesEngine::LuaSpeech(lua_State* L)
   {
     engine->m_speechCallback(text);
   }
+  return 0;
+}
+
+// ppuc.serumScene(id) -- play scene `id` in the Serum colorization.
+//
+// Deliberately not folded into pupTrigger. Serum takes scenes on its own
+// message and reads no 'D' event; a pack that wants both a video and a scene
+// asks for both, and one that wants only a video is no longer forced into a
+// scene it never authored.
+//
+// Scene ids live in libserum's 50000..62000 window. The window is checked in
+// the Serum plugin and in libdmdutil, so this passes the id through as given
+// rather than duplicating the constant a third time.
+int LuaRulesEngine::LuaSerumScene(lua_State* L)
+{
+  auto* engine = FromLua(L);
+  const uint16_t id = static_cast<uint16_t>(luaL_checkinteger(L, 1));
+  if (engine->m_serumSceneCallback)
+  {
+    engine->m_serumSceneCallback(id);
+  }
+  engine->RecordTriggerLocked(id, engine->GetNowMs());
   return 0;
 }
 

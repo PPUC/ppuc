@@ -404,7 +404,11 @@ be overridden in YAML.
 
 Outputs and integrations:
 * `ppuc.after(delayMs, function() ... end)` schedules non-blocking delayed Lua work
-* `ppuc.pupTrigger(source, id, value)`
+* `ppuc.pupTrigger(source, id, value)` drives a PUP pack; a `"D"` trigger is
+  what a VPX table script sends with `B2SData`
+* `ppuc.serumScene(id)` plays a scene in the Serum colorization. Separate from
+  `pupTrigger`: Serum takes scenes on its own message, so a game that wants both
+  a pack video and a scene asks for both. Scene ids are 50000..62000.
 * `ppuc.speech(text)`
 * `ppuc.effectTrigger(id, value)` or `ppuc.effectTrigger(name, value)`
 * `ppuc.suppressSwitch(number)`

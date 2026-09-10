@@ -219,7 +219,7 @@ Capability groups (see `README.md` / `docs/RULES_AND_EFFECTS.md` for the full AP
 - named states, history, sequences, switch groups: `setState`, `clearState`,
   `stateActive`, `triggerHistory`, `triggerSequence`, `onlyOnceEvery`,
   `switchGroupState/Closing/Opening`
-- outputs: `pupTrigger`, `speech`, `effectTrigger`, `pulseCoil`, `blinkLamp`,
+- outputs: `pupTrigger`, `serumScene`, `speech`, `effectTrigger`, `pulseCoil`, `blinkLamp`,
   `stopBlinkLamp`
 - interceptor: `suppressSwitch`, `sendSwitchToCpu`
 - scheduling: `after(delayMs, fn)` — does not sleep inside the PinMAME loop; the

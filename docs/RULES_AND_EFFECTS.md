@@ -14,7 +14,8 @@ The path is a directory containing `.lua` files. `ppuc-pinmame` loads top-level
 Lua rules observe PinMAME and physical-machine state, then trigger extra PPUC
 behavior:
 
-- send DMD/PUP triggers with `ppuc.pupTrigger(...)`
+- send PUP pack triggers with `ppuc.pupTrigger(...)`
+- play a Serum colorization scene with `ppuc.serumScene(...)`
 - trigger board-local effects with `ppuc.effectTrigger(...)`
 - speak text with `ppuc.speech(...)`
 - delay work without blocking with `ppuc.after(...)`
@@ -70,6 +71,7 @@ Outputs and integrations:
 ```lua
 ppuc.after(delayMs, function() ... end)
 ppuc.pupTrigger(source, id, value)
+ppuc.serumScene(id)
 ppuc.speech(text)
 ppuc.effectTrigger(id, value)
 ppuc.effectTrigger(name, value)

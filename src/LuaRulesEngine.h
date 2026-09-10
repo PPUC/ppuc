@@ -22,6 +22,13 @@ class LuaRulesEngine
  public:
   using TriggerCallback = std::function<void(char source, uint16_t id, uint8_t value)>;
   using SpeechCallback = std::function<void(const std::string& text)>;
+  // Start a scene in the Serum colorization. Separate from TriggerCallback
+  // because a 'D' trigger and a scene are two different requests to two
+  // different consumers that happen to share a numbering space: the trigger
+  // drives a PUP pack's media, the scene drives the DMD. A pack can want one
+  // without the other, so a script has to be able to ask for one without the
+  // other.
+  using SerumSceneCallback = std::function<void(uint16_t id)>;
   using ActionCallback = std::function<void(const RulesAction& action)>;
 
   // Source of the millisecond timestamp used for named-state expiry, trigger
@@ -44,6 +51,7 @@ class LuaRulesEngine
   void SetDebug(bool debug);
   void SetTriggerCallback(TriggerCallback callback);
   void SetSpeechCallback(SpeechCallback callback);
+  void SetSerumSceneCallback(SerumSceneCallback callback);
   void SetActionCallback(ActionCallback callback);
   // Overrides the clock. Passing an empty function restores the default.
   void SetClock(ClockFn clock);
@@ -159,6 +167,7 @@ class LuaRulesEngine
   static int LuaAfter(lua_State* L);
   static int LuaPupTrigger(lua_State* L);
   static int LuaSpeech(lua_State* L);
+  static int LuaSerumScene(lua_State* L);
   static int LuaEffectTrigger(lua_State* L);
   static int LuaSuppressSwitch(lua_State* L);
   static int LuaSendSwitchToCpu(lua_State* L);
@@ -180,6 +189,7 @@ class LuaRulesEngine
   CurrentEvent m_currentEvent;
   TriggerCallback m_triggerCallback;
   SpeechCallback m_speechCallback;
+  SerumSceneCallback m_serumSceneCallback;
   ActionCallback m_actionCallback;
   ClockFn m_clock;
   uint8_t m_currentBall = 0;
