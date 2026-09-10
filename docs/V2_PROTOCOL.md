@@ -347,11 +347,24 @@ exists — that is exactly when the host needs to know what it is talking to.
 | `0x06` | `kAdminUpdateChunkAck` | board → host | 14 |
 | `0x07` | `kAdminUpdateCommit` | host → board | 9 |
 | `0x08` | `kAdminUpdateResult` | board → host | 14 |
+| `0x09` | `kAdminStatsQuery` | host → board | 9 |
+| `0x0A` | `kAdminStatsReport` | board → host | 29 |
 
 The chunk frame at 271 bytes is by a wide margin the largest frame on this bus;
 the next largest is an output frame at maximum device counts, 50 bytes.
 `kMaxFrameBytes` is 271 for this reason, and any receive buffer that is not is
 an overrun waiting for the first update.
+
+**Admin frames are not one size, and a receiver must size them by command.**
+The table above is the whole point: only the version query and report are
+`kAdminPayloadBytes` long. A receiver that reads a fixed payload length for
+`kFrameAdmin` — as the board did until firmware 0.2.3 — waits for bytes that
+were never sent on every other admin frame, fails the CRC on whatever it
+assembles, and answers nothing. That is indistinguishable from an absent board
+at the other end. Read the two-byte prefix first, then size the body from
+`command`; a chunk needs a second step, because its head carries the length of
+the data behind it. An unknown command has no derivable length at all and must
+resync rather than guess.
 
 ### Version report
 
@@ -392,6 +405,27 @@ is maintained by hand and does not move between releases, so it cannot
 distinguish two dev snapshots; the build id is what can. Zero on either side
 means "unknown" and never counts as a difference, so a hand-built board is not
 reflashed on every start.
+
+### Stats report
+
+`kAdminStatsReport` carries a 20-byte body of the board's own transport
+counters, all `uint32`, little-endian:
+
+| Offset | Field | Meaning |
+|---|---|---|
+| 0 | `rxFrames` | Frames accepted by the parser |
+| 4 | `rxCrcFail` | Frames that arrived and failed CRC |
+| 8 | `rawBytes` | Loop passes that found a byte waiting |
+| 12 | `txFrames` | Frames transmitted |
+| 16 | `selected` | Times the token named this board |
+
+Diagnostics, not runtime state; nothing depends on them and the exchange does
+not count itself. They exist because the host cannot distinguish a board that
+never received the frame selecting it from one that received it and did not
+answer — both are silence from the other end of the wire. `selected` against
+`txFrames` separates the two, and comparing `selected` across boards shows
+which one is losing tokens. That comparison is what identified the receive
+buffer; see [§11](#11-timing).
 
 ### Update sequence
 
@@ -642,7 +676,8 @@ driving switch must be released before it fires again.
 | `RS485_MODE_SWITCH_DELAY` | 50 µs | Between asserting DE and the first bit, and around releasing. |
 | `switchReplyDelayUs` | **0** by default | Wait before asserting DE. Set via `--switch-reply-delay-us` or `SwitchReplyDelayUs` in the INI — **never** in the game YAML. |
 | post-TX settle | `switchReplyDelayUs / 4`, capped 2000 µs | Stalls the board after it has already gone high-Z. |
-| frame read timeout | frame wire time + 500 µs | How long `readBytes()` waits for a frame it has started reading. |
+| frame read timeout | frame wire time + 25 % + 700 µs | How long `readBytes()` waits for a frame it has started reading. |
+| UART receive buffer | 512 bytes (`Serial1.setFIFOSize`) | ~44 ms of traffic at 115200 baud. Must exceed `kMaxFrameBytes`. |
 
 DE is released when the UART reports the last bit has left the shift register
 (`uart0` BUSY clear), so the line is handed over as soon as the frame is
@@ -659,6 +694,47 @@ payload reads timing out, is about 3.2 ms.
 
 That figure is what sizes the host's switch reply window below — see the note
 there.
+
+The guard on the read timeout is **proportional**, not a flat constant. It was
+200 µs until firmware 0.2.10, which is 3 % of a 258-byte chunk's 22.4 ms wire
+time and vanishes under any preemption: firmware updates completed with 64-byte
+chunks and failed at 256 for precisely this reason.
+
+#### The receive buffer is the one that bites
+
+`Serial1.begin()` allocates the core's default 32-byte receive buffer unless
+`setFIFOSize()` is called first. Thirty-two bytes is **2.8 ms** of traffic at
+115200 baud, and it is smaller than a single update chunk.
+
+When a board's core is blocked for longer than the buffer holds, incoming bytes
+are dropped *before the parser sees them*. There is no CRC failure and no
+resync, because the bytes never arrived: the board simply never learns that the
+token named it, stays silent, and the host reports a switch-reply timeout it
+has no way to attribute. The busiest board — most switches, most interrupt work
+— loses the most, which reads as "the last board in the chain is unreliable"
+and sends everyone looking at terminations and cable runs.
+
+Measured on a Time Warp playfield with switches worked hard for three minutes,
+`switchReplyDelayUs = 0`:
+
+| Firmware | Buffer | Switch events | Chain timeouts | Busiest board's token deficit |
+|---|---|---|---|---|
+| 0.2.7 | 32 bytes | 472 | 219 | 113 |
+| 0.2.8 | 512 bytes | 649 | 1 | 1 |
+
+This is also what `switchReplyDelayUs` was compensating for. Three boards each
+waiting 2 ms is roughly 6 ms of dead air per chain, which is about what a 2.8 ms
+buffer needs to drain — hence a working value 40× the ADM3483's 50 µs turnaround
+and no fault ever findable in the wiring. With the buffer sized correctly the
+delay is not doing that job any more.
+
+Two traps this leaves behind, both worth stating plainly:
+
+- **An idle bus does not show the fault.** With no switches closing, boards send
+  short no-change replies and the delay can be lowered to zero with no visible
+  cost. Attract-mode measurements will call it safe when it is not. Only a hand
+  on the playfield reproduces it.
+- **`switchReplyDelayUs` must not be lowered on firmware older than 0.2.8.**
 
 ### Host side
 
@@ -737,6 +813,40 @@ The header has no protocol version field. Host and boards are matched by the
 SHA pin chain at build time, not by handshake, so a mismatched pair fails in
 whatever way the first incompatible frame happens to fail. `ppucVersion` in the
 game YAML versions the *configuration*, not the wire format.
+
+### A hung board cannot recover itself
+
+The watchdog in `main.cpp` turns off the high-power outputs when the main loop
+has not run for a second, which is the safety-critical half, but it never
+reboots. A board that wedges — observed after an aborted firmware update left a
+partial LittleFS staging file, where the next mount blocked with interrupts
+disabled — stays wedged, lit LED and all, until someone cycles the power. It
+answers nothing on the bus in the meantime.
+
+Arming `watchdog_reboot()` on the same stall condition would make this
+self-clearing. The reason it is not already is that a reboot mid-game is its own
+hazard, so the two failure modes need weighing against each other rather than a
+reflex fix.
+
+### Firmware update is slow, and the cost is LittleFS
+
+About 266 ms per 256-byte chunk, so roughly 2:49 for a 162 KB image per board.
+The bus is not the constraint — 271 bytes is 23 ms of wire time. The cost is
+`FirmwareUpdater::chunk()` doing an open/append/close on LittleFS per chunk, so
+every chunk pays a flash write and its erase. Holding the file open across the
+transfer, or buffering a flash page before writing, would cut this sharply.
+
+### The version query is not fully reliable
+
+A board occasionally fails to answer `kAdminVersionQuery` while answering
+everything else, including config acks and the switch chain. The host retries
+three times and still misses it, and a board that does not report a version is
+skipped for firmware updates entirely — it is reported as up to date.
+
+The 512-byte receive buffer improved this markedly but did not eliminate it, and
+the residual cause is not established. The failure signature from the host is a
+single sync byte followed by silence. Worth attacking with the stats counters,
+which did not exist when this was last investigated.
 
 ### Bus is at 46 % of the transceiver's ceiling
 
