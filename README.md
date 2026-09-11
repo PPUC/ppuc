@@ -291,7 +291,7 @@ different fault from one that configures and then goes quiet.
 after a transport error clears. But a board whose main loop has stopped also
 sits lit, because nothing is left running to change the LED. If a board is
 solid on and never blinked through the states above, treat it as hung rather
-than idle. Firmware 0.2.17 and later reboot themselves after five seconds in
+than idle. Firmware 0.3.0 and later reboot themselves after five seconds in
 that condition, so a board that stays lit indefinitely on current firmware is
 not coming back on its own and wants its power cycled.
 

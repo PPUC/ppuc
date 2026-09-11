@@ -358,7 +358,7 @@ an overrun waiting for the first update.
 **Admin frames are not one size, and a receiver must size them by command.**
 The table above is the whole point: only the version query and report are
 `kAdminPayloadBytes` long. A receiver that reads a fixed payload length for
-`kFrameAdmin` — as the board did until firmware 0.2.3 — waits for bytes that
+`kFrameAdmin` — as the board did before firmware 0.3.0 — waits for bytes that
 were never sent on every other admin frame, fails the CRC on whatever it
 assembles, and answers nothing. That is indistinguishable from an absent board
 at the other end. Read the two-byte prefix first, then size the body from
@@ -698,7 +698,7 @@ That figure is what sizes the host's switch reply window below — see the note
 there.
 
 The guard on the read timeout is **proportional**, not a flat constant. It was
-200 µs until firmware 0.2.10, which is 3 % of a 258-byte chunk's 22.4 ms wire
+200 µs before firmware 0.3.0, which is 3 % of a 258-byte chunk's 22.4 ms wire
 time and vanishes under any preemption: firmware updates completed with 64-byte
 chunks and failed at 256 for precisely this reason.
 
@@ -719,10 +719,10 @@ and sends everyone looking at terminations and cable runs.
 Measured on a Time Warp playfield with switches worked hard for three minutes,
 `switchReplyDelayUs = 0`:
 
-| Firmware | Buffer | Switch events | Chain timeouts | Busiest board's token deficit |
-|---|---|---|---|---|
-| 0.2.7 | 32 bytes | 472 | 219 | 113 |
-| 0.2.8 | 512 bytes | 649 | 1 | 1 |
+| Buffer | Switch events | Chain timeouts | Busiest board's token deficit |
+|---|---|---|---|
+| 32 bytes (before 0.3.0) | 472 | 219 | 113 |
+| 512 bytes (0.3.0) | 649 | 1 | 1 |
 
 This is also what `switchReplyDelayUs` was compensating for. Three boards each
 waiting 2 ms is roughly 6 ms of dead air per chain, which is about what a 2.8 ms
@@ -736,7 +736,7 @@ Two traps this leaves behind, both worth stating plainly:
   short no-change replies and the delay can be lowered to zero with no visible
   cost. Attract-mode measurements will call it safe when it is not. Only a hand
   on the playfield reproduces it.
-- **`switchReplyDelayUs` must not be lowered on firmware older than 0.2.8.**
+- **`switchReplyDelayUs` must not be lowered on firmware older than 0.3.0.**
 
 ### Host side
 
