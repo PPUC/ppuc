@@ -918,6 +918,10 @@ struct BenchTestRunner
   std::unordered_map<int, uint8_t> initialSwitchStates;
   std::unordered_map<int, uint8_t> currentSwitchStates;
   std::chrono::steady_clock::time_point switchFeedbackOffUntil{};
+  // Switches currently away from the state they were primed in. The GI is the
+  // bench tester's only feedback when the switch is not within sight of the
+  // screen, so it follows this rather than a timer.
+  size_t switchesAwayFromInitial = 0;
   std::string interactiveInput;
 };
 
@@ -1120,9 +1124,20 @@ class ScopedRawTerminalMode
 };
 #endif
 
+// The GI is off while any switch is away from the state it was primed in, and
+// comes back when every one of them has returned.
+//
+// It used to be a 100 ms pulse on the change alone, which meant holding a switch
+// closed looked the same as tapping it: a flicker either way, and nothing to
+// tell you a switch was stuck. Following the state answers "is anything closed
+// right now" instead of "did something just move".
+//
+// The timer is kept as a floor, not as the rule. A rollover passes in a few
+// milliseconds, and without a minimum the GI would drop for less time than an
+// eye can catch - which is the complaint that started this.
 static bool ComputeSwitchFeedbackGiOn(const BenchTestRunner& runner, std::chrono::steady_clock::time_point now)
 {
-  return now >= runner.switchFeedbackOffUntil;
+  return runner.switchesAwayFromInitial == 0 && now >= runner.switchFeedbackOffUntil;
 }
 
 static void UpdateSwitchFeedbackGi(PPUC* pPpuc, BenchTestRunner& runner)
@@ -1576,9 +1591,20 @@ struct FirmwareImage
 // A build id of zero means "not recorded" on either side and is never treated
 // as a difference, or a locally built board would look perpetually out of
 // date and be reflashed on every start.
-static bool FirmwareIsOutOfDate(const PPUCBoardVersion& board, const FirmwareImage& image, bool allowDev)
+static bool FirmwareIsOutOfDate(const PPUCBoardVersion& board, const FirmwareImage& image, bool allowDev,
+                                bool allowDowngrade)
 {
     if (board.FirmwareOrdinal() < image.ordinal)
+    {
+        return true;
+    }
+    // Going backwards is never automatic, but it has to be possible: bisecting
+    // a regression, or undoing a bad release, otherwise means a USB cable and
+    // the machine opened up. The image is verified against its announced CRC
+    // before the bootloader is pointed at it either way, so an older image is
+    // no more dangerous to install than a newer one - it is only a decision
+    // nobody should make by accident.
+    if (allowDowngrade && board.FirmwareOrdinal() > image.ordinal)
     {
         return true;
     }
@@ -1692,6 +1718,7 @@ static const char* FirmwareUpdateBlockedReason(const PPUCBoardVersion& board, bo
 }
 
 static void PerformFirmwareUpdates(PPUC* pPpuc, const std::vector<PPUCBoardVersion>& versions,
+                                   bool allowDowngrade,
                                    const char* firmwarePath, bool allowDev, bool allowUnvalidated)
 {
     // The runtime loop must not transmit into the middle of a transfer.
@@ -1706,7 +1733,7 @@ static void PerformFirmwareUpdates(PPUC* pPpuc, const std::vector<PPUCBoardVersi
         }
 
         const FirmwareImage meta = FindNewestFirmwareImage(firmwarePath, v.boardType);
-        if (!meta.found || !FirmwareIsOutOfDate(v, meta, allowDev))
+        if (!meta.found || !FirmwareIsOutOfDate(v, meta, allowDev, allowDowngrade))
         {
             continue;
         }
@@ -1789,6 +1816,7 @@ static void ReportBoardStats(PPUC* pPpuc, const char* when)
 }
 
 static void ReportBoardFirmware(PPUC* pPpuc, const char* firmwarePath, bool allowUpdate, bool allowDev,
+                                bool allowDowngrade,
                                 bool allowUnvalidated)
 {
     const std::vector<PPUCBoardVersion> versions = pPpuc->QueryBoardVersions();
@@ -1845,7 +1873,7 @@ static void ReportBoardFirmware(PPUC* pPpuc, const char* firmwarePath, bool allo
             continue;
         }
 
-        if (!FirmwareIsOutOfDate(v, image, allowDev))
+        if (!FirmwareIsOutOfDate(v, image, allowDev, allowDowngrade))
         {
             continue;
         }
@@ -1860,8 +1888,9 @@ static void ReportBoardFirmware(PPUC* pPpuc, const char* firmwarePath, bool allo
         }
 
         ++outdated;
-        printf("PPUC: board %u (%s) is out of date: %s -> %s\n", v.board, typeName ? typeName : "?",
-               v.FirmwareVersion().c_str(), image.version.c_str());
+        const bool downgrade = v.FirmwareOrdinal() > image.ordinal;
+        printf("PPUC: board %u (%s) will be %s: %s -> %s\n", v.board, typeName ? typeName : "?",
+               downgrade ? "DOWNGRADED" : "updated", v.FirmwareVersion().c_str(), image.version.c_str());
     }
 
     if (blocked > 0)
@@ -1881,7 +1910,7 @@ static void ReportBoardFirmware(PPUC* pPpuc, const char* firmwarePath, bool allo
     }
     else
     {
-        PerformFirmwareUpdates(pPpuc, versions, firmwarePath, allowDev, allowUnvalidated);
+        PerformFirmwareUpdates(pPpuc, versions, allowDowngrade, firmwarePath, allowDev, allowUnvalidated);
     }
 }
 
@@ -1945,6 +1974,7 @@ static void DrainSwitchUpdatesForTest(PPUC* pPpuc, BenchTestRunner& runner)
     const bool isActive = normalizedState != initialState;
     if (!wasActive && isActive)
     {
+      ++runner.switchesAwayFromInitial;
       const auto offUntil = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
       if (offUntil > runner.switchFeedbackOffUntil)
       {
@@ -1954,6 +1984,10 @@ static void DrainSwitchUpdatesForTest(PPUC* pPpuc, BenchTestRunner& runner)
       {
         pSpeechService->SpeakSwitchActivated(*it);
       }
+    }
+    else if (wasActive && !isActive && runner.switchesAwayFromInitial > 0)
+    {
+      --runner.switchesAwayFromInitial;
     }
     const char* stateName = switchState->state ? "closed" : "open";
 
@@ -2351,6 +2385,9 @@ static struct cag_option options[] = {
     {.identifier = '#',
      .access_name = "allow-firmware-update",
      .description = "Permit flashing boards whose firmware is older than the image in --firmware-path"},
+    {.identifier = '=',
+     .access_name = "allow-firmware-downgrade",
+     .description = "Also flash a board whose firmware is NEWER than the image, to go back a version"},
     {.identifier = '7',
      .access_name = "switch-reply-delay-us",
      .value_name = "VALUE",
@@ -2880,6 +2917,7 @@ int main(int argc, char** argv)
   const char* opt_firmware_path = NULL;
   bool opt_allow_firmware_update = false;
   bool opt_allow_dev_firmware_update = false;
+  bool opt_allow_firmware_downgrade = false;
   bool opt_allow_unvalidated_firmware_update = false;
   const char* opt_switch_reply_delay_us_arg = NULL;
   uint32_t opt_switch_reply_delay_us = 0;
@@ -3131,6 +3169,8 @@ int main(int argc, char** argv)
           opt_allow_firmware_update = ParseIniBool(value);
         else if (key == "AllowDevFirmwareUpdate")
           opt_allow_dev_firmware_update = ParseIniBool(value);
+        else if (key == "AllowFirmwareDowngrade")
+          opt_allow_firmware_downgrade = ParseIniBool(value);
         else if (key == "AllowUnvalidatedFirmwareUpdate")
           opt_allow_unvalidated_firmware_update = ParseIniBool(value);
         else if (key == "SwitchReplyDelayUs")
@@ -3404,6 +3444,9 @@ int main(int argc, char** argv)
         break;
       case ')':
         opt_allow_dev_firmware_update = true;
+        break;
+      case '=':
+        opt_allow_firmware_downgrade = true;
         break;
       case '|':
         opt_allow_unvalidated_firmware_update = true;
@@ -4411,6 +4454,7 @@ int main(int argc, char** argv)
       ReportBoardStats(pPpuc, "after version query");
     }
     ReportBoardFirmware(pPpuc, opt_firmware_path, opt_allow_firmware_update, opt_allow_dev_firmware_update,
+                        opt_allow_firmware_downgrade,
                         opt_allow_unvalidated_firmware_update);
   }
 
