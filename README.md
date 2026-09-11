@@ -265,6 +265,39 @@ not the packaged `B2SLegacy` plugin. Lookup is case-insensitive and checks:
 <game>/<folder-name>.directb2s
 ```
 
+### Reading The Boards' Built-in LED
+
+Each IO board has one built-in LED, and it is often the fastest way to tell what
+a board is doing when `ppuc-pinmame` reports nothing useful. The firmware drives
+it; this is how to read it from the other side of the machine.
+
+| Pattern | Meaning |
+|---|---|
+| 1 s on, 100 ms off | Powered, waiting for a host. Normal before `ppuc-pinmame` starts |
+| Flicker, irregular | Configuration frames arriving for *this* board |
+| 200 ms steps over 1 s | Configured and running |
+| 100 ms toggle | Frames arriving corrupt |
+| Solid on, steady | Transport recovered after an error - or, if it never blinked, a hung board |
+| Two quick pulses, then dark | A firmware image is being staged over RS485 |
+
+Two of these are worth knowing precisely.
+
+The **configuration flicker** is driven by the frames themselves rather than a
+timer, so it only appears on the board being addressed. If a board never
+flickers while the others do, it is not receiving its configuration - which is a
+different fault from one that configures and then goes quiet.
+
+**Solid on is ambiguous by history, not by design.** It is the normal state
+after a transport error clears. But a board whose main loop has stopped also
+sits lit, because nothing is left running to change the LED. If a board is
+solid on and never blinked through the states above, treat it as hung rather
+than idle. Firmware 0.2.17 and later reboot themselves after five seconds in
+that condition, so a board that stays lit indefinitely on current firmware is
+not coming back on its own and wants its power cycled.
+
+Older firmware blinked a boot-stage pulse count on power-up - up to nine fast
+blinks. That is gone; see the io-boards README for why.
+
 ### Switch Refresh And Ball Search
 
 `ppuc-pinmame` always runs a switch-refresh safety net. If no non-button switch
