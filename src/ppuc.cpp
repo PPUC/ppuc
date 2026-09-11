@@ -918,6 +918,10 @@ struct BenchTestRunner
   std::unordered_map<int, uint8_t> initialSwitchStates;
   std::unordered_map<int, uint8_t> currentSwitchStates;
   std::chrono::steady_clock::time_point switchFeedbackOffUntil{};
+  // Test start, so switch and GI lines carry a relative timestamp. Bounce is
+  // argued about in milliseconds; without one, "it fired twice" cannot be told
+  // apart from "it was pressed twice".
+  std::chrono::steady_clock::time_point startedAt = std::chrono::steady_clock::now();
   std::string interactiveInput;
 };
 
@@ -1131,6 +1135,14 @@ class ScopedRawTerminalMode
 // The timer is kept as a floor, not as the rule. A rollover passes in a few
 // milliseconds, and without a minimum the GI would drop for less time than an
 // eye can catch - which is the complaint that started this.
+// Milliseconds since the test started, for the switch and GI lines.
+static long BenchElapsedMs(const BenchTestRunner& runner)
+{
+  return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
+                                                               runner.startedAt)
+      .count();
+}
+
 static bool ComputeSwitchFeedbackGiOn(const BenchTestRunner& runner, std::chrono::steady_clock::time_point now)
 {
   // Derived from the states themselves rather than from a running count of
@@ -1173,7 +1185,7 @@ static void UpdateSwitchFeedbackGi(PPUC* pPpuc, BenchTestRunner& runner)
   // mystery to be reproduced.
   if (giOn)
   {
-    printf("GI on: all switches at rest\n");
+    printf("[%7ldms] GI on: all switches at rest\n", BenchElapsedMs(runner));
   }
   else
   {
@@ -1186,7 +1198,7 @@ static void UpdateSwitchFeedbackGi(PPUC* pPpuc, BenchTestRunner& runner)
         away += (away.empty() ? "" : ", ") + std::string("#") + std::to_string(number);
       }
     }
-    printf("GI off: %s\n", away.empty() ? "switch feedback hold" : away.c_str());
+    printf("[%7ldms] GI off: %s\n", BenchElapsedMs(runner), away.empty() ? "switch feedback hold" : away.c_str());
   }
   fflush(stdout);
 }
@@ -1625,7 +1637,8 @@ static void PrimeBenchSwitchStates(PPUC* pPpuc, BenchTestRunner& runner)
     pPpuc->SetGIState(/* string */ 1, 8);
   }
   runner.switchFeedbackGiState = true;
-  printf("GI on: %zu switch(es) primed at rest\n", runner.initialSwitchStates.size());
+  printf("[%7ldms] GI on: %zu switch(es) primed at rest\n", BenchElapsedMs(runner),
+         runner.initialSwitchStates.size());
   fflush(stdout);
 }
 
@@ -2068,12 +2081,14 @@ static void DrainSwitchUpdatesForTest(PPUC* pPpuc, BenchTestRunner& runner)
 
     if (it != switches.end())
     {
-      printf("Switch updated: #%d, %d (%s)\nBoard: %d\nPort: %d\nDescription: %s\n\n", switchState->number,
+      printf("[%7ldms] Switch updated: #%d, %d (%s)\nBoard: %d\nPort: %d\nDescription: %s\n\n",
+             BenchElapsedMs(runner), switchState->number,
              switchState->state, stateName, it->board, it->port, it->description.c_str());
     }
     else
     {
-      printf("Switch updated: #%d, %d (%s)\n\n", switchState->number, switchState->state, stateName);
+      printf("[%7ldms] Switch updated: #%d, %d (%s)\n\n", BenchElapsedMs(runner), switchState->number,
+             switchState->state, stateName);
     }
     fflush(stdout);
   }
