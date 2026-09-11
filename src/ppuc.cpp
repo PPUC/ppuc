@@ -1888,10 +1888,14 @@ static void ReportBoardStats(PPUC* pPpuc, const char* when)
       printf("PPUC:   board %u did not answer the stats query\n", s.board);
       continue;
     }
-    printf("PPUC:   board %u: selected=%u txFrames=%u missedReplies=%d versionQueries=%u versionReplies=%u rxFrames=%u rxCrcFail=%u\n",
+    printf("PPUC:   board %u: selected=%u txFrames=%u missedReplies=%d versionQueries=%u versionReplies=%u gate=%s%s gameOn=%u doorSw=%u rxFrames=%u rxCrcFail=%u\n",
            s.board, s.selected, s.txFrames,
            static_cast<int>(s.selected) - static_cast<int>(s.txFrames),
-           s.versionQueries, s.versionReplies, s.rxFrames, s.rxCrcFail);
+           s.versionQueries, s.versionReplies,
+           (s.highPowerGate & 1) ? "powerOn " : "powerOFF ",
+           (s.highPowerGate & 2) ? "doorClosed" : "doorOPEN",
+           (s.highPowerGate >> 8) & 0xFF, (s.highPowerGate >> 16) & 0xFF,
+           s.rxFrames, s.rxCrcFail);
   }
 }
 
@@ -4217,6 +4221,25 @@ int main(int argc, char** argv)
       pPpuc->SetSwitchState(pPpuc->GetCoinDoorClosedSwitch(), 1);
     }
     pPpuc->SetSolenoidState(pPpuc->GetGameOnSolenoid(), testRequiresHighPower ? 1 : 0);
+
+    // Let high power reach the boards before any coil is asked to fire.
+    //
+    // A board applies an output frame by walking the coil bitmap in index
+    // order, so a coil whose number sorts below the game-on solenoid is handled
+    // while power is still off - and a coil command that arrives with power off
+    // is discarded, not deferred. Setting both in the same instant therefore
+    // drops exactly the coil under test.
+    //
+    // A real game never hits this because PinMAME asserts game-on long before
+    // anything fires. A bench test does, every time.
+    if (testRequiresHighPower)
+    {
+      // Belt and braces. Firmware 0.2.20 and later raise the game-on solenoid
+      // ahead of the other coils within a frame, so this is no longer what
+      // makes the test work - but an older board in the chain still needs the
+      // power to arrive in an earlier frame than the coil.
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
 
     BenchTestMode testMode = BenchTestMode::SWITCHES;
     if (opt_lamp_test)
