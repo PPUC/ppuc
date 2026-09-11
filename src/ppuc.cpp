@@ -4697,9 +4697,13 @@ int main(int argc, char** argv)
       // GetTableInfo reports. Setting the path outright means --pinmame-path
       // still works when the two differ.
       pPluginBus->SetSettingOverride("VNI", "VniPath", serumAltColorPath);
+      // The plugin setting names the size to skip, chosen from a list -- 0
+      // None, 1 32px, 2 64px -- while this option names the size to keep, which
+      // is the question a PPUC user with one fixed panel actually has. So the
+      // two are inverses and this maps between them. Asking for 32 disables 64.
       if (opt_serum_resolution == 32 || opt_serum_resolution == 64)
       {
-        pPluginBus->SetSettingOverride("Serum", "Resolution", std::to_string(opt_serum_resolution));
+        pPluginBus->SetSettingOverride("Serum", "DisabledSize", opt_serum_resolution == 32 ? "2" : "1");
       }
       if (opt_serum_timeout)
       {
