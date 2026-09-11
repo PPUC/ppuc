@@ -1578,42 +1578,40 @@ static void PrimeBenchSwitchStates(PPUC* pPpuc, BenchTestRunner& runner)
 
   const auto switches = pPpuc->GetSwitches();
 
-  // Seed every configured switch as open before reading the queue.
+  // Read the states libppuc already holds rather than reconstructing them here.
   //
-  // Boards report changes, not state, so a machine sitting still queues
-  // nothing and draining alone primes no switches at all - measured as "0
-  // switch(es) primed" on a real playfield. Taking each switch's first report
-  // as its resting state instead is worse: the first report often *is* somebody
-  // pressing it, which records the pressed state as rest and inverts the switch
-  // for the whole session.
-  //
-  // Open is the right assumption because it is the one the host's own switch
-  // bitmap starts from, so the two agree. A switch that is actually closed
-  // differs from that bitmap and is therefore reported, which the drain below
-  // picks up.
+  // Draining the update queue primes nothing on a machine that is standing
+  // still: boards report changes, so nothing is queued and this measured "0
+  // switch(es) primed" on a real playfield. The host already keeps the answer -
+  // its switch bitmap, maintained by the switch replies and by the periodic
+  // full-state refresh - and that is the same thing a game reads to find a
+  // closed coin door or balls already sitting in the trough. Asking for a
+  // refresh first brings the boards' full state forward instead of waiting for
+  // the periodic one.
+  pPpuc->RequestSwitchRefresh();
+  const auto refreshDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+  const uint32_t chainBaseline = pPpuc->GetCleanSwitchReplyChainCount();
+  while (std::chrono::steady_clock::now() < refreshDeadline &&
+         pPpuc->GetCleanSwitchReplyChainCount() - chainBaseline < 2)
+  {
+    std::this_thread::sleep_for(std::chrono::microseconds(MAIN_LOOP_SLEEP_US));
+  }
+
   for (const PPUCSwitch& vswitch : switches)
   {
     if (IsVirtualizedBenchSwitch(pPpuc, vswitch))
     {
       continue;
     }
-    runner.initialSwitchStates[vswitch.number] = 0;
-    runner.currentSwitchStates[vswitch.number] = 0;
+    const uint8_t state = pPpuc->IsSwitchClosed(vswitch.number) ? 1 : 0;
+    runner.initialSwitchStates[vswitch.number] = state;
+    runner.currentSwitchStates[vswitch.number] = state;
   }
 
-  PPUCSwitchState* switchState = nullptr;
-  while ((switchState = pPpuc->GetNextSwitchState()) != nullptr)
+  // Anything the refresh queued has already been folded into the bitmap above,
+  // so drop it rather than replaying it as activity the tester did not cause.
+  while (pPpuc->GetNextSwitchState() != nullptr)
   {
-    auto it = std::find_if(switches.begin(), switches.end(),
-                           [switchState](const PPUCSwitch& vswitch) { return vswitch.number == switchState->number; });
-    if (it != switches.end() && IsVirtualizedBenchSwitch(pPpuc, *it))
-    {
-      continue;
-    }
-
-    const uint8_t normalizedState = switchState->state == 0 ? 0 : 1;
-    runner.initialSwitchStates[switchState->number] = normalizedState;
-    runner.currentSwitchStates[switchState->number] = normalizedState;
   }
 
   runner.initialSwitchStatesPrimed = true;
