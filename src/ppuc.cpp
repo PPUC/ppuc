@@ -918,10 +918,6 @@ struct BenchTestRunner
   std::unordered_map<int, uint8_t> initialSwitchStates;
   std::unordered_map<int, uint8_t> currentSwitchStates;
   std::chrono::steady_clock::time_point switchFeedbackOffUntil{};
-  // Switches currently away from the state they were primed in. The GI is the
-  // bench tester's only feedback when the switch is not within sight of the
-  // screen, so it follows this rather than a timer.
-  size_t switchesAwayFromInitial = 0;
   std::string interactiveInput;
 };
 
@@ -1137,7 +1133,22 @@ class ScopedRawTerminalMode
 // eye can catch - which is the complaint that started this.
 static bool ComputeSwitchFeedbackGiOn(const BenchTestRunner& runner, std::chrono::steady_clock::time_point now)
 {
-  return runner.switchesAwayFromInitial == 0 && now >= runner.switchFeedbackOffUntil;
+  // Derived from the states themselves rather than from a running count of
+  // activations. A count only stays right if every transition is observed, and
+  // one missed release leaves it stuck above zero - which turns the GI off for
+  // the rest of the session with nothing to say why. Comparing the maps is
+  // self-correcting: a switch that is back where it started stops counting,
+  // whatever happened in between. There are a few dozen switches, so the cost
+  // does not matter.
+  for (const auto& [number, current] : runner.currentSwitchStates)
+  {
+    const auto initialIt = runner.initialSwitchStates.find(number);
+    if (initialIt != runner.initialSwitchStates.end() && current != initialIt->second)
+    {
+      return false;
+    }
+  }
+  return now >= runner.switchFeedbackOffUntil;
 }
 
 static void UpdateSwitchFeedbackGi(PPUC* pPpuc, BenchTestRunner& runner)
@@ -1156,6 +1167,28 @@ static void UpdateSwitchFeedbackGi(PPUC* pPpuc, BenchTestRunner& runner)
 
   pPpuc->SetGIState(/* string */ 1, giOn ? 8 : 0);
   runner.switchFeedbackGiState = giOn;
+  // Printed because the GI is the one part of this test that cannot be checked
+  // from the log otherwise - someone has to be looking at the playfield. With
+  // the reason attached, a GI that stays off is self-explaining rather than a
+  // mystery to be reproduced.
+  if (giOn)
+  {
+    printf("GI on: all switches at rest\n");
+  }
+  else
+  {
+    std::string away;
+    for (const auto& [number, current] : runner.currentSwitchStates)
+    {
+      const auto initialIt = runner.initialSwitchStates.find(number);
+      if (initialIt != runner.initialSwitchStates.end() && current != initialIt->second)
+      {
+        away += (away.empty() ? "" : ", ") + std::string("#") + std::to_string(number);
+      }
+    }
+    printf("GI off: %s\n", away.empty() ? "switch feedback hold" : away.c_str());
+  }
+  fflush(stdout);
 }
 
 static void PrintBenchStepDetails(const BenchOutputStep& step)
@@ -1544,6 +1577,30 @@ static void PrimeBenchSwitchStates(PPUC* pPpuc, BenchTestRunner& runner)
   }
 
   const auto switches = pPpuc->GetSwitches();
+
+  // Seed every configured switch as open before reading the queue.
+  //
+  // Boards report changes, not state, so a machine sitting still queues
+  // nothing and draining alone primes no switches at all - measured as "0
+  // switch(es) primed" on a real playfield. Taking each switch's first report
+  // as its resting state instead is worse: the first report often *is* somebody
+  // pressing it, which records the pressed state as rest and inverts the switch
+  // for the whole session.
+  //
+  // Open is the right assumption because it is the one the host's own switch
+  // bitmap starts from, so the two agree. A switch that is actually closed
+  // differs from that bitmap and is therefore reported, which the drain below
+  // picks up.
+  for (const PPUCSwitch& vswitch : switches)
+  {
+    if (IsVirtualizedBenchSwitch(pPpuc, vswitch))
+    {
+      continue;
+    }
+    runner.initialSwitchStates[vswitch.number] = 0;
+    runner.currentSwitchStates[vswitch.number] = 0;
+  }
+
   PPUCSwitchState* switchState = nullptr;
   while ((switchState = pPpuc->GetNextSwitchState()) != nullptr)
   {
@@ -1560,6 +1617,18 @@ static void PrimeBenchSwitchStates(PPUC* pPpuc, BenchTestRunner& runner)
   }
 
   runner.initialSwitchStatesPrimed = true;
+
+  // Light the playfield before the test starts. The GI is what the tester reads
+  // the machine by, and starting dark means the first switch press is the only
+  // thing that ever turns it on. Every switch is at its primed state by
+  // definition here, so on is also the correct state to begin from.
+  if (pPpuc->GetPlatform() != PLATFORM_WPC)
+  {
+    pPpuc->SetGIState(/* string */ 1, 8);
+  }
+  runner.switchFeedbackGiState = true;
+  printf("GI on: %zu switch(es) primed at rest\n", runner.initialSwitchStates.size());
+  fflush(stdout);
 }
 
 
@@ -1959,22 +2028,34 @@ static void DrainSwitchUpdatesForTest(PPUC* pPpuc, BenchTestRunner& runner)
       continue;
     }
 
-    const auto currentIt = runner.currentSwitchStates.find(switchState->number);
-    const uint8_t previousState = currentIt == runner.currentSwitchStates.end()
-                                      ? runner.initialSwitchStates[switchState->number]
-                                      : currentIt->second;
+    // A switch seen for the first time here was not reported during priming,
+    // because boards report changes and a switch that has not moved has nothing
+    // to say. Its first report is therefore its resting state, not an
+    // activation.
+    //
+    // This used to read the initial state with operator[], which default
+    // inserts 0 - and that insertion also made the guard below unreachable. A
+    // switch resting closed was recorded as resting open, so its first report
+    // announced itself as pressed before anyone had touched the machine and
+    // then counted as away from its initial state for the rest of the session,
+    // holding the GI off with nothing to explain why.
     const auto initialIt = runner.initialSwitchStates.find(switchState->number);
     if (initialIt == runner.initialSwitchStates.end())
     {
+      runner.initialSwitchStates[switchState->number] = normalizedState;
+      runner.currentSwitchStates[switchState->number] = normalizedState;
       continue;
     }
+
+    const auto currentIt = runner.currentSwitchStates.find(switchState->number);
+    const uint8_t previousState =
+        currentIt == runner.currentSwitchStates.end() ? initialIt->second : currentIt->second;
     runner.currentSwitchStates[switchState->number] = normalizedState;
     const uint8_t initialState = initialIt->second;
     const bool wasActive = previousState != initialState;
     const bool isActive = normalizedState != initialState;
     if (!wasActive && isActive)
     {
-      ++runner.switchesAwayFromInitial;
       const auto offUntil = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
       if (offUntil > runner.switchFeedbackOffUntil)
       {
@@ -1984,10 +2065,6 @@ static void DrainSwitchUpdatesForTest(PPUC* pPpuc, BenchTestRunner& runner)
       {
         pSpeechService->SpeakSwitchActivated(*it);
       }
-    }
-    else if (wasActive && !isActive && runner.switchesAwayFromInitial > 0)
-    {
-      --runner.switchesAwayFromInitial;
     }
     const char* stateName = switchState->state ? "closed" : "open";
 

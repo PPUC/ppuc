@@ -208,7 +208,8 @@ void AudioOutput::QueueGameFrames(const int16_t* samples, size_t frameCount)
   }
 
   std::lock_guard<std::mutex> lock(mutex_);
-  QueueSamplesLocked(gameQueue_, gameResampler_, samples, frameCount * gameChannels_, gameFrequency_, gameChannels_);
+  QueueSamplesLocked(gameQueue_, gameResampler_, samples, frameCount * gameChannels_, gameFrequency_,
+                     gameChannels_, /* latencyManaged */ true);
 }
 
 void AudioOutput::QueuePluginSamples(uint64_t sourceId, uint64_t streamId, const int16_t* samples, size_t sampleCount,
@@ -222,7 +223,8 @@ void AudioOutput::QueuePluginSamples(uint64_t sourceId, uint64_t streamId, const
   std::lock_guard<std::mutex> lock(mutex_);
   PluginStream& stream = pluginStreams_[streamId];
   stream.sourceId = sourceId;
-  QueueSamplesLocked(stream.queue, stream.resampler, samples, sampleCount, frequency, channels);
+  QueueSamplesLocked(stream.queue, stream.resampler, samples, sampleCount, frequency, channels,
+                     /* latencyManaged */ true);
 }
 
 void AudioOutput::StopPluginStream(uint64_t streamId)
@@ -314,7 +316,8 @@ void AudioOutput::QueueSpeechSamples(const int16_t* samples, size_t sampleCount,
   }
 
   std::lock_guard<std::mutex> lock(mutex_);
-  QueueSamplesLocked(speechQueue_, speechResampler_, samples, sampleCount, frequency, channels);
+  QueueSamplesLocked(speechQueue_, speechResampler_, samples, sampleCount, frequency, channels,
+                     /* latencyManaged */ false);
 }
 
 void SDLCALL AudioOutput::OnDeviceNeedsAudio(void* userdata, SDL_AudioStream* stream, int additionalAmount,
@@ -433,7 +436,7 @@ void AudioOutput::DestroyResampler(Resampler& resampler)
 }
 
 void AudioOutput::QueueSamplesLocked(AudioMixer::Queue& queue, Resampler& resampler, const int16_t* samples,
-                                     size_t sampleCount, int frequency, int channels)
+                                     size_t sampleCount, int frequency, int channels, bool latencyManaged)
 {
   if (stream_ == nullptr)
   {
@@ -488,8 +491,11 @@ void AudioOutput::QueueSamplesLocked(AudioMixer::Queue& queue, Resampler& resamp
   }
   converted.resize(static_cast<size_t>(read) / sizeof(int16_t));
   AudioMixer::Enqueue(queue, std::move(converted));
-  TrimQueueLocked(queue);
-  SteerQueueLocked(queue, resampler);
+  if (latencyManaged)
+  {
+    TrimQueueLocked(queue);
+    SteerQueueLocked(queue, resampler);
+  }
 }
 
 void AudioOutput::SteerQueueLocked(const AudioMixer::Queue& queue, Resampler& resampler)

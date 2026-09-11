@@ -88,8 +88,17 @@ class AudioOutput
     int channels = 0;
     float ratio = 1.0f;
   };
+  // `latencyManaged` trims and rate-steers the queue to hold latency down.
+  // Right for a continuous stream whose producer runs in real time - ROM audio,
+  // AltSound - where a backlog is latency and dropping it is the lesser harm.
+  //
+  // Wrong for speech. An utterance is synthesised ahead of time and queued in
+  // one block, seconds of it at once, so trimming to the high-water mark throws
+  // away everything after the first fraction of a second and leaves a noise
+  // where a sentence should be. There is no latency to manage either: nothing
+  // is waiting on it to stay in sync.
   void QueueSamplesLocked(AudioMixer::Queue& queue, Resampler& resampler, const int16_t* samples, size_t sampleCount,
-                          int frequency, int channels);
+                          int frequency, int channels, bool latencyManaged);
   static void DestroyResampler(Resampler& resampler);
   // Keeps a lane from sitting further ahead of the device than
   // kTargetBufferedMs once a stall has pushed it there.
