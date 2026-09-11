@@ -1781,10 +1781,10 @@ static void ReportBoardStats(PPUC* pPpuc, const char* when)
       printf("PPUC:   board %u did not answer the stats query\n", s.board);
       continue;
     }
-    printf("PPUC:   board %u: selected=%u txFrames=%u missedReplies=%d rxFrames=%u rxCrcFail=%u rawBytes=%u\n",
+    printf("PPUC:   board %u: selected=%u txFrames=%u missedReplies=%d versionQueries=%u versionReplies=%u rxFrames=%u rxCrcFail=%u\n",
            s.board, s.selected, s.txFrames,
-           static_cast<int>(s.selected) - static_cast<int>(s.txFrames), s.rxFrames,
-           s.rxCrcFail, s.rawBytes);
+           static_cast<int>(s.selected) - static_cast<int>(s.txFrames),
+           s.versionQueries, s.versionReplies, s.rxFrames, s.rxCrcFail);
   }
 }
 
@@ -4402,6 +4402,14 @@ int main(int argc, char** argv)
   }
   if (!opt_no_serial)
   {
+    // Read straight after the version queries, so versionQueriesSeen can be
+    // compared across consecutive runs against how many the host actually sent.
+    // A board that fails the query is otherwise invisible: it is reported as up
+    // to date and skipped for updates.
+    if (opt_debug || opt_debug_errors)
+    {
+      ReportBoardStats(pPpuc, "after version query");
+    }
     ReportBoardFirmware(pPpuc, opt_firmware_path, opt_allow_firmware_update, opt_allow_dev_firmware_update,
                         opt_allow_unvalidated_firmware_update);
   }
@@ -4615,6 +4623,8 @@ int main(int argc, char** argv)
     }
 
     const auto loopStartedAt = std::chrono::steady_clock::now();
+    uint32_t boardsLostConfigurationSeen =
+        (!opt_no_serial && pPpuc != nullptr) ? pPpuc->GetBusHealth().boardsLostConfiguration : 0;
 
     while (running)
     {
@@ -4626,6 +4636,30 @@ int main(int argc, char** argv)
         printf("Exiting after %u ms as requested.\n", opt_exit_after_ms);
         running = false;
         break;
+      }
+
+      // A board that restarted mid-game has lost its per-device configuration:
+      // power levels, debounce, maxPulseTime, stop switches. libppuc's session
+      // resync puts back the setup and mapping frames but not those, so the
+      // board rejoins the chain driving coils without their protection. It also
+      // no longer matches the game state the rest of the machine is in.
+      //
+      // Ending the game is the honest response. Carrying on would mean playing
+      // a machine whose coil protection is gone, and there is no way to restore
+      // it without the full configuration pass that only startup performs.
+      if (!opt_no_serial && pPpuc != nullptr)
+      {
+        const uint32_t lostConfiguration = pPpuc->GetBusHealth().boardsLostConfiguration;
+        if (lostConfiguration > boardsLostConfigurationSeen)
+        {
+          boardsLostConfigurationSeen = lostConfiguration;
+          fprintf(stderr,
+                  "PPUC: a board restarted and lost its configuration; ending the game.\n"
+                  "PPUC: restart ppuc-pinmame to reconfigure the boards before playing again.\n");
+          running = false;
+          shutdown_requested = 1;
+          break;
+        }
       }
 
       if (!loggedIdentity && pEngine->TryGetIdentity(&identity))
