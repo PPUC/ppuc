@@ -348,7 +348,7 @@ exists — that is exactly when the host needs to know what it is talking to.
 | `0x07` | `kAdminUpdateCommit` | host → board | 9 |
 | `0x08` | `kAdminUpdateResult` | board → host | 14 |
 | `0x09` | `kAdminStatsQuery` | host → board | 9 |
-| `0x0A` | `kAdminStatsReport` | board → host | 29 |
+| `0x0A` | `kAdminStatsReport` | board → host | 37 |
 
 The chunk frame at 271 bytes is by a wide margin the largest frame on this bus;
 the next largest is an output frame at maximum device counts, 50 bytes.
@@ -408,7 +408,7 @@ reflashed on every start.
 
 ### Stats report
 
-`kAdminStatsReport` carries a 20-byte body of the board's own transport
+`kAdminStatsReport` carries a 28-byte body of the board's own transport
 counters, all `uint32`, little-endian:
 
 | Offset | Field | Meaning |
@@ -418,6 +418,8 @@ counters, all `uint32`, little-endian:
 | 8 | `rawBytes` | Loop passes that found a byte waiting |
 | 12 | `txFrames` | Frames transmitted |
 | 16 | `selected` | Times the token named this board |
+| 20 | `versionQueries` | Version queries that arrived, counted on receipt |
+| 24 | `versionReplies` | Version reports actually put on the wire |
 
 Diagnostics, not runtime state; nothing depends on them and the exchange does
 not count itself. They exist because the host cannot distinguish a board that
@@ -814,7 +816,7 @@ SHA pin chain at build time, not by handshake, so a mismatched pair fails in
 whatever way the first incompatible frame happens to fail. `ppucVersion` in the
 game YAML versions the *configuration*, not the wire format.
 
-### A hung board cannot recover itself
+### A hung board could not recover itself
 
 The watchdog in `main.cpp` turns off the high-power outputs when the main loop
 has not run for a second, which is the safety-critical half, but it never
@@ -823,30 +825,59 @@ partial LittleFS staging file, where the next mount blocked with interrupts
 disabled — stays wedged, lit LED and all, until someone cycles the power. It
 answers nothing on the bus in the meantime.
 
-Arming `watchdog_reboot()` on the same stall condition would make this
-self-clearing. The reason it is not already is that a reboot mid-game is its own
-hazard, so the two failure modes need weighing against each other rather than a
-reflex fix.
+The watchdog now arms `watchdog_reboot()` when the main loop has not run for 5 s
+— keyed only on the loop, never on bus silence, since a quiet bus just means the
+host is not running and rebooting for that would loop forever. The outputs are
+already off by then.
 
-### Firmware update is slow, and the cost is LittleFS
+A rebooted board comes back unconfigured and raises `kStatusNeedsSetup`. That is
+**not** recoverable by a session resync: a resync resends setup and mapping
+frames, but the per-device configuration — power, debounce, `maxPulseTime`, stop
+switches — is only sent by `Connect()`. A board that rejoined on setup alone
+would be driving coils with no protection, so libppuc counts it separately as
+`boardsLostConfiguration` and `ppuc-pinmame` ends the game rather than carrying
+on. Restarting is the only way back to a configured machine.
 
-About 266 ms per 256-byte chunk, so roughly 2:49 for a 162 KB image per board.
-The bus is not the constraint — 271 bytes is 23 ms of wire time. The cost is
-`FirmwareUpdater::chunk()` doing an open/append/close on LittleFS per chunk, so
-every chunk pays a flash write and its erase. Holding the file open across the
-transfer, or buffering a flash page before writing, would cut this sharply.
+### Firmware update was slow, and the cost was LittleFS
 
-### The version query is not fully reliable
+Was about 266 ms per 256-byte chunk — roughly 2:49 for a 162 KB image per board
+— because `FirmwareUpdater::chunk()` did an open/append/close on LittleFS per
+chunk, paying a flash write and its erase every time. The bus was never the
+constraint; 271 bytes is 23 ms of wire time.
 
-A board occasionally fails to answer `kAdminVersionQuery` while answering
-everything else, including config acks and the switch chain. The host retries
-three times and still misses it, and a board that does not report a version is
-skipped for firmware updates entirely — it is reported as up to date.
+The staging file is now held open for the transfer and chunks accumulate into a
+4 KB page buffer, which took three boards from 2:49 *each* to 1:45 for all
+three. This changes nothing about what can be installed: `commit()` still reads
+the staged file back out of flash and checks it against the announced CRC before
+the bootloader is pointed at anything, so a short or corrupt write is caught at
+exactly the same gate.
 
-The 512-byte receive buffer improved this markedly but did not eliminate it, and
-the residual cause is not established. The failure signature from the host is a
-single sync byte followed by silence. Worth attacking with the stats counters,
-which did not exist when this was last investigated.
+### Two readers on one serial port
+
+Resolved, recorded because the symptom was misleading for a long time.
+
+`PPUC::Connect()` starts the RS485 poll thread, and the host then runs its
+version queries, stats queries and firmware update on the same port. Both read
+it. The poll loop would consume a board's version report, discard it as an
+unexpected frame, and the query would time out — so a board that had already
+answered was reported as not answering, and then silently skipped for firmware
+updates because a board with no version is treated as up to date.
+
+Boards queried later failed more often, because `Run()` holds polling off for
+only 250 ms and three boards of queries outlast that.
+
+The counters settled it: across a run where two boards "failed", every board
+had `versionQueries == versionReplies` exactly. Each query arrived and each was
+answered. Nothing was wrong on the wire or on the boards at all.
+
+Serialising port access between the poll thread and the admin exchanges took the
+version query from roughly 27 % of boards answering, through 80-87 % with
+retries, to **30/30**. It also removed the residual switch-chain misses: a clean
+run now reports 1101 of 1101 chains clean with zero resyncs.
+
+The general rule this leaves: **anything that reads this port must hold
+`m_portMutex`.** A second reader does not corrupt frames, it steals them, and
+the loss is indistinguishable from a board that never replied.
 
 ### Bus is at 46 % of the transceiver's ceiling
 
