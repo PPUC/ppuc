@@ -1126,6 +1126,10 @@ ppuc_run_host_tests() {
          failures=1
    fi
 
+   # Every target ctest will run has to be named here. Building only ppuc_tests
+   # left ppuc_plugin_smoke registered but never compiled, so it reported "Not
+   # Run" on every build and the plugin half of the suite never actually ran.
+   # FakeCtlPlugin is what it loads, and a POST_BUILD step stages its plugin.cfg.
    ppuc_reset_stale_cmake_cache "${PPUC_SOURCE_ROOT}/build-tests" "${PPUC_SOURCE_ROOT}"
    ppuc_run_test_suite "ppuc" "${PPUC_SOURCE_ROOT}/build-tests" \
       "${log_dir}/ppuc.log" \
@@ -1133,7 +1137,8 @@ ppuc_run_host_tests() {
             -DPLATFORM='${platform}' -DARCH='${arch}' \
             -DPPUC_BUILD_TESTS=ON -DPPUC_BUILD_MENU=OFF -DPPUC_BUILD_BACKBOX=OFF \
             -DCMAKE_BUILD_TYPE='${BUILD_TYPE}' &&
-         cmake --build '${PPUC_SOURCE_ROOT}/build-tests' --target ppuc_tests -- -j${num_procs}" ||
+         cmake --build '${PPUC_SOURCE_ROOT}/build-tests' \
+            --target ppuc_tests ppuc_plugin_smoke FakeCtlPlugin -- -j${num_procs}" ||
       failures=1
 
    # Replay the detail for anything that failed, so the reason is visible
