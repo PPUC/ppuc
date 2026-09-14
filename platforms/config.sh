@@ -826,10 +826,14 @@ ppuc_build_vpinball_media_plugins() {
       -DPOST_BUILD_COPY_EXT_LIBS=ON \
       ${cmake_platform_args} \
       "${plugin_rpath_args[@]}" \
-      -DVPINBALL_PLUGIN_PACKAGE_DIR="${plugin_package_dir}"
-   # Upstream derives the plugin folder from the app bundle, which creates it as
-   # a side effect. Building the plugins without the app means nothing does, and
-   # the plugin.cfg copy is the first thing to notice.
+      -DBUILD_APP=OFF \
+      -DPLUGINS_DIR="${plugin_package_dir}"
+   # BUILD_APP=OFF builds the plugins without the vpinball application, and
+   # PLUGINS_DIR names where they land. Both are upstream options now; PPUC used
+   # to carry a patch for this. The directory still has to exist first: upstream
+   # derives it from the app bundle when there is one, which creates it as a
+   # side effect, and with no app nothing does -- the plugin.cfg copy is the
+   # first thing to notice.
    mkdir -p "${plugin_package_dir}/pup" "${plugin_package_dir}/altsound" "${plugin_package_dir}/b2s" \
       "${plugin_package_dir}/pinmame" "${plugin_package_dir}/alphadmd" "${plugin_package_dir}/serum" "${plugin_package_dir}/vni"
 
