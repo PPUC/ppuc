@@ -16,7 +16,7 @@ PINMAME_NVRAM_MAPS_SHA=7e63610464453e1902d6de2f90529a0705fdc2a2
 LIBPPUC_SHA=b514db24d7867b5ad4bbb565dfb382b0f483d5fb
 DOCTEST_VERSION=2.4.11
 LIBSDLDMD_SHA=f8d0970ce6b9a9daf01d1ab9a852b6ae7f59f4c9
-VPINBALL_SHA=0c65c363fec520bb209c083d85a88a34b93fd73b
+VPINBALL_SHA=8be4528ac368b4fdd694840cdd81eadde68cba86
 VPINBALL_SDL_IMAGE_SHA="${VPINBALL_SDL_IMAGE_SHA:-${SDL_IMAGE_SHA}}"
 # SDL_ttf, libaltsound and ffmpeg are not pinned here. Nothing in PPUC links
 # them -- they exist only for the VPX plugins -- so the version that matters is
