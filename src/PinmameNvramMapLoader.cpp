@@ -16,7 +16,9 @@
 // Only for the PINMAME_HARDWARE_GEN_* constants used to describe a generation
 // and to match it against a map path. No libpinmame function is called from
 // this translation unit.
-#include "libpinmame.h"
+// Only for the PINMAME_HARDWARE_GEN_* bits that give the plugin API's
+// hardwareGen its meaning; PinMAMEPlugin.h carries the value but not them.
+#include "pinmame/libpinmame.h"
 
 static std::string NormalizeRomNameForMapLookup(const char* rom)
 {

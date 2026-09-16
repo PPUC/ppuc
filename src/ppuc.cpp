@@ -69,7 +69,6 @@
 #include "io-boards/Event.h"
 #include "io-boards/PPUCProtocolV2.h"
 #include "io-boards/PPUCPlatforms.h"
-#include "libpinmame.h"
 
 #if !defined(_WIN32) && !defined(_WIN64)
 #include <sys/select.h>
@@ -4412,16 +4411,11 @@ int main(int argc, char** argv)
 
   if (opt_serum)
   {
-    char altcolorPath[PINMAME_MAX_PATH + 10];
-#if defined(_WIN32) || defined(_WIN64)
-    snprintf(altcolorPath, PINMAME_MAX_PATH + 8, "%saltcolor", vpmPath.c_str());
-#else
-    snprintf(altcolorPath, PINMAME_MAX_PATH + 8, "%saltcolor", vpmPath.c_str());
-#endif
+    const std::string altcolorPath = vpmPath + "altcolor";
 
     dmdConfig->SetLogCallback(DMDUtilLogCallback);
     dmdConfig->SetLogLevel(DMDUtil_LogLevel_INFO);
-    dmdConfig->SetAltColorPath(altcolorPath);
+    dmdConfig->SetAltColorPath(altcolorPath.c_str());
     serumAltColorPath = altcolorPath;
 
     // Colorization moves to the Serum plugin whenever a ROM is running. The

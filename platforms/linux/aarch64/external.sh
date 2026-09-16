@@ -343,7 +343,12 @@ cp -a flite/flite/install/include/* ../third-party/include/flite/
 cp -a flite/flite/install/lib/libflite*.a ../third-party/build-libs/linux-aarch64/
 
 cp -a pinmame/pinmame/build/libpinmame.{so,so.*} ../third-party/runtime-libs/linux-aarch64/
-cp -a pinmame/pinmame/src/libpinmame/libpinmame.h ../third-party/include/
+# Under pinmame/, beside PinMAMEPlugin.h: libpinmame's own install puts both
+# there, and a sysroot such as Buildroot's only has that layout. The flat copy
+# older scripts left behind is removed so it cannot hide a flat include.
+rm -f ../third-party/include/libpinmame.h
+mkdir -p ../third-party/include/pinmame
+cp -a pinmame/pinmame/src/libpinmame/libpinmame.h ../third-party/include/pinmame/
 rm -rf ../third-party/pinmame-nvram-maps
 mkdir -p ../third-party/pinmame-nvram-maps
 cp -a pinmame-nvram-maps/pinmame-nvram-maps/index.json ../third-party/pinmame-nvram-maps/

@@ -979,7 +979,7 @@ before the migration, as a standalone commit.
 **Dropping libpinmame from `ppuc-pinmame`'s link line matters for correctness,
 not just hygiene**: otherwise the executable and `plugin-pinmame` each carry a
 copy of libpinmame, and only one MAME global state can exist per process.
-`PinmameNvramMapLoader.cpp` keeps `#include "libpinmame.h"` header-only for
+`PinmameNvramMapLoader.cpp` keeps `#include "pinmame/libpinmame.h"` header-only for
 `PINMAME_HARDWARE_GEN_*` — a compile dependency, not a link dependency.
 
 ## Ordering

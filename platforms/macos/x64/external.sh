@@ -302,7 +302,12 @@ ppuc_copy_dylib_link_chain "espeak-ng/espeak-ng/install/lib" "libespeak-ng.dylib
 cp -R espeak-ng/espeak-ng/install/share/espeak-ng-data ../third-party/runtime-libs/macos-x64/
 
 ppuc_copy_dylib_link_chain "pinmame/pinmame/build" "libpinmame.dylib" "${PPUC_RUNTIME_DIR}"
-cp -a pinmame/pinmame/src/libpinmame/libpinmame.h ../third-party/include/
+# Under pinmame/, beside PinMAMEPlugin.h: libpinmame's own install puts both
+# there, and a sysroot such as Buildroot's only has that layout. The flat copy
+# older scripts left behind is removed so it cannot hide a flat include.
+rm -f ../third-party/include/libpinmame.h
+mkdir -p ../third-party/include/pinmame
+cp -a pinmame/pinmame/src/libpinmame/libpinmame.h ../third-party/include/pinmame/
 rm -rf ../third-party/pinmame-nvram-maps
 mkdir -p ../third-party/pinmame-nvram-maps
 cp -a pinmame-nvram-maps/pinmame-nvram-maps/index.json ../third-party/pinmame-nvram-maps/

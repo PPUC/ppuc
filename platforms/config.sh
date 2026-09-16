@@ -721,7 +721,7 @@ ppuc_prepare_vpinball_media_dependencies() {
    mkdir -p "${include_dir}/pinmame"
    # Under pinmame/, not at the include root: the plugin sources include
    # "pinmame/libpinmame.h", matching how vpinball stages its own pinmame.
-   cp -a "${PPUC_SOURCE_ROOT}/third-party/include/libpinmame.h" "${include_dir}/pinmame/"
+   cp -a "${PPUC_SOURCE_ROOT}/third-party/include/pinmame/libpinmame.h" "${include_dir}/pinmame/"
    cp -a "${PPUC_SOURCE_ROOT}/external/pinmame/pinmame/src/libpinmame/PinMAMEPlugin.h" \
       "${include_dir}/pinmame/"
    # PUPPlugin.h is not staged: PUPPI_MSG_QUEUE_EVENT was a PPUC-only addition

@@ -264,7 +264,12 @@ fi
 
 cp -a "${PINMAME_IMPORT_LIB}" ../third-party/build-libs/win-mingw-x64/pinmame64.dll.a
 cp -a "${PINMAME_RUNTIME_DLL}" ../third-party/runtime-libs/win-mingw-x64/pinmame64.dll
-cp -a pinmame/pinmame/src/libpinmame/libpinmame.h ../third-party/include/
+# Under pinmame/, beside PinMAMEPlugin.h: libpinmame's own install puts both
+# there, and a sysroot such as Buildroot's only has that layout. The flat copy
+# older scripts left behind is removed so it cannot hide a flat include.
+rm -f ../third-party/include/libpinmame.h
+mkdir -p ../third-party/include/pinmame
+cp -a pinmame/pinmame/src/libpinmame/libpinmame.h ../third-party/include/pinmame/
 rm -rf ../third-party/pinmame-nvram-maps
 mkdir -p ../third-party/pinmame-nvram-maps
 cp -a pinmame-nvram-maps/pinmame-nvram-maps/index.json ../third-party/pinmame-nvram-maps/
