@@ -179,13 +179,26 @@ ppuc_stage_lua_source() {
    cp -a lua/lua/src/*.c ../third-party/lua-src/
 }
 
+# A deployment target is the OLDEST macOS a binary will run on, so it must never
+# come from the SDK. The SDK is newer than the running system for as long as
+# Xcode is updated before macOS is, and taking the target from it produces
+# libraries the build machine itself cannot load: libusb built against SDK 27
+# picks up pipe2 and dyld refuses it on macOS 26 with "Symbol not found: _pipe2".
+# Nothing says so at build time -- it links clean and fails at first load, deep
+# inside a test run.
+#
+# The running system is the safe default: whatever it can build, it can run.
 ppuc_macos_deployment_target() {
+   local product_version
    if [ -n "${PPUC_MACOS_DEPLOYMENT_TARGET}" ]; then
       echo "${PPUC_MACOS_DEPLOYMENT_TARGET}"
    elif [ -n "${MACOSX_DEPLOYMENT_TARGET}" ]; then
       echo "${MACOSX_DEPLOYMENT_TARGET}"
-   elif command -v xcrun >/dev/null 2>&1; then
-      xcrun --sdk macosx --show-sdk-version 2>/dev/null || echo "14.0"
+   elif command -v sw_vers >/dev/null 2>&1 &&
+      product_version="$(sw_vers -productVersion 2>/dev/null)" &&
+      [ -n "${product_version}" ]; then
+      # major.minor: a patch level is not a deployment target.
+      echo "${product_version}" | cut -d. -f1,2
    else
       echo "14.0"
    fi
