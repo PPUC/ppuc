@@ -187,20 +187,27 @@ ppuc_stage_lua_source() {
 # Nothing says so at build time -- it links clean and fails at first load, deep
 # inside a test run.
 #
-# The running system is the safe default: whatever it can build, it can run.
+# Deriving it from the build machine instead -- from the SDK, or from the running
+# system -- fixes that one case and breaks two others. The value then differs per
+# machine, so a binary built here refuses to load on an older Mac; and it differs
+# between runs on one machine, which is how a tree ends up holding libraries built
+# for three different targets and the linker warns on every one of them:
+#
+#   ld: warning: building for macOS-14.0, but linking with dylib
+#       '@rpath/libSDL3.0.dylib' which was built for newer version 26.6
+#
+# So it is pinned. PinMAME pins the same floor, which is the practical minimum for
+# the rest of the stack anyway. Raise PPUC_MACOS_DEPLOYMENT_TARGET to build against
+# newer APIs, knowing the result will not run below it.
+PPUC_MACOS_DEPLOYMENT_TARGET_FLOOR="14.0"
+
 ppuc_macos_deployment_target() {
-   local product_version
    if [ -n "${PPUC_MACOS_DEPLOYMENT_TARGET}" ]; then
       echo "${PPUC_MACOS_DEPLOYMENT_TARGET}"
    elif [ -n "${MACOSX_DEPLOYMENT_TARGET}" ]; then
       echo "${MACOSX_DEPLOYMENT_TARGET}"
-   elif command -v sw_vers >/dev/null 2>&1 &&
-      product_version="$(sw_vers -productVersion 2>/dev/null)" &&
-      [ -n "${product_version}" ]; then
-      # major.minor: a patch level is not a deployment target.
-      echo "${product_version}" | cut -d. -f1,2
    else
-      echo "14.0"
+      echo "${PPUC_MACOS_DEPLOYMENT_TARGET_FLOOR}"
    fi
 }
 
@@ -511,6 +518,9 @@ ppuc_prepare_vpinball_media_dependencies() {
    else
       expected="self-contained-sdl-${vpinball_sdl_sha}-${VPINBALL_SDL_IMAGE_SHA}-${vpinball_sdl_ttf_sha}"
       sdl3_cmake_dir="${deps_root}/SDL3/SDL/build"
+   fi
+   if [ "${platform}" = "macos" ]; then
+      expected="${expected}-macos${MACOSX_DEPLOYMENT_TARGET}"
    fi
    found="$([ -f "${deps_root}/SDL3/cache.txt" ] && cat "${deps_root}/SDL3/cache.txt" || echo "")"
    if [ "${expected}" != "${found}" ]; then

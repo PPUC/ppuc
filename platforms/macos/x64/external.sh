@@ -69,7 +69,7 @@ if [ -n "${LIBSDLDMD_SHA}" ] && [ "${LIBSDLDMD_EXPECTED_SHA}" != "${LIBSDLDMD_FO
    cd ..
 fi
 
-SDL3_IMAGE_EXPECTED_SHA="${SDL_IMAGE_SHA}-${LIBSDLDMD_SHA}"
+SDL3_IMAGE_EXPECTED_SHA="${SDL_IMAGE_SHA}-${LIBSDLDMD_SHA}-macos${MACOSX_DEPLOYMENT_TARGET}"
 SDL3_IMAGE_FOUND_SHA="$([ -f SDL3_image/cache.txt ] && cat SDL3_image/cache.txt || echo "")"
 
 if [ "${SDL3_IMAGE_EXPECTED_SHA}" != "${SDL3_IMAGE_FOUND_SHA}" ]; then
@@ -103,7 +103,7 @@ if [ "${SDL3_IMAGE_EXPECTED_SHA}" != "${SDL3_IMAGE_FOUND_SHA}" ]; then
    cd ..
 fi
 
-SDL3_MIXER_EXPECTED_SHA="${SDL_MIXER_SHA}-${LIBSDLDMD_SHA}-mp3only-v1"
+SDL3_MIXER_EXPECTED_SHA="${SDL_MIXER_SHA}-${LIBSDLDMD_SHA}-mp3only-v1-macos${MACOSX_DEPLOYMENT_TARGET}"
 SDL3_MIXER_FOUND_SHA="$([ -f SDL3_mixer/cache.txt ] && cat SDL3_mixer/cache.txt || echo "")"
 
 if [ "${SDL3_MIXER_EXPECTED_SHA}" != "${SDL3_MIXER_FOUND_SHA}" ]; then
@@ -147,7 +147,7 @@ fi
 # espeak-ng
 #
 
-ESPEAK_NG_EXPECTED_SHA="${ESPEAK_NG_SHA}"
+ESPEAK_NG_EXPECTED_SHA="${ESPEAK_NG_SHA}-macos${MACOSX_DEPLOYMENT_TARGET}"
 ESPEAK_NG_FOUND_SHA="$([ -f espeak-ng/cache.txt ] && cat espeak-ng/cache.txt || echo "")"
 ESPEAK_NG_INSTALL_DIR="espeak-ng/espeak-ng/install"
 ESPEAK_NG_ARTIFACTS_OK=0
@@ -193,7 +193,7 @@ fi
 # pinamame
 #
 
-PINMAME_EXPECTED_SHA="${PINMAME_SHA}"
+PINMAME_EXPECTED_SHA="${PINMAME_SHA}-macos${MACOSX_DEPLOYMENT_TARGET}"
 PINMAME_FOUND_SHA="$([ -f pinmame/cache.txt ] && cat pinmame/cache.txt || echo "")"
 
 if [ "${PINMAME_EXPECTED_SHA}" != "${PINMAME_FOUND_SHA}" ]; then
@@ -256,7 +256,7 @@ fi
 # libppuc
 #
 
-LIBPPUC_EXPECTED_SHA="$(dependency_cache_key "${LIBPPUC_SHA}" LIBPPUC_SOURCE_DIR)"
+LIBPPUC_EXPECTED_SHA="$(dependency_cache_key "${LIBPPUC_SHA}" LIBPPUC_SOURCE_DIR)-macos${MACOSX_DEPLOYMENT_TARGET}"
 LIBPPUC_FOUND_SHA="$([ -f libppuc/cache.txt ] && cat libppuc/cache.txt || echo "")"
 
 if [ "${LIBPPUC_EXPECTED_SHA}" != "${LIBPPUC_FOUND_SHA}" ]; then

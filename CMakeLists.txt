@@ -20,15 +20,11 @@ if(PLATFORM STREQUAL "macos" AND NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET)
    if(DEFINED ENV{MACOSX_DEPLOYMENT_TARGET} AND NOT "$ENV{MACOSX_DEPLOYMENT_TARGET}" STREQUAL "")
       set(CMAKE_OSX_DEPLOYMENT_TARGET "$ENV{MACOSX_DEPLOYMENT_TARGET}")
    else()
-      execute_process(
-         COMMAND xcrun --sdk macosx --show-sdk-version
-         OUTPUT_VARIABLE PPUC_MACOS_SDK_VERSION
-         OUTPUT_STRIP_TRAILING_WHITESPACE
-         ERROR_QUIET
-      )
-      if(PPUC_MACOS_SDK_VERSION)
-         set(CMAKE_OSX_DEPLOYMENT_TARGET "${PPUC_MACOS_SDK_VERSION}")
-      endif()
+      # The same pinned floor platforms/config.sh uses, and for the same reasons:
+      # the SDK is not a deployment target, and a machine-derived one makes the
+      # binaries unportable. A build driven by platforms/macos/*/build.sh always
+      # passes the value explicitly; this is only for a bare cmake invocation.
+      set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0")
    endif()
 endif()
 
