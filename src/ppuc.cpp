@@ -744,6 +744,19 @@ static std::optional<std::filesystem::path> FindFirstExistingPath(
   return std::nullopt;
 }
 
+// A file the operating system left behind, rather than content someone put
+// there. macOS writes an AppleDouble sidecar called "._<name>" beside every
+// file it copies onto a FAT volume - a USB stick, say - and that sidecar
+// carries the same extension as the file it shadows, so filtering by extension
+// lets it straight through. It holds a few KB of resource fork, so loading one
+// as an mp3 or a Lua script fails, and on a game folder copied from a Mac that
+// is every file. .DS_Store and other dot files fall out of the same rule.
+static bool IsOperatingSystemMetadata(const std::filesystem::path& path)
+{
+  const std::string name = path.filename().string();
+  return !name.empty() && name.front() == '.';
+}
+
 static std::string CollectMusicFilesCsv(const std::filesystem::path& musicDirectory)
 {
   std::error_code ec;
@@ -765,6 +778,10 @@ static std::string CollectMusicFilesCsv(const std::filesystem::path& musicDirect
       continue;
     }
     const std::filesystem::path path = entry.path();
+    if (IsOperatingSystemMetadata(path))
+    {
+      continue;
+    }
     if (PathExtensionEquals(path, {".mp3", ".ogg", ".wav", ".flac", ".opus", ".m4a"}))
     {
       files.push_back(path);
@@ -818,6 +835,10 @@ static bool CollectRulesScripts(const char* pathArg, std::vector<std::string>& s
         continue;
       }
       const std::filesystem::path filePath = entry.path();
+      if (IsOperatingSystemMetadata(filePath))
+      {
+        continue;
+      }
       if (filePath.extension() == ".lua")
       {
         scripts.push_back(filePath.string());
