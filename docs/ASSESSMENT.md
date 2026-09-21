@@ -268,10 +268,12 @@ of why the architecture tolerates a non-realtime host at all.
 *Caveat:* `maxPulseTime` is not the only valid protection, and requiring it
 everywhere would be wrong — see §4.1.
 
-**The debounce taxonomy.** `standard` / `fastFlip` / `slowStable`, with
-`fastFlip` accepting the close edge immediately and debouncing only the open
-edge, plus per-switch-type millisecond guidance in the README. Hard-won domain
-knowledge made explicit and teachable.
+**The debounce taxonomy.** `standard` / `fastFlip`, with `fastFlip` accepting
+the close edge immediately and debouncing only the open edge, plus
+per-switch-type millisecond guidance in the README. Hard-won domain knowledge
+made explicit and teachable. A third mode, `slowStable`, was removed: it shared
+`standard`'s window and differed only in being excluded from the interrupt
+commit path, which made switches report late or not at all.
 
 **Transport stack choices.** Raspberry Pi with the kernel RS485 driver on a real
 UART, rather than a USB adapter; ZeDMD over kernel SPI rather than USB. Both

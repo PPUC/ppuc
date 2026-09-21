@@ -241,8 +241,8 @@ GI string to `onBrightness`, and to `offBrightness` when it goes inactive. See
 
 Optional metadata the runtime depends on: `button: true` on switches
 (cabinet/flipper controls, excluded from idle detection), `ballSearch: true` on
-PWM outputs, `debounce` + `debounceMode` (`standard` / `fastFlip` /
-`slowStable`), `pollEvents: true` on switch-capable boards.
+PWM outputs, `debounce` + `debounceMode` (`standard` / `fastFlip`),
+`pollEvents: true` on switch-capable boards.
 
 > **Three-way contract.** Firmware config topics
 > (`io-boards/src/EventDispatcher/Event.h`), YAML validation
