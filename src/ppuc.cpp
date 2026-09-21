@@ -252,6 +252,15 @@ struct RenderRequest
 std::queue<RenderRequest> renderQueue;
 std::mutex renderMutex;
 RenderCommand currentTransliteCommand = RenderCommand::RENDER_ATTRACT;
+// Whether anything has been drawn yet.
+//
+// Without this, the first request is compared against an initial value that
+// already matches it and dropped as a duplicate. Startup is attract mode, the
+// first request is therefore RENDER_ATTRACT, and the attract translite was
+// never queued at all - the screen stayed blank until the state changed, so
+// the translite appeared only when a game was started and looked like it was
+// being switched off deliberately whenever one ended.
+bool transliteCommandApplied = false;
 
 static bool HasTransliteAttractImage()
 {
@@ -265,10 +274,11 @@ static bool HasTransliteAttractImage()
 static void QueueTransliteRender(RenderCommand command)
 {
   std::lock_guard<std::mutex> lock(renderMutex);
-  if (currentTransliteCommand == command)
+  if (transliteCommandApplied && currentTransliteCommand == command)
   {
     return;
   }
+  transliteCommandApplied = true;
   currentTransliteCommand = command;
   renderQueue.push(RenderRequest{command});
 }
@@ -4792,6 +4802,20 @@ int main(int argc, char** argv)
     const bool pollGis = pEngine->HasCapability(GameEngine::Capability::ChangedGis);
 
     ball_search_game_running.store(false, std::memory_order_release);
+
+    // Draw the attract translite now that everything else has finished taking
+    // the display.
+    //
+    // Setup presents it once, but the plugins and the media host come up
+    // afterwards and create their own windows. On KMSDRM there is no
+    // compositor and no overlapping: whoever sets a mode last owns the screen,
+    // so that first present was being thrown away a moment later. Nothing
+    // redrew it, because the only thing that does is OnGameRunningChanged and
+    // it fires on a change - attract mode at startup is not a change from
+    // anything. The translite therefore showed up for as long as setup took,
+    // went black, and returned when a game was started.
+    QueueTransliteRender(RenderCommand::RENDER_ATTRACT);
+
     pPpuc->StartUpdates();
     if (opt_close_coin_door)
     {
@@ -5046,8 +5070,14 @@ int main(int argc, char** argv)
                 printf("Failed to render attract translite\n");
               }
 #else
+              // Fall back to the in-game image when no attract one is
+              // configured, as the KMS path above already does. Passing the
+              // null texture instead fails every time and says so on every
+              // transition for the rest of the session.
               if (!SDL_SetRenderDrawColor(pTransliteRenderer, 0, 0, 0, 255) || !SDL_RenderClear(pTransliteRenderer) ||
-                  !SDL_RenderTexture(pTransliteRenderer, pTransliteAttractTexture, nullptr, nullptr) ||
+                  !SDL_RenderTexture(pTransliteRenderer,
+                                     pTransliteAttractTexture ? pTransliteAttractTexture : pTransliteTexture, nullptr,
+                                     nullptr) ||
                   !SDL_RenderPresent(pTransliteRenderer) || !SDL_FlushRenderer(pTransliteRenderer))
               {
                 printf("Failed to render attract translite: %s\n", SDL_GetError());
