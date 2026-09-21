@@ -5002,6 +5002,22 @@ int main(int argc, char** argv)
         {
           const RenderRequest& request = renderQueue.front();
 
+          // A game folder without a translite image never gets a window or a
+          // renderer, but the attract/game transition still fires - it follows
+          // game state, not what is configured. Rendering anyway hands SDL a
+          // null renderer and prints "Parameter 'renderer' is invalid" on every
+          // transition for the rest of the session.
+#ifdef PPUC_USE_KMSDMD
+          const bool transliteReady = pTransliteDisplay != nullptr;
+#else
+          const bool transliteReady = pTransliteRenderer != nullptr;
+#endif
+          if (!transliteReady)
+          {
+            renderQueue.pop();
+            continue;
+          }
+
           switch (request.command)
           {
             case RenderCommand::RENDER_GAME:
