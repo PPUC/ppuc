@@ -105,6 +105,22 @@ endif()
 if(EXISTS "${PPUC_STAGED_INCLUDE_DIR}")
    list(APPEND PPUC_INCLUDE_DIRS "${PPUC_STAGED_INCLUDE_DIR}")
 endif()
+
+# SDL_ttf comes from the VPX media dependencies, which are only built where the
+# VPX plugins are (macOS and Linux). Found rather than assumed, so a platform
+# without it still builds; the firmware update screen then shows its bar and
+# colour without words.
+find_path(PPUC_SDL3_TTF_INCLUDE_DIR
+   NAMES SDL3_ttf/SDL_ttf.h
+   PATHS "${PPUC_STAGED_INCLUDE_DIR}"
+)
+if(PPUC_SDL3_TTF_INCLUDE_DIR)
+   set(PPUC_HAVE_SDL3_TTF ON)
+   message(STATUS "SDL3_ttf: ${PPUC_SDL3_TTF_INCLUDE_DIR}")
+else()
+   set(PPUC_HAVE_SDL3_TTF OFF)
+   message(STATUS "SDL3_ttf: not found, firmware update screen will have no text")
+endif()
 list(APPEND PPUC_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/src")
 get_filename_component(PPUC_REAL_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}" REALPATH)
 if(NOT DEFINED PPUC_VPINBALL_DIR OR PPUC_VPINBALL_DIR STREQUAL "")
@@ -426,6 +442,10 @@ if(PPUC_ENABLE_ESPEAK_NG)
 endif()
 if(PPUC_ENABLE_SDL3_MIXER)
    target_compile_definitions(ppuc-pinmame PRIVATE PPUC_HAS_SDL3_MIXER)
+endif()
+if(PPUC_HAVE_SDL3_TTF)
+   target_compile_definitions(ppuc-pinmame PRIVATE PPUC_HAS_SDL3_TTF)
+   target_link_libraries(ppuc-pinmame LINK_PUBLIC SDL3_ttf)
 endif()
 
 if(PLATFORM STREQUAL "win" OR PLATFORM STREQUAL "win-mingw")

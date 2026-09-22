@@ -18,8 +18,8 @@ DOCTEST_VERSION=2.4.11
 LIBSDLDMD_SHA=3ea5f2e84878772f7cd73cbac3dcbfe07c5a1a89
 VPINBALL_SHA=8be4528ac368b4fdd694840cdd81eadde68cba86
 VPINBALL_SDL_IMAGE_SHA="${VPINBALL_SDL_IMAGE_SHA:-${SDL_IMAGE_SHA}}"
-# SDL_ttf, libaltsound and ffmpeg are not pinned here. Nothing in PPUC links
-# them -- they exist only for the VPX plugins -- so the version that matters is
+# libaltsound and ffmpeg are not pinned here. Nothing in PPUC links them --
+# they exist only for the VPX plugins -- so the version that matters is
 # whatever vpinball expects, and ppuc_vpinball_pin reads it from the staged
 # vpinball tree. Copies kept here by hand drifted: FFmpeg sat three revisions
 # behind vpinball's with nothing to notice it.
@@ -608,6 +608,27 @@ ppuc_prepare_vpinball_media_dependencies() {
       ppuc_vpinball_media_required_dir_copy "${deps_root}/SDL3/SDL_image/include/SDL3_image" "${include_dir}/"
    fi
    ppuc_vpinball_media_required_dir_copy "${deps_root}/SDL3/SDL_ttf/include/SDL3_ttf" "${include_dir}/"
+
+   # SDL_ttf is shared with PPUC itself, not only staged for the plugins.
+   #
+   # It is built here because the VPX plugins need it, but it is built against
+   # the SDL3 that PPUC links - reuse_ppuc_sdl_stack is what the cache key
+   # records - so there is exactly one SDL3 in the process either way. Building
+   # a second copy for PPUC would create the version skew that sharing avoids.
+   #
+   # VPX renders a virtual playfield and PPUC drives a real one; the rendering
+   # stack underneath is meant to be the same one. SDL and SDL_image are
+   # already shared this way, and SDL_ttf was the odd one out only because
+   # nothing in PPUC asked for it yet.
+   ppuc_vpinball_media_required_dir_copy "${deps_root}/SDL3/SDL_ttf/include/SDL3_ttf" \
+      "${ppuc_include_dir}/"
+   # Only reached on macOS and Linux: Windows does not build the VPX media
+   # dependencies, and PPUC's CMake finds SDL_ttf rather than assuming it.
+   if [ "${platform}" = "macos" ]; then
+      ppuc_copy_dylib_link_chain "${deps_root}/SDL3/SDL_ttf/build" "libSDL3_ttf.dylib" "${ppuc_runtime_dir}"
+   else
+      ppuc_vpinball_media_required_glob_copy "${deps_root}/SDL3/SDL_ttf/build/libSDL3_ttf.so*" "${ppuc_runtime_dir}"
+   fi
 
    local vpinball_libaltsound_sha
    if ! vpinball_libaltsound_sha="$(ppuc_vpinball_pin LIBALTSOUND_SHA)"; then
