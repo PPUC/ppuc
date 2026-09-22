@@ -1937,6 +1937,17 @@ static bool EnsureFirmwareWindow()
     }
 
     firmwareOwnsWindow = true;
+    // With no translite and no virtual DMD nothing has started SDL video yet.
+    // Reference counted, so this is harmless when something already has.
+    if (!SDL_InitSubSystem(SDL_INIT_VIDEO))
+    {
+        printf("PPUC: no firmware update screen: %s\n", SDL_GetError());
+        return false;
+    }
+    if (!g_firmwareWindowOptions.windowed)
+    {
+        SDL_HideCursor();
+    }
     if (!SDL_CreateWindowAndRenderer("PPUC Firmware Update", g_firmwareWindowOptions.width,
                                      g_firmwareWindowOptions.height,
                                      g_firmwareWindowOptions.windowed ? SDL_WINDOW_BORDERLESS
@@ -4464,6 +4475,14 @@ int main(int argc, char** argv)
     {
       printf("SDL_Init Error: %s\n", SDL_GetError());
       return 1;
+    }
+    // A cabinet has no mouse, and SDL's KMS/DRM backend draws a cursor on the
+    // translite by default. libkmsdmd, which drew the translite before, had no
+    // cursor at all, so this appeared as a regression rather than a choice.
+    // Kept in a window, where a desktop user may still want to point at it.
+    if (!opt_translite_window)
+    {
+      SDL_HideCursor();
     }
   }
 #endif

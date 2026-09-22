@@ -1712,6 +1712,10 @@ bool MediaPluginHost::Impl::EnsureBackglassWindow()
   if (options_.backglassScreen >= 0)
   {
     SDL_SetWindowFullscreenMode(backglassWindow_, nullptr);
+    // A cabinet has no mouse. On a machine configured for B2S or PUP instead
+    // of a translite this is the only place SDL video starts, so hiding the
+    // cursor alongside the translite would not reach it.
+    SDL_HideCursor();
   }
   SDL_ShowWindow(backglassWindow_);
 
