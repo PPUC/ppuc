@@ -83,6 +83,9 @@
 
 #define MAIN_LOOP_SLEEP_US 20  // Main loop sleep time in microseconds
 constexpr uint32_t kDefaultSwitchRefreshIdleMs = 15000;
+// Exit status after flashing boards: they are rebooting into the new firmware
+// and ppuc-pinmame has to be started again to configure them.
+constexpr int kExitRestartAfterFirmwareUpdate = 75;
 constexpr uint32_t kDefaultOutputFrameIntervalMs = 4;
 constexpr uint32_t kDefaultBallSearchDelayMs = 15000;
 constexpr uint32_t kDefaultBallSearchRoundDelayMs = 5000;
@@ -4954,30 +4957,8 @@ int main(int argc, char** argv)
 
   while (!opt_no_display && pDmd->IsFinding()) std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-  if (!opt_no_serial && !pPpuc->Connect())
-  {
-    printf("Unable to open serial communication to PPUC boards on %s.\n", opt_serial ? opt_serial : "(null)");
-    return 1;
-  }
   if (!opt_no_serial)
   {
-    // Read straight after the version queries, so versionQueriesSeen can be
-    // compared across consecutive runs against how many the host actually sent.
-    // A board that fails the query is otherwise invisible: it is reported as up
-    // to date and skipped for updates.
-    if (opt_debug || opt_debug_errors)
-    {
-      ReportBoardStats(pPpuc, "after version query");
-    }
-    // A flashed board is rebooting and has lost its configuration, so there is
-    // nothing to run the game against. Stopping here is what makes an
-    // unattended update safe: the supervisor starts ppuc-pinmame again, the
-    // boards answer with their new version, nothing is out of date any more,
-    // and the second run configures them from scratch and plays.
-    //
-    // Continuing instead - which is what used to happen, after printing an
-    // instruction to restart that nothing acted on - meant configuring boards
-    // mid-reboot and starting a game on whichever ones happened to answer.
     // The update screen uses the backbox screen, which is the translite's
     // screen whether or not this game has a translite to put on it.
     g_firmwareWindowOptions.width = opt_translite_width > 0 ? opt_translite_width : 1920;
@@ -4985,13 +4966,47 @@ int main(int argc, char** argv)
     g_firmwareWindowOptions.screen = opt_translite_screen;
     g_firmwareWindowOptions.windowed = opt_translite_window;
 
-    if (ReportBoardFirmware(pPpuc, opt_firmware_path, opt_allow_firmware_update, opt_allow_dev_firmware_update,
-                            opt_allow_firmware_downgrade,
-                            opt_allow_unvalidated_firmware_update))
+    // Firmware is checked once the boards have booted and before any of them
+    // is configured. It used to be checked after configuration, so a board
+    // that could not be configured stopped the run before the check was
+    // reached - and firmware too old or too broken to accept the configuration
+    // was exactly the firmware the update could never replace. The version
+    // query and the transfer need no session, and with the poll loop not yet
+    // started nothing else is on the bus.
+    pPpuc->SetBeforeConfigurationHook(
+        [&]() -> bool
+        {
+          const bool flashed =
+              ReportBoardFirmware(pPpuc, opt_firmware_path, opt_allow_firmware_update, opt_allow_dev_firmware_update,
+                                  opt_allow_firmware_downgrade, opt_allow_unvalidated_firmware_update);
+          // Read straight after the version queries, so versionQueriesSeen can
+          // be compared across consecutive runs against how many the host
+          // actually sent. A board that fails the query is otherwise
+          // invisible: it is reported as up to date and skipped for updates.
+          if (opt_debug || opt_debug_errors)
+          {
+            ReportBoardStats(pPpuc, "after version query");
+          }
+          return !flashed;
+        });
+  }
+
+  if (!opt_no_serial && !pPpuc->Connect())
+  {
+    if (pPpuc->WasStoppedBeforeConfiguration())
     {
+      // A flashed board is rebooting into its new firmware, so there is
+      // nothing to configure yet. Stopping here is what makes an unattended
+      // update safe: the supervisor starts ppuc-pinmame again, every board
+      // answers with its new version, and that run configures them and plays.
       pPpuc->Disconnect();
-      return 0;
+      // Not an error and not a clean finish either: "run me again". A
+      // supervisor tells it apart from a failure by this code, so it can
+      // restart without reporting a crash. 75 is EX_TEMPFAIL from sysexits.h.
+      return kExitRestartAfterFirmwareUpdate;
     }
+    printf("Unable to open serial communication to PPUC boards on %s.\n", opt_serial ? opt_serial : "(null)");
+    return 1;
   }
 
   BallSearchRunner ballSearchRunner =
