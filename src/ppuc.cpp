@@ -63,6 +63,9 @@
 #include "SDL3/SDL.h"
 #include "SDL3/SDL_filesystem.h"
 #include "SDL3_image/SDL_image.h"
+#if !defined(PPUC_USE_KMSDMD) && defined(PPUC_HAS_SDL3_TTF)
+#include "SDL3_ttf/SDL_ttf.h"
+#endif
 #include "SpeechCliSupport.h"
 #include "SpeechService.h"
 #include "cargs.h"
@@ -1790,8 +1793,316 @@ static FirmwareImage FindNewestFirmwareImage(const char* directory, uint8_t boar
 // of date is the part worth getting visibly right before anything writes to
 // one.
 
+#ifndef PPUC_USE_KMSDMD
+// The screen shown while a board is being flashed.
+//
+// A firmware transfer takes minutes, and for all of it the machine looks dead:
+// the translite is whatever was last drawn, no score changes, nothing moves.
+// The one thing that must not happen during those minutes is someone deciding
+// it has hung and reaching for the power switch, because a board interrupted
+// mid-write does not come back and has no BOOTSEL to recover through.
+//
+// So this takes over the backbox screen for the duration and says what is
+// happening and what not to do.
+struct FirmwareScreen
+{
+    bool active = false;
+    uint8_t board = 0;
+    size_t index = 0;   // 1-based, for "board 2 of 4"
+    size_t count = 0;
+    std::string type;
+    std::string from;
+    std::string to;
+};
+
+static FirmwareScreen g_firmwareScreen;
+
+// How to open a window if the machine has none. Filled in from the translite
+// options, because "the backbox screen" is the same screen either way.
+struct FirmwareScreenWindowOptions
+{
+    int width = 1920;
+    int height = 1080;
+    int screen = -1;
+    bool windowed = false;
+};
+static FirmwareScreenWindowOptions g_firmwareWindowOptions;
+static bool firmwareOwnsWindow = false;
+
+#ifdef PPUC_HAS_SDL3_TTF
+static TTF_Font* pFirmwareFontLarge = nullptr;
+static TTF_Font* pFirmwareFontSmall = nullptr;
+#else
+// No SDL_ttf on this platform: the text calls below draw nothing.
+struct TTF_Font;
+static TTF_Font* pFirmwareFontLarge = nullptr;
+static TTF_Font* pFirmwareFontSmall = nullptr;
+#endif
+[[maybe_unused]] static bool firmwareFontAttempted = false;
+
+// Where a font might be. Deliberately a search rather than a setting: this
+// screen has to work on a machine nobody configured for it.
+[[maybe_unused]] static const char* kFirmwareFontCandidates[] = {
+    "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+    "/System/Library/Fonts/Helvetica.ttc",
+};
+
+#ifdef PPUC_HAS_SDL3_TTF
+static void EnsureFirmwareFont()
+{
+    if (firmwareFontAttempted)
+    {
+        return;
+    }
+    firmwareFontAttempted = true;
+
+    if (!TTF_Init())
+    {
+        printf("PPUC: no text on the firmware screen: TTF_Init failed: %s\n", SDL_GetError());
+        return;
+    }
+
+    for (const char* path : kFirmwareFontCandidates)
+    {
+        pFirmwareFontLarge = TTF_OpenFont(path, 48);
+        if (pFirmwareFontLarge)
+        {
+            pFirmwareFontSmall = TTF_OpenFont(path, 28);
+            return;
+        }
+    }
+
+    // Not fatal. The screen still paints red with a progress bar, which is
+    // unmistakable even without words - and a wordless warning is worth far
+    // more here than a correct-looking blank one.
+    printf("PPUC: no text on the firmware screen: no usable font found\n");
+}
+
+static void DrawFirmwareText(const char* text, TTF_Font* font, int centerX, int y, SDL_Color colour)
+{
+    if (!font || !text || !*text)
+    {
+        return;
+    }
+
+    SDL_Surface* surface = TTF_RenderText_Blended(font, text, 0, colour);
+    if (!surface)
+    {
+        return;
+    }
+
+    SDL_Texture* texture = SDL_CreateTextureFromSurface(pTransliteRenderer, surface);
+    const float w = static_cast<float>(surface->w);
+    const float h = static_cast<float>(surface->h);
+    SDL_DestroySurface(surface);
+    if (!texture)
+    {
+        return;
+    }
+
+    const SDL_FRect dst{static_cast<float>(centerX) - w / 2.0f, static_cast<float>(y), w, h};
+    SDL_RenderTexture(pTransliteRenderer, texture, nullptr, &dst);
+    SDL_DestroyTexture(texture);
+}
+#else
+static void EnsureFirmwareFont() {}
+static void DrawFirmwareText(const char*, TTF_Font*, int, int, SDL_Color) {}
+#endif
+
+// Opens a window for the warning when the game has no translite.
+//
+// A cabinet can be configured for B2S or PUP video instead of a translite, and
+// then there is no renderer and nothing to warn on - which is exactly the
+// machine where an unexplained five minute freeze is most likely to get power
+// cycled. B2S and PUP cannot be showing at this point (their window is created
+// in MediaPluginHost::Process, and the main loop has not started), so taking
+// the screen here is not a contest with anything.
+//
+// Only opened when a board is actually about to be flashed. Doing it whenever
+// --firmware-path is set would black out the backbox on every boot for a
+// machine that is already up to date.
+static bool EnsureFirmwareWindow()
+{
+    if (pTransliteRenderer)
+    {
+        return true;
+    }
+    if (firmwareOwnsWindow)
+    {
+        return false;
+    }
+
+    firmwareOwnsWindow = true;
+    if (!SDL_CreateWindowAndRenderer("PPUC Firmware Update", g_firmwareWindowOptions.width,
+                                     g_firmwareWindowOptions.height,
+                                     g_firmwareWindowOptions.windowed ? SDL_WINDOW_BORDERLESS
+                                                                      : SDL_WINDOW_FULLSCREEN,
+                                     &pTransliteWindow, &pTransliteRenderer))
+    {
+        printf("PPUC: no firmware update screen: %s\n", SDL_GetError());
+        return false;
+    }
+
+    PositionWindowOnScreen(pTransliteWindow, g_firmwareWindowOptions.screen);
+    SDL_ShowWindow(pTransliteWindow);
+    SDL_RaiseWindow(pTransliteWindow);
+    return true;
+}
+
+// progress < 0 means "no transfer running yet", which draws an empty bar.
+static void RenderFirmwareScreen(double progress)
+{
+    if (!g_firmwareScreen.active || !EnsureFirmwareWindow())
+    {
+        return;
+    }
+
+    EnsureFirmwareFont();
+
+    int w = 0, h = 0;
+    if (!SDL_GetCurrentRenderOutputSize(pTransliteRenderer, &w, &h) || w <= 0 || h <= 0)
+    {
+        return;
+    }
+
+    SDL_SetRenderDrawColor(pTransliteRenderer, 110, 0, 0, 255);
+    SDL_RenderClear(pTransliteRenderer);
+
+    const int centerX = w / 2;
+    const SDL_Color white{255, 255, 255, 255};
+    const SDL_Color amber{255, 210, 0, 255};
+
+    char line[160];
+    DrawFirmwareText("UPDATING BOARD FIRMWARE", pFirmwareFontLarge, centerX, h / 6, white);
+
+    // Position first, board number second: the first is progress through the
+    // update, the second is which board is being written to. Conflating them
+    // produced "Board 2 of 1" when only board 2 needed flashing.
+    snprintf(line, sizeof(line), "Board %zu of %zu  -  #%u: %s", g_firmwareScreen.index, g_firmwareScreen.count,
+             g_firmwareScreen.board, g_firmwareScreen.type.c_str());
+    DrawFirmwareText(line, pFirmwareFontSmall, centerX, h / 6 + 70, white);
+
+    snprintf(line, sizeof(line), "%s  ->  %s", g_firmwareScreen.from.c_str(), g_firmwareScreen.to.c_str());
+    DrawFirmwareText(line, pFirmwareFontSmall, centerX, h / 6 + 110, white);
+
+    // The bar carries the whole message when there is no font.
+    const float barW = static_cast<float>(w) * 0.6f;
+    const float barH = static_cast<float>(h) * 0.07f;
+    const float barX = (static_cast<float>(w) - barW) / 2.0f;
+    const float barY = static_cast<float>(h) / 2.0f;
+
+    SDL_FRect frame{barX - 4.0f, barY - 4.0f, barW + 8.0f, barH + 8.0f};
+    SDL_SetRenderDrawColor(pTransliteRenderer, 255, 255, 255, 255);
+    SDL_RenderRect(pTransliteRenderer, &frame);
+
+    if (progress > 0.0)
+    {
+        const double clamped = progress > 1.0 ? 1.0 : progress;
+        SDL_FRect fill{barX, barY, barW * static_cast<float>(clamped), barH};
+        SDL_SetRenderDrawColor(pTransliteRenderer, 255, 210, 0, 255);
+        SDL_RenderFillRect(pTransliteRenderer, &fill);
+    }
+
+    if (progress >= 0.0)
+    {
+        snprintf(line, sizeof(line), "%d%%", static_cast<int>((progress > 1.0 ? 1.0 : progress) * 100.0));
+        DrawFirmwareText(line, pFirmwareFontSmall, centerX, static_cast<int>(barY + barH) + 16, white);
+    }
+
+    DrawFirmwareText("DO NOT POWER OFF THE MACHINE", pFirmwareFontLarge, centerX, h - h / 4, amber);
+    DrawFirmwareText("Interrupting an update ruins the board being written to.", pFirmwareFontSmall, centerX,
+                     h - h / 4 + 60, white);
+
+    SDL_RenderPresent(pTransliteRenderer);
+    SDL_FlushRenderer(pTransliteRenderer);
+
+    // Nothing else is pumping the event queue.
+    //
+    // A firmware transfer blocks the main loop for minutes, and that loop owns
+    // the only SDL_PollEvent in the program. Without a pump the window is
+    // never composited and never updates, so everything above renders
+    // correctly into a surface the window server has not been told to show -
+    // which looks exactly like the screen not working at all, with nothing in
+    // the log either way.
+    SDL_PumpEvents();
+}
+
+static void CloseFirmwareScreen()
+{
+#ifdef PPUC_HAS_SDL3_TTF
+    if (pFirmwareFontLarge)
+    {
+        TTF_CloseFont(pFirmwareFontLarge);
+        pFirmwareFontLarge = nullptr;
+    }
+    if (pFirmwareFontSmall)
+    {
+        TTF_CloseFont(pFirmwareFontSmall);
+        pFirmwareFontSmall = nullptr;
+    }
+    if (firmwareFontAttempted)
+    {
+        TTF_Quit();
+        firmwareFontAttempted = false;
+    }
+#endif
+
+    // Only the window this screen opened itself. A real translite belongs to
+    // the game and is about to be drawn again.
+    if (firmwareOwnsWindow)
+    {
+        if (pTransliteRenderer)
+        {
+            SDL_DestroyRenderer(pTransliteRenderer);
+            pTransliteRenderer = nullptr;
+        }
+        if (pTransliteWindow)
+        {
+            SDL_DestroyWindow(pTransliteWindow);
+            pTransliteWindow = nullptr;
+        }
+        firmwareOwnsWindow = false;
+    }
+
+    g_firmwareScreen.active = false;
+}
+#else
+// The KMS path drives the panel directly and has no window to take over, so
+// the warning stays on the console there.
+static void RenderFirmwareScreen(double) {}
+static void CloseFirmwareScreen() {}
+struct FirmwareScreen
+{
+    bool active = false;
+    uint8_t board = 0;
+    size_t index = 0;
+    size_t count = 0;
+    std::string type;
+    std::string from;
+    std::string to;
+};
+static FirmwareScreen g_firmwareScreen;
+struct FirmwareScreenWindowOptions
+{
+    int width = 1920;
+    int height = 1080;
+    int screen = -1;
+    bool windowed = false;
+};
+static FirmwareScreenWindowOptions g_firmwareWindowOptions;
+#endif
+
 static void FirmwareProgress(uint8_t board, size_t sent, size_t total, void*)
 {
+    // Repainted on every callback rather than per decile: the bar is the only
+    // thing telling somebody standing at the machine that it is still working,
+    // so it should move continuously even though the log does not.
+    RenderFirmwareScreen(total ? static_cast<double>(sent) / static_cast<double>(total) : 0.0);
+
     // One line per 10%, so a two-minute transfer says something without
     // scrolling a log nobody can read.
     static size_t lastDecile = 0;
@@ -1827,30 +2138,56 @@ static const char* FirmwareUpdateBlockedReason(const PPUCBoardVersion& board, bo
     return "firmware for this board type has never been run on real hardware";
 }
 
-static void PerformFirmwareUpdates(PPUC* pPpuc, const std::vector<PPUCBoardVersion>& versions,
-                                   bool allowDowngrade,
-                                   const char* firmwarePath, bool allowDev, bool allowUnvalidated)
+// Whether this board is one of the ones about to be flashed.
+//
+// Shared by the count shown on screen and the loop that does the flashing, so
+// "board 2 of 3" cannot drift from what actually happens.
+static bool FirmwareUpdatePlanned(const PPUCBoardVersion& v, const char* firmwarePath, bool allowDev,
+                                  bool allowDowngrade, bool allowUnvalidated)
+{
+    if (!v.responded)
+    {
+        return false;
+    }
+    const FirmwareImage meta = FindNewestFirmwareImage(firmwarePath, v.boardType);
+    if (!meta.found || !FirmwareIsOutOfDate(v, meta, allowDev, allowDowngrade))
+    {
+        return false;
+    }
+    return FirmwareUpdateBlockedReason(v, allowUnvalidated) == nullptr;
+}
+
+// Returns the number of boards that were flashed, so the caller can decline to
+// start a game against hardware that is rebooting.
+static size_t PerformFirmwareUpdates(PPUC* pPpuc, const std::vector<PPUCBoardVersion>& versions,
+                                     bool allowDowngrade,
+                                     const char* firmwarePath, bool allowDev, bool allowUnvalidated)
 {
     // The runtime loop must not transmit into the middle of a transfer.
     pPpuc->StopUpdates();
 
-    size_t updated = 0, failed = 0;
+    // Counted before the first transfer: somebody watching wants to know how
+    // long this goes on for, and "1 of 3" only means that if the 3 is the
+    // number being flashed rather than the number that answered.
+    size_t plannedTotal = 0;
     for (const PPUCBoardVersion& v : versions)
     {
-        if (!v.responded)
+        if (FirmwareUpdatePlanned(v, firmwarePath, allowDev, allowDowngrade, allowUnvalidated))
+        {
+            ++plannedTotal;
+        }
+    }
+
+    size_t updated = 0, failed = 0, plannedIndex = 0;
+    for (const PPUCBoardVersion& v : versions)
+    {
+        if (!FirmwareUpdatePlanned(v, firmwarePath, allowDev, allowDowngrade, allowUnvalidated))
         {
             continue;
         }
+        ++plannedIndex;
 
         const FirmwareImage meta = FindNewestFirmwareImage(firmwarePath, v.boardType);
-        if (!meta.found || !FirmwareIsOutOfDate(v, meta, allowDev, allowDowngrade))
-        {
-            continue;
-        }
-        if (FirmwareUpdateBlockedReason(v, allowUnvalidated) != nullptr)
-        {
-            continue;
-        }
 
         // Parsed per board, since each type has its own image. An unusable
         // file stops that board rather than the whole run.
@@ -1871,6 +2208,18 @@ static void PerformFirmwareUpdates(PPUC* pPpuc, const std::vector<PPUCBoardVersi
         const char* tn = ppuc::v2::BoardTypeName(v.boardType);
         printf("PPUC: updating board %u (%s) from %s to %s\n", v.board, tn ? tn : "?",
                v.FirmwareVersion().c_str(), meta.version.c_str());
+
+        g_firmwareScreen.active = true;
+        g_firmwareScreen.board = v.board;
+        g_firmwareScreen.index = plannedIndex;
+        g_firmwareScreen.count = plannedTotal;
+        g_firmwareScreen.type = tn ? tn : "?";
+        g_firmwareScreen.from = v.FirmwareVersion();
+        g_firmwareScreen.to = meta.version;
+        // Drawn before the first byte goes out, so the warning is on screen for
+        // the whole window in which it matters rather than from the first
+        // progress callback onwards.
+        RenderFirmwareScreen(0.0);
 
         const PPUCFirmwareUpdateResult result = pPpuc->UpdateBoardFirmware(
             v.board, meta.boardType, parsed.data.data(), parsed.data.size(), FirmwareProgress, nullptr);
@@ -1893,12 +2242,19 @@ static void PerformFirmwareUpdates(PPUC* pPpuc, const std::vector<PPUCBoardVersi
         // Boards reboot and re-enumerate; configuration happens from scratch
         // afterwards, so the game must not start against half-configured
         // hardware.
-        printf("PPUC: %zu board(s) updated, %zu failed. Restart ppuc-pinmame to run the game.\n", updated, failed);
+        printf("PPUC: %zu board(s) updated, %zu failed. Restarting to run the game.\n", updated, failed);
     }
     else if (failed > 0)
     {
         printf("PPUC: no boards were updated; %zu attempt(s) failed\n", failed);
     }
+
+    // Every attempt failed and the run continues, so the warning must come off
+    // the screen: leaving it up would tell somebody not to touch a machine
+    // that is about to start a game.
+    CloseFirmwareScreen();
+
+    return updated;
 }
 
 // Prints each board's own transport counters.
@@ -1929,14 +2285,15 @@ static void ReportBoardStats(PPUC* pPpuc, const char* when)
   }
 }
 
-static void ReportBoardFirmware(PPUC* pPpuc, const char* firmwarePath, bool allowUpdate, bool allowDev,
+// Returns true when a board was flashed and the process must restart.
+static bool ReportBoardFirmware(PPUC* pPpuc, const char* firmwarePath, bool allowUpdate, bool allowDev,
                                 bool allowDowngrade,
                                 bool allowUnvalidated)
 {
     const std::vector<PPUCBoardVersion> versions = pPpuc->QueryBoardVersions();
     if (versions.empty())
     {
-        return;
+        return false;
     }
 
     for (const PPUCBoardVersion& v : versions)
@@ -1963,7 +2320,7 @@ static void ReportBoardFirmware(PPUC* pPpuc, const char* firmwarePath, bool allo
 
     if (!firmwarePath)
     {
-        return;
+        return false;
     }
 
     // One image per board type, selected per board: a directory holding
@@ -2024,8 +2381,10 @@ static void ReportBoardFirmware(PPUC* pPpuc, const char* firmwarePath, bool allo
     }
     else
     {
-        PerformFirmwareUpdates(pPpuc, versions, allowDowngrade, firmwarePath, allowDev, allowUnvalidated);
+        return PerformFirmwareUpdates(pPpuc, versions, allowDowngrade, firmwarePath, allowDev, allowUnvalidated) > 0;
     }
+
+    return false;
 }
 
 static void WaitForCleanSwitchReplyCycle(PPUC* pPpuc, uint32_t baselineCount)
@@ -4591,9 +4950,29 @@ int main(int argc, char** argv)
     {
       ReportBoardStats(pPpuc, "after version query");
     }
-    ReportBoardFirmware(pPpuc, opt_firmware_path, opt_allow_firmware_update, opt_allow_dev_firmware_update,
-                        opt_allow_firmware_downgrade,
-                        opt_allow_unvalidated_firmware_update);
+    // A flashed board is rebooting and has lost its configuration, so there is
+    // nothing to run the game against. Stopping here is what makes an
+    // unattended update safe: the supervisor starts ppuc-pinmame again, the
+    // boards answer with their new version, nothing is out of date any more,
+    // and the second run configures them from scratch and plays.
+    //
+    // Continuing instead - which is what used to happen, after printing an
+    // instruction to restart that nothing acted on - meant configuring boards
+    // mid-reboot and starting a game on whichever ones happened to answer.
+    // The update screen uses the backbox screen, which is the translite's
+    // screen whether or not this game has a translite to put on it.
+    g_firmwareWindowOptions.width = opt_translite_width > 0 ? opt_translite_width : 1920;
+    g_firmwareWindowOptions.height = opt_translite_height > 0 ? opt_translite_height : 1080;
+    g_firmwareWindowOptions.screen = opt_translite_screen;
+    g_firmwareWindowOptions.windowed = opt_translite_window;
+
+    if (ReportBoardFirmware(pPpuc, opt_firmware_path, opt_allow_firmware_update, opt_allow_dev_firmware_update,
+                            opt_allow_firmware_downgrade,
+                            opt_allow_unvalidated_firmware_update))
+    {
+      pPpuc->Disconnect();
+      return 0;
+    }
   }
 
   BallSearchRunner ballSearchRunner =
