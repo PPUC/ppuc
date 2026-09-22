@@ -86,8 +86,12 @@ constexpr uint32_t kDefaultSwitchRefreshIdleMs = 15000;
 // Exit status after flashing boards: they are rebooting into the new firmware
 // and ppuc-pinmame has to be started again to configure them.
 constexpr int kExitRestartAfterFirmwareUpdate = 75;
-// How long the firmware check keeps asking boards that have just been reset.
-constexpr uint32_t kBoardBootWaitMs = 15000;
+// How long the check before configuration keeps asking boards that have just
+// been reset. Short on purpose: freshly hard-reset boards on a real machine did
+// not answer at all before they were configured, however long they were
+// asked, so a long wait only added its full length to every boot. Those boards
+// are checked again after configuration instead.
+constexpr uint32_t kBoardBootWaitMs = 2000;
 constexpr uint32_t kDefaultOutputFrameIntervalMs = 4;
 constexpr uint32_t kDefaultBallSearchDelayMs = 15000;
 constexpr uint32_t kDefaultBallSearchRoundDelayMs = 5000;
@@ -2302,17 +2306,26 @@ static void ReportBoardStats(PPUC* pPpuc, const char* when)
 }
 
 // Returns true when a board was flashed and the process must restart.
+// answered, when given, receives how many boards reported a version, so the
+// caller can tell "nothing to update" from "nobody answered".
 static bool ReportBoardFirmware(PPUC* pPpuc, const char* firmwarePath, bool allowUpdate, bool allowDev,
                                 bool allowDowngrade,
-                                bool allowUnvalidated)
+                                bool allowUnvalidated, uint32_t waitForBoardsMs = 0,
+                                size_t* answered = nullptr)
 {
-    // Runs right after the boards were reset. After a hard reset they take a
-    // little longer than the reset wait to come back, and a single round of
-    // queries found none of them: every board "did not report a firmware
-    // version", nothing was out of date as far as anyone could tell, and the
-    // update silently never happened. Boards that answer stop the wait early,
-    // so an up to date machine does not pay for it.
-    const std::vector<PPUCBoardVersion> versions = pPpuc->QueryBoardVersions(kBoardBootWaitMs);
+    const std::vector<PPUCBoardVersion> versions = pPpuc->QueryBoardVersions(waitForBoardsMs);
+    size_t respondedCount = 0;
+    for (const PPUCBoardVersion& v : versions)
+    {
+        if (v.responded)
+        {
+            ++respondedCount;
+        }
+    }
+    if (answered)
+    {
+        *answered = respondedCount;
+    }
     if (versions.empty())
     {
         return false;
@@ -2393,7 +2406,14 @@ static bool ReportBoardFirmware(PPUC* pPpuc, const char* firmwarePath, bool allo
                blocked);
     }
 
-    if (outdated == 0)
+    if (respondedCount == 0)
+    {
+        // Said plainly rather than as "up to date": with no versions there
+        // was nothing to compare, and claiming otherwise hid for a whole
+        // debugging session that no update could ever happen.
+        printf("PPUC: no board reported a firmware version; nothing was checked\n");
+    }
+    else if (outdated == 0)
     {
         printf("PPUC: all boards are up to date\n");
     }
@@ -4965,6 +4985,10 @@ int main(int argc, char** argv)
 
   while (!opt_no_display && pDmd->IsFinding()) std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
+  // How many boards answered the firmware check before configuration. After a
+  // hard reset that can be none of them, and then they are checked again once
+  // configured - the way it worked before the check was moved.
+  size_t boardsAnsweredBeforeConfiguration = 0;
   if (!opt_no_serial)
   {
     // The update screen uses the backbox screen, which is the translite's
@@ -4986,7 +5010,8 @@ int main(int argc, char** argv)
         {
           const bool flashed =
               ReportBoardFirmware(pPpuc, opt_firmware_path, opt_allow_firmware_update, opt_allow_dev_firmware_update,
-                                  opt_allow_firmware_downgrade, opt_allow_unvalidated_firmware_update);
+                                  opt_allow_firmware_downgrade, opt_allow_unvalidated_firmware_update,
+                                  kBoardBootWaitMs, &boardsAnsweredBeforeConfiguration);
           // Read straight after the version queries, so versionQueriesSeen can
           // be compared across consecutive runs against how many the host
           // actually sent. A board that fails the query is otherwise
@@ -5015,6 +5040,20 @@ int main(int argc, char** argv)
     }
     printf("Unable to open serial communication to PPUC boards on %s.\n", opt_serial ? opt_serial : "(null)");
     return 1;
+  }
+
+  // Freshly hard-reset boards did not answer the check before configuration
+  // on a real machine, while configured boards always have. Check them now,
+  // so a machine using HardReset=true still gets its updates.
+  if (!opt_no_serial && boardsAnsweredBeforeConfiguration == 0)
+  {
+    printf("PPUC: checking firmware again now that the boards are configured\n");
+    if (ReportBoardFirmware(pPpuc, opt_firmware_path, opt_allow_firmware_update, opt_allow_dev_firmware_update,
+                            opt_allow_firmware_downgrade, opt_allow_unvalidated_firmware_update))
+    {
+      pPpuc->Disconnect();
+      return kExitRestartAfterFirmwareUpdate;
+    }
   }
 
   BallSearchRunner ballSearchRunner =
