@@ -86,6 +86,8 @@ constexpr uint32_t kDefaultSwitchRefreshIdleMs = 15000;
 // Exit status after flashing boards: they are rebooting into the new firmware
 // and ppuc-pinmame has to be started again to configure them.
 constexpr int kExitRestartAfterFirmwareUpdate = 75;
+// How long the firmware check keeps asking boards that have just been reset.
+constexpr uint32_t kBoardBootWaitMs = 15000;
 constexpr uint32_t kDefaultOutputFrameIntervalMs = 4;
 constexpr uint32_t kDefaultBallSearchDelayMs = 15000;
 constexpr uint32_t kDefaultBallSearchRoundDelayMs = 5000;
@@ -2304,7 +2306,13 @@ static bool ReportBoardFirmware(PPUC* pPpuc, const char* firmwarePath, bool allo
                                 bool allowDowngrade,
                                 bool allowUnvalidated)
 {
-    const std::vector<PPUCBoardVersion> versions = pPpuc->QueryBoardVersions();
+    // Runs right after the boards were reset. After a hard reset they take a
+    // little longer than the reset wait to come back, and a single round of
+    // queries found none of them: every board "did not report a firmware
+    // version", nothing was out of date as far as anyone could tell, and the
+    // update silently never happened. Boards that answer stop the wait early,
+    // so an up to date machine does not pay for it.
+    const std::vector<PPUCBoardVersion> versions = pPpuc->QueryBoardVersions(kBoardBootWaitMs);
     if (versions.empty())
     {
         return false;
