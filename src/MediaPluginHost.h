@@ -48,6 +48,11 @@ class MediaPluginHost
     int backglassWidth = 1920;
     int backglassHeight = 1080;
     int backglassScreen = 0;
+    // Set from translite_window: the display runs in a window on a desktop
+    // rather than owning a cabinet's screen. The only thing it decides here is
+    // the mouse cursor, which a desktop user still wants and a cabinet has no
+    // use for.
+    bool windowed = false;
     float b2sSegmentAngleDegrees = 9.0f;
     float b2sSegmentGlow = 1.4f;
     bool b2sSegmentSmoothing = true;

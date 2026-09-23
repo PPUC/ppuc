@@ -4530,6 +4530,7 @@ int main(int argc, char** argv)
     mediaOptions.backglassWidth = opt_translite_width > 0 ? opt_translite_width : 1920;
     mediaOptions.backglassHeight = opt_translite_height > 0 ? opt_translite_height : 1080;
     mediaOptions.backglassScreen = opt_translite_screen;
+    mediaOptions.windowed = opt_translite_window;
     mediaOptions.b2sSegmentAngleDegrees = opt_b2s_segment_angle_degrees;
     mediaOptions.b2sSegmentGlow = opt_b2s_segment_glow;
     mediaOptions.b2sSegmentSmoothing = opt_b2s_segment_smoothing;
