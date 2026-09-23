@@ -426,6 +426,7 @@ uint32_t opt_music_gap_ms = 2000;
 // Nothing above 100: the mix is additive into 16 bits, and boosting one source
 // past unity to balance it against another buys clipping on the loud passages
 // that made it seem quiet. Balance is made by turning the loud source down.
+bool opt_switch_monitor = false;
 uint8_t opt_volume = 100;
 uint8_t opt_rom_volume = 100;
 uint8_t opt_speech_volume = 100;
@@ -1932,6 +1933,106 @@ static FirmwareImage FindNewestFirmwareImage(const char* directory, uint8_t boar
 //
 // So this takes over the backbox screen for the duration and says what is
 // happening and what not to do.
+
+// A live switch matrix on the backbox screen.
+//
+// Reading a scrolling log to answer "is the outhole switch closed right now"
+// is the wrong shape of question for a scrolling log: the answer is a state,
+// not an event, and the interesting case is a switch that is NOT changing. So
+// this paints every configured switch once and keeps it painted, green for
+// closed and red for open.
+//
+// What it shows is the host's own view -- the bitmap libppuc maintains from
+// what the boards report -- which is exactly the thing in doubt when a ball
+// sits in a trough the game never notices. A board sends its full switch
+// bitmap at least every hundred replies even when nothing changes, so the host
+// view converges on the board view within a second. If a switch under a ball
+// reads open here, the closure is not being lost between board and host: it
+// never reached the board.
+struct SwitchMonitorEntry
+{
+    int number = 0;
+    uint8_t board = 0;
+    uint8_t port = 0;
+    std::string description;
+    uint8_t state = 0;
+    uint64_t lastChangeMs = 0;
+};
+
+static bool g_switchMonitorEnabled = false;
+static std::vector<SwitchMonitorEntry> g_switchMonitorEntries;
+static std::unordered_map<int, size_t> g_switchMonitorIndex;
+static uint64_t g_switchMonitorLastRenderMs = 0;
+static uint32_t g_switchMonitorChanges = 0;
+
+// Built lazily, because the switch list does not exist until the boards have
+// been configured: libppuc fills m_switches while it sends the mapping frames,
+// not when it parses the YAML. Asking at startup got an empty table and a
+// screen that said "0 switches".
+static void EnsureSwitchMonitorTable();
+
+static void InitSwitchMonitor(const std::vector<PPUCSwitch>& switches)
+{
+    g_switchMonitorEntries.clear();
+    g_switchMonitorIndex.clear();
+    g_switchMonitorEntries.reserve(switches.size());
+    for (const PPUCSwitch& sw : switches)
+    {
+        SwitchMonitorEntry entry;
+        entry.number = sw.number;
+        entry.board = sw.board;
+        entry.port = sw.port;
+        entry.description = sw.description;
+        g_switchMonitorIndex[entry.number] = g_switchMonitorEntries.size();
+        g_switchMonitorEntries.push_back(std::move(entry));
+    }
+    std::sort(g_switchMonitorEntries.begin(), g_switchMonitorEntries.end(),
+              [](const SwitchMonitorEntry& a, const SwitchMonitorEntry& b) { return a.number < b.number; });
+    g_switchMonitorIndex.clear();
+    for (size_t i = 0; i < g_switchMonitorEntries.size(); ++i)
+    {
+        g_switchMonitorIndex[g_switchMonitorEntries[i].number] = i;
+    }
+}
+
+static void EnsureSwitchMonitorTable()
+{
+    if (!g_switchMonitorEntries.empty() || pPpuc == nullptr)
+    {
+        return;
+    }
+    InitSwitchMonitor(pPpuc->GetSwitches());
+    if (!g_switchMonitorEntries.empty())
+    {
+        printf("PPUC: switch monitor showing %zu switches\n", g_switchMonitorEntries.size());
+    }
+}
+
+// Every switch the host hears about, including the ones it does not forward to
+// the game. A switch suppressed by the rules or by tilt handling still shows
+// its true state here, which is the point: the screen answers what the machine
+// is doing, not what the ROM was told.
+static void NoteSwitchMonitorState(int number, uint8_t state)
+{
+    if (!g_switchMonitorEnabled)
+    {
+        return;
+    }
+    EnsureSwitchMonitorTable();
+    const auto it = g_switchMonitorIndex.find(number);
+    if (it == g_switchMonitorIndex.end())
+    {
+        return;
+    }
+    SwitchMonitorEntry& entry = g_switchMonitorEntries[it->second];
+    if (entry.state != state)
+    {
+        entry.state = state;
+        entry.lastChangeMs = SDL_GetTicks();
+        ++g_switchMonitorChanges;
+    }
+}
+
 struct FirmwareScreen
 {
     bool active = false;
@@ -2010,6 +2111,51 @@ static void EnsureFirmwareFont()
     printf("PPUC: no text on the firmware screen: no usable font found\n");
 }
 
+// Shortens text in place until it fits, measuring it rather than guessing at
+// a character width: names are proportional and an estimate that is wrong by
+// 20% either wastes half a column or runs into the next one.
+static void TruncateToWidth(char* text, TTF_Font* font, int maxWidth)
+{
+    if (!font || !text || maxWidth <= 0)
+    {
+        return;
+    }
+    int w = 0;
+    int h = 0;
+    while (*text && TTF_GetStringSize(font, text, 0, &w, &h) && w > maxWidth)
+    {
+        text[strlen(text) - 1] = '\0';
+    }
+}
+
+// Left-aligned, for anything laid out in columns rather than centred.
+static void DrawFirmwareTextLeft(const char* text, TTF_Font* font, int x, int y, SDL_Color colour)
+{
+    if (!font || !text || !*text)
+    {
+        return;
+    }
+
+    SDL_Surface* surface = TTF_RenderText_Blended(font, text, 0, colour);
+    if (!surface)
+    {
+        return;
+    }
+
+    SDL_Texture* texture = SDL_CreateTextureFromSurface(pTransliteRenderer, surface);
+    const float w = static_cast<float>(surface->w);
+    const float h = static_cast<float>(surface->h);
+    SDL_DestroySurface(surface);
+    if (!texture)
+    {
+        return;
+    }
+
+    const SDL_FRect dst{static_cast<float>(x), static_cast<float>(y), w, h};
+    SDL_RenderTexture(pTransliteRenderer, texture, nullptr, &dst);
+    SDL_DestroyTexture(texture);
+}
+
 static void DrawFirmwareText(const char* text, TTF_Font* font, int centerX, int y, SDL_Color colour)
 {
     if (!font || !text || !*text)
@@ -2039,6 +2185,8 @@ static void DrawFirmwareText(const char* text, TTF_Font* font, int centerX, int 
 #else
 static void EnsureFirmwareFont() {}
 static void DrawFirmwareText(const char*, TTF_Font*, int, int, SDL_Color) {}
+static void DrawFirmwareTextLeft(const char*, TTF_Font*, int, int, SDL_Color) {}
+static void TruncateToWidth(char*, TTF_Font*, int) {}
 #endif
 
 // Opens a window for the warning when the game has no translite.
@@ -2170,6 +2318,112 @@ static void RenderFirmwareScreen(double progress)
     SDL_PumpEvents();
 }
 
+
+static void RenderSwitchMonitor()
+{
+    EnsureSwitchMonitorTable();
+    // Takes the backbox screen the same way the firmware warning does, and for
+    // the same reason: on a machine configured for B2S or PUP there is no
+    // other window to draw into. Which is why enabling the monitor turns those
+    // off -- see where the option is read.
+    if (!g_switchMonitorEnabled || g_firmwareScreen.active || !EnsureFirmwareWindow())
+    {
+        return;
+    }
+
+    EnsureFirmwareFont();
+
+    int w = 0, h = 0;
+    if (!SDL_GetCurrentRenderOutputSize(pTransliteRenderer, &w, &h) || w <= 0 || h <= 0)
+    {
+        return;
+    }
+
+    const SDL_Color white{235, 235, 235, 255};
+    const SDL_Color dim{120, 120, 130, 255};
+    const SDL_Color green{70, 210, 100, 255};
+    const SDL_Color red{225, 70, 70, 255};
+    const SDL_Color amber{255, 200, 70, 255};
+
+    SDL_SetRenderDrawColor(pTransliteRenderer, 12, 12, 16, 255);
+    SDL_RenderClear(pTransliteRenderer);
+
+    char line[192];
+    DrawFirmwareText("SWITCH MONITOR", pFirmwareFontLarge, w / 2, 12, white);
+
+    const uint64_t now = SDL_GetTicks();
+    size_t closed = 0;
+    for (const SwitchMonitorEntry& entry : g_switchMonitorEntries)
+    {
+        closed += entry.state ? 1 : 0;
+    }
+    snprintf(line, sizeof(line), "%zu switches, %zu closed, %u changes seen", g_switchMonitorEntries.size(), closed,
+             g_switchMonitorChanges);
+    DrawFirmwareText(line, pFirmwareFontSmall, w / 2, 70, dim);
+
+    const int top = 120;
+    const int bottom = h - 60;
+    const int rowH = 32;
+    const int maxRows = std::max(1, (bottom - top) / rowH);
+
+    // A column is as wide as a row needs, not as wide as the screen divided by
+    // however many columns happen to be required. Dividing the screen put the
+    // state word half a metre from the name it belonged to on a 1080p backbox.
+    const int kColumnWidth = 560;
+    const int maxColumns = std::max(1, (w - 40) / kColumnWidth);
+    const int columns = std::max(
+        1, std::min(maxColumns, static_cast<int>((g_switchMonitorEntries.size() + static_cast<size_t>(maxRows) - 1) /
+                                                 static_cast<size_t>(maxRows))));
+    const int rows = std::max(1, static_cast<int>((g_switchMonitorEntries.size() + static_cast<size_t>(columns) - 1) /
+                                                  static_cast<size_t>(columns)));
+    const int colW = kColumnWidth;
+
+    for (size_t i = 0; i < g_switchMonitorEntries.size(); ++i)
+    {
+        const SwitchMonitorEntry& entry = g_switchMonitorEntries[i];
+        const int col = static_cast<int>(i) / rows;
+        const int row = static_cast<int>(i) % rows;
+        const int x = 20 + col * colW;
+        const int y = top + row * rowH;
+        const bool isClosed = entry.state != 0;
+
+        // A block of colour as well as a word, so the screen still says
+        // something on a machine with no font installed, and so a wrong switch
+        // can be spotted from across the room.
+        const SDL_FRect box{static_cast<float>(x), static_cast<float>(y) + 6.0f, 16.0f, 16.0f};
+        if (isClosed)
+        {
+            SDL_SetRenderDrawColor(pTransliteRenderer, green.r, green.g, green.b, 255);
+        }
+        else
+        {
+            SDL_SetRenderDrawColor(pTransliteRenderer, red.r, red.g, red.b, 255);
+        }
+        SDL_RenderFillRect(pTransliteRenderer, &box);
+
+        // Recently changed switches are worth picking out: when a ball drains
+        // and nothing happens, the question is which switch moved last.
+        const bool recent = entry.lastChangeMs != 0 && now - entry.lastChangeMs < 2000;
+        const SDL_Color nameColour = recent ? amber : (isClosed ? white : dim);
+
+        snprintf(line, sizeof(line), "%3d %u/%-2u %s", entry.number, static_cast<unsigned>(entry.board),
+                 static_cast<unsigned>(entry.port), entry.description.c_str());
+        // Truncated rather than wrapped: a column is a fixed width, and a name
+        // that runs into the next column is worse than a name cut short.
+        TruncateToWidth(line, pFirmwareFontSmall, colW - 140);
+        DrawFirmwareTextLeft(line, pFirmwareFontSmall, x + 26, y, nameColour);
+        DrawFirmwareTextLeft(isClosed ? "closed" : "open", pFirmwareFontSmall, x + colW - 100, y,
+                             isClosed ? green : red);
+    }
+
+    DrawFirmwareText("green = closed    red = open    amber = changed in the last 2 s", pFirmwareFontSmall, w / 2,
+                     h - 40, dim);
+
+    SDL_RenderPresent(pTransliteRenderer);
+    SDL_FlushRenderer(pTransliteRenderer);
+    SDL_PumpEvents();
+}
+
 static void CloseFirmwareScreen()
 {
 #ifdef PPUC_HAS_SDL3_TTF
@@ -2213,6 +2467,7 @@ static void CloseFirmwareScreen()
 // The KMS path drives the panel directly and has no window to take over, so
 // the warning stays on the console there.
 static void RenderFirmwareScreen(double) {}
+static void RenderSwitchMonitor() {}
 static void CloseFirmwareScreen() {}
 struct FirmwareScreen
 {
@@ -2918,6 +3173,10 @@ static struct cag_option options[] = {
      .access_name = "music-gap-ms",
      .value_name = "VALUE",
      .description = "Gap between background music tracks in milliseconds (optional, default 2000)"},
+    {.identifier = '`',
+     .access_name = "switch-monitor",
+     .value_name = NULL,
+     .description = "Show a live switch matrix on the backbox screen instead of the translite, B2S or PUP (diagnostics)"},
     {.identifier = '\'',
      .access_name = "volume",
      .value_name = "VALUE",
@@ -3797,6 +4056,8 @@ int main(int argc, char** argv)
           opt_debug_effects = ParseIniBool(value);
         else if (key == "DebugSoundCommands")
           opt_debug_sound_commands = ParseIniBool(value);
+        else if (key == "SwitchMonitor")
+          opt_switch_monitor = ParseIniBool(value);
         else if (key == "DebugAudio")
           opt_debug_audio = ParseIniBool(value);
         else if (key == "DebugSegments")
@@ -4038,6 +4299,9 @@ int main(int argc, char** argv)
         break;
       case 'q':
         opt_music_gap_ms = static_cast<uint32_t>(atoi(cag_option_get_value(&cag_context)));
+        break;
+      case '`':
+        opt_switch_monitor = true;
         break;
       case '\'':
         opt_volume = ParseVolumePercent(cag_option_get_value(&cag_context));
@@ -4536,6 +4800,25 @@ int main(int argc, char** argv)
 
   // The bus is no longer a media-only concern: the PinMAME engine runs as a
   // plugin on it, so it must exist whenever a ROM is being driven.
+  // Read after the command line, not with the game folder: --switch-monitor
+  // has to suppress these too, and the folder scan runs before the options are
+  // parsed.
+  //
+  // The monitor paints the backbox screen continuously, and on KMSDRM there is
+  // no compositor: two things claiming that screen means whichever set a mode
+  // last wins and the other flickers. Rather than lose the diagnostic to a
+  // fight it cannot win, the monitor takes the screen outright.
+  if (opt_switch_monitor && (opt_b2s || opt_pup || HasOptionValue(opt_translite)))
+  {
+    printf("PPUC: switch monitor enabled; the translite, B2S and PUP video are not started\n");
+    opt_b2s = false;
+    opt_pup = false;
+    opt_translite = NULL;
+    opt_translite_attract = NULL;
+  }
+
+  g_switchMonitorEnabled = opt_switch_monitor;
+
   const bool needPluginBus = opt_pup || opt_altsound || opt_b2s || !useScriptEngine;
   if (needPluginBus)
   {
@@ -5534,6 +5817,9 @@ int main(int argc, char** argv)
       while ((switchState = pPpuc->GetNextSwitchState()) != nullptr)
       {
         const uint8_t newSwitchState = switchState->state == 0 ? 0 : 1;
+        // Before any suppression: the screen answers what the machine is
+        // doing, not what the engine was told about it.
+        NoteSwitchMonitorState(switchState->number, newSwitchState);
         NoteBallSearchSwitchUpdate(pPpuc, ballSearchRunner, switchState->number, newSwitchState,
                                    opt_ball_search_delay_ms);
 
@@ -5727,6 +6013,18 @@ int main(int argc, char** argv)
         }
       }
       stallWatch.Phase("render");
+
+      // 10 Hz. Fast enough that a flipper button looks live, slow enough that
+      // the repaint is not what the machine spends its time on.
+      if (g_switchMonitorEnabled)
+      {
+        const uint64_t nowMs = SDL_GetTicks();
+        if (nowMs - g_switchMonitorLastRenderMs >= 100)
+        {
+          g_switchMonitorLastRenderMs = nowMs;
+          RenderSwitchMonitor();
+        }
+      }
 
 #ifndef PPUC_USE_KMSDMD
       SDL_Event event;
