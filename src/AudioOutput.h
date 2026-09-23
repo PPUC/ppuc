@@ -50,6 +50,21 @@ class AudioOutput
   void QueuePluginSamples(const int16_t* samples, size_t sampleCount, int frequency, int channels);
   void QueueSpeechSamples(const int16_t* samples, size_t sampleCount, int frequency, int channels);
 
+  // Per-source levels, each 0.0 to 1.0, master applied on top of the others.
+  //
+  // What "game" covers is everything the emulator and its packs produce: the
+  // ROM stream, AltSound replacing it, and today PUP video audio as well. They
+  // are one control because they are one thing to a player -- the sound of the
+  // game -- and because the override chain already treats a pack and the ROM it
+  // replaces as interchangeable. A pack that wants its own control would need a
+  // lane category of its own, which is a change to the lane table rather than
+  // to this.
+  //
+  // Speech is PPUC's own text-to-speech, music the background tracks. Neither
+  // comes from the game, and both are routinely wanted at a different level
+  // from it, which is the whole reason this exists.
+  void SetVolumes(float master, float game, float speech, float music);
+
  public:
   struct MusicTrack
   {
@@ -121,6 +136,12 @@ class AudioOutput
 
   mutable std::mutex mutex_;
   bool debugAudio_ = false;
+  // Everything full up, so a host that never calls SetVolumes sounds exactly as
+  // it did before there were levels at all.
+  float masterVolume_ = 1.0f;
+  float gameVolume_ = 1.0f;
+  float speechVolume_ = 1.0f;
+  float musicVolume_ = 1.0f;
   SDL_AudioStream* stream_ = nullptr;
   SDL_AudioSpec deviceSpec_{
       .format = SDL_AUDIO_S16LE,

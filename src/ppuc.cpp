@@ -416,6 +416,20 @@ bool opt_speech = false;
 bool opt_greeting = false;
 const char* opt_music_files = NULL;
 uint32_t opt_music_gap_ms = 2000;
+// Per-source levels in percent, master applied on top of the rest.
+//
+// Full up by default, so a machine with none of these in its ppuc.ini sounds
+// exactly as it did before they existed. They are percentages rather than
+// floats because a config tool has to present them and a person has to read
+// them back.
+//
+// Nothing above 100: the mix is additive into 16 bits, and boosting one source
+// past unity to balance it against another buys clipping on the loud passages
+// that made it seem quiet. Balance is made by turning the loud source down.
+uint8_t opt_volume = 100;
+uint8_t opt_rom_volume = 100;
+uint8_t opt_speech_volume = 100;
+uint8_t opt_music_volume = 100;
 const char* opt_speech_backend = "auto";
 const char* opt_speech_voice = NULL;
 const char* opt_speech_rate_arg = NULL;
@@ -720,6 +734,22 @@ static std::string TrimIniValue(const std::string& value)
   }
 
   return value.substr(start, end - start);
+}
+
+// A volume percentage, clamped rather than rejected.
+//
+// Clamped because the alternative is a machine that refuses to boot over a
+// typo in a number, and because the useful reading of "150" is unambiguous:
+// as loud as it goes. A value that is not a number at all reads as 0 via
+// atoi, which is audible immediately and so diagnoses itself.
+static uint8_t ParseVolumePercent(const char* value)
+{
+  if (value == nullptr)
+  {
+    return 100;
+  }
+  const int percent = atoi(value);
+  return static_cast<uint8_t>(std::clamp(percent, 0, 100));
 }
 
 static bool ParseIniBool(const std::string& value, bool defaultValue = false)
@@ -2888,6 +2918,22 @@ static struct cag_option options[] = {
      .access_name = "music-gap-ms",
      .value_name = "VALUE",
      .description = "Gap between background music tracks in milliseconds (optional, default 2000)"},
+    {.identifier = '\'',
+     .access_name = "volume",
+     .value_name = "VALUE",
+     .description = "Master volume in percent, 0-100 (optional, default 100)"},
+    {.identifier = ',',
+     .access_name = "rom-volume",
+     .value_name = "VALUE",
+     .description = "Volume of the game's own sound in percent: ROM, AltSound, PUP (optional, default 100)"},
+    {.identifier = ';',
+     .access_name = "speech-volume",
+     .value_name = "VALUE",
+     .description = "Volume of spoken callouts in percent (optional, default 100)"},
+    {.identifier = '.',
+     .access_name = "music-volume",
+     .value_name = "VALUE",
+     .description = "Volume of background music in percent (optional, default 100)"},
     {.identifier = 'U',
      .access_name = "speech-backend",
      .value_name = "VALUE",
@@ -3708,6 +3754,20 @@ int main(int argc, char** argv)
         else if (key == "TransliteAttract")
           opt_translite_attract = DuplicateOptionalIniString(value);
       }
+      // Levels, not paths: MusicFiles and MusicGapMs stay where they already
+      // are because moving a key breaks the ppuc.ini files that use it, but
+      // nothing has said Volume yet.
+      else if (section == "Audio")
+      {
+        if (key == "Volume")
+          opt_volume = ParseVolumePercent(value.c_str());
+        else if (key == "RomVolume")
+          opt_rom_volume = ParseVolumePercent(value.c_str());
+        else if (key == "SpeechVolume")
+          opt_speech_volume = ParseVolumePercent(value.c_str());
+        else if (key == "MusicVolume")
+          opt_music_volume = ParseVolumePercent(value.c_str());
+      }
       else if (section == "Backbox")
       {
         if (key == "Address")
@@ -3978,6 +4038,18 @@ int main(int argc, char** argv)
         break;
       case 'q':
         opt_music_gap_ms = static_cast<uint32_t>(atoi(cag_option_get_value(&cag_context)));
+        break;
+      case '\'':
+        opt_volume = ParseVolumePercent(cag_option_get_value(&cag_context));
+        break;
+      case ',':
+        opt_rom_volume = ParseVolumePercent(cag_option_get_value(&cag_context));
+        break;
+      case ';':
+        opt_speech_volume = ParseVolumePercent(cag_option_get_value(&cag_context));
+        break;
+      case '.':
+        opt_music_volume = ParseVolumePercent(cag_option_get_value(&cag_context));
         break;
       case 'U':
         opt_speech_backend = cag_option_get_value(&cag_context);
@@ -4434,6 +4506,8 @@ int main(int argc, char** argv)
       return 1;
     }
     pAudioOutput->SetMusicTrackGapMs(opt_music_gap_ms);
+    pAudioOutput->SetVolumes(opt_volume / 100.0f, opt_rom_volume / 100.0f, opt_speech_volume / 100.0f,
+                             opt_music_volume / 100.0f);
 
     if (HasOptionValue(opt_music_files))
     {

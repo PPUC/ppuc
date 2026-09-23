@@ -354,6 +354,16 @@ std::string AudioOutput::DescribeLanes() const
   return out;
 }
 
+void AudioOutput::SetVolumes(float master, float game, float speech, float music)
+{
+  const auto clamp01 = [](float value) { return std::clamp(value, 0.0f, 1.0f); };
+  std::lock_guard<std::mutex> lock(mutex_);
+  masterVolume_ = clamp01(master);
+  gameVolume_ = clamp01(game);
+  speechVolume_ = clamp01(speech);
+  musicVolume_ = clamp01(music);
+}
+
 void AudioOutput::QueueSpeechSamples(const int16_t* samples, size_t sampleCount, int frequency, int channels)
 {
   if (samples == nullptr || sampleCount == 0 || frequency <= 0 || channels <= 0)
@@ -381,7 +391,8 @@ void SDLCALL AudioOutput::OnDeviceNeedsAudio(void* userdata, SDL_AudioStream* st
   {
     std::lock_guard<std::mutex> lock(self->mutex_);
     const uint64_t nowMs = SDL_GetTicks();
-    const bool gameActive = AudioMixer::Mix(self->gameQueue_, mixBuffer.data(), sampleCount);
+    const float gameGain = self->masterVolume_ * self->gameVolume_;
+    const bool gameActive = AudioMixer::Mix(self->gameQueue_, mixBuffer.data(), sampleCount, gameGain);
     bool pluginActive = false;
 
     // Lanes come back ordered so that an overrider is always decided before
@@ -401,7 +412,7 @@ void SDLCALL AudioOutput::OnDeviceNeedsAudio(void* userdata, SDL_AudioStream* st
         // emulator's rate regardless of who is listening, so holding the queue
         // back would fill it to the overflow cap and then dump stale audio the
         // moment the override lifted.
-        laneActive = (play ? AudioMixer::Mix(entry.second.queue, mixBuffer.data(), sampleCount)
+        laneActive = (play ? AudioMixer::Mix(entry.second.queue, mixBuffer.data(), sampleCount, gameGain)
                            : AudioMixer::Discard(entry.second.queue, sampleCount)) ||
                      laneActive;
       }
@@ -418,7 +429,7 @@ void SDLCALL AudioOutput::OnDeviceNeedsAudio(void* userdata, SDL_AudioStream* st
       {
         continue;
       }
-      pluginActive = AudioMixer::Mix(entry.second.queue, mixBuffer.data(), sampleCount) || pluginActive;
+      pluginActive = AudioMixer::Mix(entry.second.queue, mixBuffer.data(), sampleCount, gameGain) || pluginActive;
     }
 
     for (auto it = self->pluginStreams_.begin(); it != self->pluginStreams_.end();)
@@ -440,7 +451,8 @@ void SDLCALL AudioOutput::OnDeviceNeedsAudio(void* userdata, SDL_AudioStream* st
       it = self->pluginStreams_.erase(it);
     }
 
-    const bool speechActive = AudioMixer::Mix(self->speechQueue_, mixBuffer.data(), sampleCount);
+    const bool speechActive = AudioMixer::Mix(self->speechQueue_, mixBuffer.data(), sampleCount,
+                                              self->masterVolume_ * self->speechVolume_);
     self->MixMusicLocked(mixBuffer.data(), sampleCount, gameActive || pluginActive || speechActive);
   }
 
@@ -655,9 +667,13 @@ void AudioOutput::MixMusicLocked(int16_t* mixBuffer, size_t sampleCount, bool du
     }
 
 #if defined(PPUC_HAS_SDL3_MIXER)
+    // The level multiplies the ducking gain rather than replacing it, and the
+    // ramp above runs on the ducking gain alone: turning the music down must
+    // not change how it ducks, and a level change must not make it slide.
+    const float gain = musicGain_ * masterVolume_ * musicVolume_;
     const int16_t sample = musicBuffer[i];
     const int mixedValue =
-        static_cast<int>(mixBuffer[i]) + static_cast<int>(std::lround(static_cast<float>(sample) * musicGain_));
+        static_cast<int>(mixBuffer[i]) + static_cast<int>(std::lround(static_cast<float>(sample) * gain));
     mixBuffer[i] = AudioMixer::ClampSample(mixedValue);
 #endif
   }

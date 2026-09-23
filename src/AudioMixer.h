@@ -127,12 +127,17 @@ struct TrimOptions
 size_t TrimToTarget(Queue& queue, size_t targetSamples, size_t highWaterSamples, const TrimOptions& options = {});
 
 // Mixes up to `sampleCount` samples additively into `mixBuffer`, consuming the
-// queue as it goes. Returns true if any sample mixed reached
+// queue as it goes, at `gain`. Returns true if any sample mixed reached
 // kAudibleSampleThreshold.
+//
+// Audibility is measured after the gain, not before, which is what makes music
+// ducking follow what a listener can actually hear: a source turned down to
+// nothing must not duck the music, and one turned down a little should duck it
+// only while it is still loud enough to matter.
 //
 // Mixes as much as the queue holds and stops; it does NOT zero the remainder,
 // because the caller is mixing several queues into one buffer.
-bool Mix(Queue& queue, int16_t* mixBuffer, size_t sampleCount);
+bool Mix(Queue& queue, int16_t* mixBuffer, size_t sampleCount, float gain = 1.0f);
 
 // Consumes up to `sampleCount` samples without mixing them anywhere, returning
 // the same audibility answer Mix would have. A source that is currently

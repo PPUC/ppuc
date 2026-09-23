@@ -1,6 +1,7 @@
 #include "AudioMixer.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <limits>
@@ -51,10 +52,20 @@ void Enqueue(Queue& queue, std::vector<int16_t> samples, size_t maxBufferedSampl
   }
 }
 
-bool Mix(Queue& queue, int16_t* mixBuffer, size_t sampleCount)
+bool Mix(Queue& queue, int16_t* mixBuffer, size_t sampleCount, float gain)
 {
   if (mixBuffer == nullptr)
   {
+    return false;
+  }
+
+  // A silent source is still drained, on purpose. Its producer runs at the
+  // emulator's rate whether anyone listens or not, so holding the queue back
+  // would fill it to the overflow cap and then release stale audio the moment
+  // the volume came back up.
+  if (gain <= 0.0f)
+  {
+    Discard(queue, sampleCount);
     return false;
   }
 
@@ -68,12 +79,13 @@ bool Mix(Queue& queue, int16_t* mixBuffer, size_t sampleCount)
 
     for (size_t i = 0; i < chunkSamples; ++i)
     {
-      const int16_t sample = front.samples[front.offsetSamples + i];
-      if (!hadAudibleSamples && std::abs(static_cast<int>(sample)) >= kAudibleSampleThreshold)
+      const int scaled =
+          static_cast<int>(std::lround(static_cast<float>(front.samples[front.offsetSamples + i]) * gain));
+      if (!hadAudibleSamples && std::abs(scaled) >= kAudibleSampleThreshold)
       {
         hadAudibleSamples = true;
       }
-      const int mixedValue = static_cast<int>(mixBuffer[mixedSamples + i]) + static_cast<int>(sample);
+      const int mixedValue = static_cast<int>(mixBuffer[mixedSamples + i]) + scaled;
       mixBuffer[mixedSamples + i] = ClampSample(mixedValue);
     }
 

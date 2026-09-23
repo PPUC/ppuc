@@ -342,6 +342,74 @@ TEST_CASE("TrimToTarget ignores a queue between the target and the high-water ma
   CHECK(AudioMixer::BufferedSamples(queue) == 40);
 }
 
+TEST_CASE("Mix applies a gain")
+{
+  AudioMixer::Queue queue;
+  AudioMixer::Enqueue(queue, Block(4, 2000));
+
+  std::vector<int16_t> mixBuffer(4, 0);
+  CHECK(AudioMixer::Mix(queue, mixBuffer.data(), 4, 0.5f));
+  CHECK(mixBuffer[0] == 1000);
+  CHECK(mixBuffer[3] == 1000);
+  CHECK(queue.empty());
+}
+
+TEST_CASE("Mix still scales a source it reports as inaudible")
+{
+  // 1000 at half gain is 500, just under kAudibleSampleThreshold. The samples
+  // are mixed all the same: audibility is a signal for ducking, not a gate.
+  AudioMixer::Queue queue;
+  AudioMixer::Enqueue(queue, Block(4, 1000));
+
+  std::vector<int16_t> mixBuffer(4, 0);
+  CHECK(AudioMixer::Mix(queue, mixBuffer.data(), 4, 0.5f) == false);
+  CHECK(mixBuffer[0] == 500);
+  CHECK(queue.empty());
+}
+
+TEST_CASE("Mix reports audibility after the gain, not before")
+{
+  // This is what makes ducking follow what a listener hears. A source turned
+  // right down must not hold the music at its ducked level for the rest of the
+  // game.
+  AudioMixer::Queue loud;
+  AudioMixer::Enqueue(loud, Block(8, 8000));
+  std::vector<int16_t> mixBuffer(8, 0);
+  CHECK(AudioMixer::Mix(loud, mixBuffer.data(), 8, 0.01f) == false);
+
+  AudioMixer::Queue same;
+  AudioMixer::Enqueue(same, Block(8, 8000));
+  std::fill(mixBuffer.begin(), mixBuffer.end(), 0);
+  CHECK(AudioMixer::Mix(same, mixBuffer.data(), 8, 1.0f));
+}
+
+TEST_CASE("Mix at zero gain still drains the queue")
+{
+  // A silenced source keeps producing at the emulator's rate. Stalling its
+  // queue would fill it to the overflow cap and then play stale audio the
+  // moment the volume came back.
+  AudioMixer::Queue queue;
+  AudioMixer::Enqueue(queue, Block(16, 4000));
+
+  std::vector<int16_t> mixBuffer(8, 0);
+  CHECK(AudioMixer::Mix(queue, mixBuffer.data(), 8, 0.0f) == false);
+  CHECK(mixBuffer[0] == 0);
+  CHECK(AudioMixer::BufferedSamples(queue) == 8);
+}
+
+TEST_CASE("Mix saturates rather than wrapping when a gain pushes two sources over full scale")
+{
+  AudioMixer::Queue first;
+  AudioMixer::Enqueue(first, Block(4, 30000));
+  AudioMixer::Queue second;
+  AudioMixer::Enqueue(second, Block(4, 30000));
+
+  std::vector<int16_t> mixBuffer(4, 0);
+  AudioMixer::Mix(first, mixBuffer.data(), 4, 1.0f);
+  AudioMixer::Mix(second, mixBuffer.data(), 4, 1.0f);
+  CHECK(mixBuffer[0] == std::numeric_limits<int16_t>::max());
+}
+
 TEST_CASE("TrimToTarget keeps stereo frames aligned")
 {
   // Dropping an odd number of samples from an interleaved lane swaps left and
