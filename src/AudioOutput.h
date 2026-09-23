@@ -142,6 +142,11 @@ class AudioOutput
     uint64_t sourceId = 0;
     AudioMixer::Queue queue;
     Resampler resampler;
+    // When this stream was last fed, for the delivery-gap report. A lane that
+    // suddenly holds a quarter of a second of audio either ran fast or was
+    // starved and then handed the backlog in one go, and only the interval
+    // between deliveries tells those apart.
+    uint64_t lastQueuedMs = 0;
   };
   std::unordered_map<uint64_t, PluginStream> pluginStreams_;
   AudioLanes::Table lanes_;

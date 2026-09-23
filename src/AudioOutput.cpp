@@ -18,6 +18,11 @@ constexpr float kMusicDuckGain = 0.08f;
 constexpr float kMusicAttackPerSample = 0.00012f;
 constexpr float kMusicReleasePerSample = 0.00003f;
 
+// Delivery gap worth reporting under --debug-audio. Long enough that ordinary
+// buffer-sized jitter never trips it, short enough to catch a stall that
+// matters: the artefact being chased leaves a lane 150 ms behind.
+constexpr uint64_t kDeliveryGapReportMs = 50;
+
 std::string Trim(const std::string& input)
 {
   const size_t first = input.find_first_not_of(" \t\r\n");
@@ -223,8 +228,49 @@ void AudioOutput::QueuePluginSamples(uint64_t sourceId, uint64_t streamId, const
   std::lock_guard<std::mutex> lock(mutex_);
   PluginStream& stream = pluginStreams_[streamId];
   stream.sourceId = sourceId;
+
+  // A trim tells us a lane was 250 ms deep; it does not tell us how it got
+  // there. Either the producer ran ahead of the device, or deliveries stopped
+  // and the whole backlog arrived at once -- which is what a stall on the
+  // thread carrying them looks like from here. The gap and the size of the
+  // delivery that ends it distinguish the two, and share a clock with the
+  // main-loop stall report so the two logs line up.
+  const uint64_t nowMs = debugAudio_ ? SDL_GetTicks() : 0;
+  const uint64_t gapMs = (debugAudio_ && stream.lastQueuedMs != 0 && nowMs > stream.lastQueuedMs)
+      ? nowMs - stream.lastQueuedMs
+      : 0;
+  if (debugAudio_)
+  {
+    stream.lastQueuedMs = nowMs;
+  }
+
   QueueSamplesLocked(stream.queue, stream.resampler, samples, sampleCount, frequency, channels,
                      /* latencyManaged */ true);
+
+  if (debugAudio_ && gapMs >= kDeliveryGapReportMs)
+  {
+    const double sourceSamplesPerMs = static_cast<double>(frequency) * static_cast<double>(channels) / 1000.0;
+    const double deviceSamplesPerMs =
+        static_cast<double>(deviceSpec_.freq) * static_cast<double>(deviceSpec_.channels) / 1000.0;
+    // Named, not numbered: the point of this line is to be read next to the
+    // periodic lane report, which names them.
+    std::string laneName = "(unnamed lane)";
+    for (const AudioLanes::Lane& lane : lanes_.Lanes())
+    {
+      if (lane.id == sourceId && !lane.name.empty())
+      {
+        laneName = lane.name;
+        break;
+      }
+    }
+    std::printf("Audio: %s stream %llu waited %llu ms for audio, then got %d ms of it (%d ms buffered)\n",
+                laneName.c_str(),
+                static_cast<unsigned long long>(streamId), static_cast<unsigned long long>(gapMs),
+                sourceSamplesPerMs > 0.0 ? static_cast<int>(static_cast<double>(sampleCount) / sourceSamplesPerMs) : 0,
+                deviceSamplesPerMs > 0.0
+                    ? static_cast<int>(static_cast<double>(AudioMixer::BufferedSamples(stream.queue)) / deviceSamplesPerMs)
+                    : 0);
+  }
 }
 
 void AudioOutput::StopPluginStream(uint64_t streamId)

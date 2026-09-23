@@ -82,6 +82,95 @@
 #endif
 
 #define MAIN_LOOP_SLEEP_US 20  // Main loop sleep time in microseconds
+
+// Main-loop stall reporting, enabled by --debug-audio.
+//
+// It belongs to the audio debug flag because that is what it explains. A lane
+// that suddenly holds 250 ms of audio was starved of deliveries and then handed
+// the backlog at once, and a stall on this loop is the obvious candidate for
+// starving it -- the loop drains the plugin bus, and the bus is what carries
+// audio from the plugins. Reporting both under one flag keeps them in one log,
+// on one clock, so a gap on a lane can be read against what this loop was doing
+// at the time.
+//
+// Off by default because it reads the clock a handful of times per iteration,
+// and this loop runs every 20 microseconds.
+#define LOOP_STALL_REPORT_US 20000
+
+class LoopStallWatch
+{
+public:
+  explicit LoopStallWatch(bool enabled) : m_enabled(enabled)
+  {
+    if (m_enabled)
+    {
+      m_start = m_last = std::chrono::steady_clock::now();
+    }
+  }
+
+  // Closes the phase that just ran. Named rather than numbered: the point of
+  // the report is which phase held the loop up.
+  void Phase(const char* name)
+  {
+    if (!m_enabled || m_phaseCount >= kMaxPhases)
+    {
+      return;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    m_phases[m_phaseCount].name = name;
+    m_phases[m_phaseCount].us = std::chrono::duration_cast<std::chrono::microseconds>(now - m_last).count();
+    ++m_phaseCount;
+    m_last = now;
+  }
+
+  // Reports from the destructor so every way out of the loop body is covered,
+  // including the readiness gate's `continue`.
+  ~LoopStallWatch()
+  {
+    if (!m_enabled)
+    {
+      return;
+    }
+    const int64_t totalUs =
+        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - m_start).count();
+    if (totalUs < LOOP_STALL_REPORT_US)
+    {
+      return;
+    }
+    std::string out = "Loop: iteration took " + std::to_string(totalUs / 1000) + " ms:";
+    int64_t accountedUs = 0;
+    for (size_t i = 0; i < m_phaseCount; ++i)
+    {
+      accountedUs += m_phases[i].us;
+      // Only the phases that account for the stall, or the line is mostly
+      // zeroes.
+      if (m_phases[i].us >= 1000)
+      {
+        out += " " + std::string(m_phases[i].name) + "=" + std::to_string(m_phases[i].us / 1000) + "ms";
+      }
+    }
+    // Whatever ran outside a named phase, so a stall somewhere uninstrumented
+    // is still visible as such rather than as a total with nothing under it.
+    if (totalUs - accountedUs >= 1000)
+    {
+      out += " other=" + std::to_string((totalUs - accountedUs) / 1000) + "ms";
+    }
+    printf("%s\n", out.c_str());
+  }
+
+private:
+  static constexpr size_t kMaxPhases = 8;
+  struct PhaseTime
+  {
+    const char* name = nullptr;
+    int64_t us = 0;
+  };
+  const bool m_enabled;
+  std::chrono::steady_clock::time_point m_start;
+  std::chrono::steady_clock::time_point m_last;
+  PhaseTime m_phases[kMaxPhases];
+  size_t m_phaseCount = 0;
+};
 constexpr uint32_t kDefaultSwitchRefreshIdleMs = 15000;
 // Exit status after flashing boards: they are rebooting into the new firmware
 // and ppuc-pinmame has to be started again to configure them.
@@ -5290,6 +5379,9 @@ int main(int argc, char** argv)
     {
       std::this_thread::sleep_for(std::chrono::microseconds(MAIN_LOOP_SLEEP_US));
 
+      // Declared after the sleep, so the sleep is not counted as a stall.
+      LoopStallWatch stallWatch(opt_debug_audio);
+
       if (opt_exit_after_ms != 0 &&
           std::chrono::steady_clock::now() - loopStartedAt >= std::chrono::milliseconds(opt_exit_after_ms))
       {
@@ -5337,6 +5429,9 @@ int main(int argc, char** argv)
       // own startup work (identity, tracking-map load) that must proceed while
       // the host is still waiting for it to come up.
       pEngine->Update();
+      // The DMD is sampled in here, which means a plugin's GetRenderFrame is
+      // called from this loop -- the first place to look when it stalls.
+      stallWatch.Phase("engine");
 
       if (!pEngine->IsReady())
       {
@@ -5356,6 +5451,7 @@ int main(int argc, char** argv)
           if (pPluginBus) pPluginBus->Process();
         pMediaPluginHost->Process();
         }
+        stallWatch.Phase("starting");
         continue;
       }
 
@@ -5409,6 +5505,7 @@ int main(int argc, char** argv)
       ServiceBallSearchRunner(pPpuc, ballSearchRunner,
                               ball_search_game_running.load(std::memory_order_acquire),
                               opt_ball_search_delay_ms, opt_ball_search_round_delay_ms);
+      stallWatch.Phase("switches");
 
       pEngine->PollChangedLamps(lampChanges);
       for (const GameEngineOutputChange& change : lampChanges)
@@ -5470,13 +5567,19 @@ int main(int argc, char** argv)
           running = false;
         }
       }
+      stallWatch.Phase("outputs");
       ServicePlayfieldAssist(pEngine.get());
       g_interceptorOutputs.Service(pPpuc);
 
       if (pMediaPluginHost != nullptr)
       {
         if (pPluginBus) pPluginBus->Process();
+        // The bus drain is what carries plugin audio into AudioOutput, so a
+        // stall here is a stall in delivery -- pair this with the lane gap
+        // report from --debug-audio.
+        stallWatch.Phase("bus");
         pMediaPluginHost->Process();
+        stallWatch.Phase("media");
       }
 
       {  // Needs to be a separate scope for the lock_guard
@@ -5548,6 +5651,7 @@ int main(int argc, char** argv)
           renderQueue.pop();
         }
       }
+      stallWatch.Phase("render");
 
 #ifndef PPUC_USE_KMSDMD
       SDL_Event event;
