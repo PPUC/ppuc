@@ -701,7 +701,21 @@ void PluginEngine::SampleSegments()
   }
 }
 
-void PluginEngine::PollChangedLamps(std::vector<GameEngineOutputChange>& changes) { changes.swap(m_lampChanges); }
+// Hands over what SampleOutputs collected, and leaves nothing behind.
+//
+// The caller's vector is emptied first on purpose. A bare swap put the
+// caller's previous list back into the engine, and the main loop polls far
+// more often than SampleOutputs runs - every 20us against outputPollHz - so
+// the two vectors traded the same changes back and forth and every poll in
+// between delivered them again. A lamp that came on once was reported as
+// coming on over and over, without ever going off: rules that act when a lamp
+// lights fired repeatedly, and the same false changes reached the media host
+// and the boards.
+void PluginEngine::PollChangedLamps(std::vector<GameEngineOutputChange>& changes)
+{
+  changes.clear();
+  changes.swap(m_lampChanges);
+}
 
 void PluginEngine::PollChangedGis(std::vector<GameEngineOutputChange>& changes)
 {
@@ -710,6 +724,7 @@ void PluginEngine::PollChangedGis(std::vector<GameEngineOutputChange>& changes)
     changes.clear();
     return;
   }
+  changes.clear();
   changes.swap(m_giChanges);
 }
 

@@ -525,6 +525,18 @@ void LuaRulesEngine::OnLampState(int number, uint8_t state)
   const uint8_t normalized = state == 0 ? 0 : 1;
   const uint8_t old = GetState(m_lampStates, number);
   m_lampStates[number] = normalized;
+  // onLampChanged means what it says. The engine can report a lamp as on
+  // again without it having gone off, and every such report used to run the
+  // rule: an award that speaks when its lamp lights said its line several
+  // times over, on a lamp that never visibly blinked.
+  //
+  // A lamp that really does blink still calls the rule on each edge, because
+  // the state genuinely changes. A rule that should act once per ball has to
+  // say so itself.
+  if (old == normalized)
+  {
+    return;
+  }
   m_currentEvent = CurrentEvent{EventType::Lamp, number, old, normalized};
   if (m_lua != nullptr && !m_fatalError)
   {
