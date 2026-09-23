@@ -420,6 +420,26 @@ through -- two dozen discontinuities in forty seconds, each an audible click, to
 save milliseconds that were about to drain anyway. With the high-water mark it
 fires once, after the stall that caused it.
 
+#### The cut itself is spliced, not butted
+
+A trim that lands on an arbitrary pair of samples is a step, and a step is a
+click -- on a Williams *Flash* a Serum scene leaves the ROM lane ~150 ms behind
+and the recovery was audible every time. The cut is now made the way audio is
+normally spliced:
+
+* it may move up to `kSpliceSearchMs` either side of where the arithmetic
+  points, landing where the audio after the cut best matches the audio before it
+  (sum of absolute differences over the fade window -- no normalisation, no
+  floating point, and on periodic material it finds the same phase);
+* the two sides are then blended across `kSpliceCrossfadeMs` rather than butted
+  together, so whatever step survives is spread over hundreds of samples.
+
+Both are free: the trim only runs once a lane is 150 ms past its target, so
+moving the cut five milliseconds either way changes nothing it was trying to
+achieve. The number of samples dropped is also kept a multiple of the channel
+count, because dropping an odd number from an interleaved stereo lane swaps left
+and right for the rest of the session.
+
 #### Steering the rate closes both
 
 Trimming bounds a backlog by discarding audio; it cannot hold a depth, and it

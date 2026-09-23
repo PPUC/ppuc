@@ -535,7 +535,11 @@ void AudioOutput::TrimQueueLocked(AudioMixer::Queue& queue)
   {
     return;
   }
-  const size_t dropped = AudioMixer::TrimToTarget(queue, target, highWater);
+  AudioMixer::TrimOptions options;
+  options.channels = static_cast<unsigned int>(deviceSpec_.channels);
+  options.crossfadeSamples = samplesPerMs * AudioMixer::kSpliceCrossfadeMs;
+  options.searchSamples = samplesPerMs * AudioMixer::kSpliceSearchMs;
+  const size_t dropped = AudioMixer::TrimToTarget(queue, target, highWater, options);
   if (dropped != 0 && debugAudio_)
   {
     const double samplesPerMs = static_cast<double>(deviceSpec_.freq) * deviceSpec_.channels / 1000.0;

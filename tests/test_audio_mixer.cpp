@@ -10,7 +10,10 @@
 // docs/PLUGIN_MIGRATION.md will use to decide when an overriding source has
 // gone quiet.
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
 #include <vector>
 
@@ -337,6 +340,98 @@ TEST_CASE("TrimToTarget ignores a queue between the target and the high-water ma
 
   CHECK(AudioMixer::TrimToTarget(queue, 20, 100) == 0);
   CHECK(AudioMixer::BufferedSamples(queue) == 40);
+}
+
+TEST_CASE("TrimToTarget keeps stereo frames aligned")
+{
+  // Dropping an odd number of samples from an interleaved lane swaps left and
+  // right for the rest of the session -- a permanent fault to save half a
+  // sample of latency.
+  AudioMixer::Queue queue;
+  std::vector<int16_t> stereo(40);
+  for (size_t i = 0; i < stereo.size(); ++i)
+  {
+    stereo[i] = (i % 2 == 0) ? 1000 : -1000;
+  }
+  AudioMixer::Enqueue(queue, stereo);
+
+  AudioMixer::TrimOptions options;
+  options.channels = 2;
+  // 40 - 15 = 25, an odd number, so the trim has to round down to 24 and stop
+  // one sample short of its target.
+  CHECK(AudioMixer::TrimToTarget(queue, 15, 20, options) == 24);
+  CHECK(AudioMixer::BufferedSamples(queue) == 16);
+
+  std::vector<int16_t> mixBuffer(16, 0);
+  AudioMixer::Mix(queue, mixBuffer.data(), 16);
+  CHECK(mixBuffer[0] == 1000);
+  CHECK(mixBuffer[1] == -1000);
+}
+
+TEST_CASE("TrimToTarget splices on matching waveform instead of cutting anywhere")
+{
+  // A hard cut lands wherever the arithmetic points, which on periodic
+  // programme material is a step of up to twice the amplitude -- a click. The
+  // search moves the cut onto a matching part of the waveform, and the
+  // crossfade spreads whatever is left over several hundred samples.
+  constexpr size_t kPeriod = 100;
+  constexpr size_t kTotal = 1000;
+  constexpr double kAmplitude = 10000.0;
+
+  AudioMixer::Queue queue;
+  std::vector<int16_t> wave(kTotal);
+  for (size_t i = 0; i < kTotal; ++i)
+  {
+    wave[i] = static_cast<int16_t>(kAmplitude * std::sin(2.0 * 3.14159265358979 * static_cast<double>(i) /
+                                                         static_cast<double>(kPeriod)));
+  }
+  AudioMixer::Enqueue(queue, wave);
+
+  AudioMixer::TrimOptions options;
+  options.channels = 1;
+  options.crossfadeSamples = 50;
+  options.searchSamples = 60;
+
+  // 1000 - 430 = 570 samples to drop, which is 70 samples into a period. The
+  // nearest cut that lands on a period boundary, and so on identical phase, is
+  // 600.
+  const size_t dropped = AudioMixer::TrimToTarget(queue, 430, 500, options);
+  CHECK(dropped == 600);
+  CHECK(AudioMixer::BufferedSamples(queue) == 400);
+
+  std::vector<int16_t> mixBuffer(400, 0);
+  AudioMixer::Mix(queue, mixBuffer.data(), 400);
+
+  // One period of this wave steps by at most amplitude * 2pi / period between
+  // neighbours. Nothing in the spliced result may exceed that by more than
+  // rounding.
+  const int maxNaturalStep = static_cast<int>(kAmplitude * 2.0 * 3.14159265358979 / static_cast<double>(kPeriod)) + 2;
+  int maxStep = 0;
+  for (size_t i = 1; i < mixBuffer.size(); ++i)
+  {
+    maxStep = std::max(maxStep, std::abs(static_cast<int>(mixBuffer[i]) - static_cast<int>(mixBuffer[i - 1])));
+  }
+  CHECK(maxStep <= maxNaturalStep);
+
+  // And the join still starts where the unsplit audio would have: the listener
+  // hears no step into the crossfade either.
+  CHECK(std::abs(static_cast<int>(mixBuffer[0]) - static_cast<int>(wave[0])) <= maxNaturalStep);
+}
+
+TEST_CASE("TrimToTarget falls back to a hard cut when a splice will not fit")
+{
+  // A queue shorter than the crossfade has nothing to blend with; it must
+  // still come down to its target rather than refuse.
+  AudioMixer::Queue queue;
+  AudioMixer::Enqueue(queue, Block(30, 500));
+
+  AudioMixer::TrimOptions options;
+  options.channels = 1;
+  options.crossfadeSamples = 220;
+  options.searchSamples = 220;
+
+  CHECK(AudioMixer::TrimToTarget(queue, 10, 20, options) == 20);
+  CHECK(AudioMixer::BufferedSamples(queue) == 10);
 }
 
 TEST_CASE("RateRatioFor leaves a lane at its target alone")

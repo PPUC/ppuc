@@ -1,6 +1,7 @@
 #include "AudioMixer.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdlib>
 #include <limits>
 #include <utility>
@@ -101,34 +102,151 @@ float RateRatioFor(size_t bufferedSamples, size_t targetSamples)
   return 1.0f + correction;
 }
 
-size_t TrimToTarget(Queue& queue, size_t targetSamples, size_t highWaterSamples)
+namespace
 {
-  size_t buffered = BufferedSamples(queue);
+
+size_t AbsDifference(size_t a, size_t b) { return (a > b) ? a - b : b - a; }
+
+// Reads `count` samples starting `skip` samples into the queue, without
+// consuming anything. Returns how many it could read.
+size_t PeekSamples(const Queue& queue, size_t skip, size_t count, int16_t* out)
+{
+  size_t copied = 0;
+  for (const auto& entry : queue)
+  {
+    const size_t available = entry.samples.size() - entry.offsetSamples;
+    if (skip >= available)
+    {
+      skip -= available;
+      continue;
+    }
+    const size_t chunk = std::min(count - copied, available - skip);
+    std::copy_n(entry.samples.data() + entry.offsetSamples + skip, chunk, out + copied);
+    copied += chunk;
+    skip = 0;
+    if (copied == count)
+    {
+      break;
+    }
+  }
+  return copied;
+}
+
+// Consumes `count` samples from the front, splitting a block if it has to.
+void DropSamples(Queue& queue, size_t count)
+{
+  while (count > 0 && !queue.empty())
+  {
+    PendingBuffer& front = queue.front();
+    const size_t available = front.samples.size() - front.offsetSamples;
+    if (available <= count)
+    {
+      count -= available;
+      queue.pop_front();
+      continue;
+    }
+    front.offsetSamples += count;
+    count = 0;
+  }
+}
+
+// Of the cuts within `searchSamples` of `idealDrop`, the one whose audio after
+// the cut best matches the audio that plays before it. Sum of absolute
+// differences: no normalisation, no floating point, and it agrees with
+// correlation on the only thing being asked -- which of these candidates makes
+// the smallest step.
+size_t BestCut(const Queue& queue, size_t idealDrop, size_t searchSamples, size_t fadeSamples, size_t channels,
+               size_t buffered)
+{
+  const size_t maxDrop = std::min(idealDrop + searchSamples, buffered - fadeSamples);
+  const size_t minDrop = (idealDrop > searchSamples + channels) ? idealDrop - searchSamples : channels;
+  if (maxDrop <= minDrop)
+  {
+    return std::min(idealDrop, maxDrop);
+  }
+
+  std::vector<int16_t> before(fadeSamples);
+  if (PeekSamples(queue, 0, fadeSamples, before.data()) != fadeSamples)
+  {
+    return idealDrop;
+  }
+
+  std::vector<int16_t> candidates(maxDrop - minDrop + fadeSamples);
+  const size_t readable = PeekSamples(queue, minDrop, candidates.size(), candidates.data());
+  if (readable < fadeSamples)
+  {
+    return idealDrop;
+  }
+
+  size_t bestDrop = idealDrop;
+  uint64_t bestScore = std::numeric_limits<uint64_t>::max();
+  for (size_t drop = minDrop; drop + fadeSamples <= minDrop + readable; drop += channels)
+  {
+    const int16_t* candidate = candidates.data() + (drop - minDrop);
+    uint64_t score = 0;
+    for (size_t i = 0; i < fadeSamples; ++i)
+    {
+      score += static_cast<uint64_t>(std::abs(static_cast<int>(before[i]) - static_cast<int>(candidate[i])));
+    }
+    // Ties go to the cut nearest the one asked for, so the lane still lands
+    // close to its target.
+    if (score < bestScore || (score == bestScore && AbsDifference(drop, idealDrop) < AbsDifference(bestDrop, idealDrop)))
+    {
+      bestScore = score;
+      bestDrop = drop;
+    }
+  }
+  return bestDrop;
+}
+
+}  // namespace
+
+size_t TrimToTarget(Queue& queue, size_t targetSamples, size_t highWaterSamples, const TrimOptions& options)
+{
+  const size_t buffered = BufferedSamples(queue);
   if (buffered <= highWaterSamples || buffered <= targetSamples)
   {
     return 0;
   }
 
-  size_t dropped = 0;
-  while (buffered > targetSamples && !queue.empty())
+  const size_t channels = std::max(1u, options.channels);
+  size_t drop = buffered - targetSamples;
+  drop -= drop % channels;
+  if (drop == 0)
   {
-    PendingBuffer& front = queue.front();
-    const size_t available = front.samples.size() - front.offsetSamples;
-    const size_t excess = buffered - targetSamples;
-    if (available <= excess)
-    {
-      queue.pop_front();
-      buffered -= available;
-      dropped += available;
-      continue;
-    }
-    // Drop part of a block rather than all of it, so trimming lands on the
-    // target instead of overshooting into an underrun.
-    front.offsetSamples += excess;
-    buffered -= excess;
-    dropped += excess;
+    return 0;
   }
-  return dropped;
+
+  const size_t fadeSamples = options.crossfadeSamples - (options.crossfadeSamples % channels);
+  if (fadeSamples != 0 && drop + fadeSamples <= buffered)
+  {
+    drop = BestCut(queue, drop, options.searchSamples - (options.searchSamples % channels), fadeSamples, channels,
+                   buffered);
+
+    std::vector<int16_t> before(fadeSamples);
+    std::vector<int16_t> after(fadeSamples);
+    if (PeekSamples(queue, 0, fadeSamples, before.data()) == fadeSamples &&
+        PeekSamples(queue, drop, fadeSamples, after.data()) == fadeSamples)
+    {
+      // The join replaces the first fadeSamples of what survives, so the queue
+      // still ends up exactly `drop` samples shorter.
+      PendingBuffer join;
+      join.samples.resize(fadeSamples);
+      const size_t fadeFrames = fadeSamples / channels;
+      for (size_t i = 0; i < fadeSamples; ++i)
+      {
+        const float weight = static_cast<float>(i / channels + 1) / static_cast<float>(fadeFrames + 1);
+        join.samples[i] = ClampSample(static_cast<int>(static_cast<float>(before[i]) * (1.0f - weight) +
+                                                      static_cast<float>(after[i]) * weight));
+      }
+      DropSamples(queue, drop + fadeSamples);
+      queue.push_front(std::move(join));
+      return drop;
+    }
+  }
+
+  DropSamples(queue, drop);
+  return drop;
 }
 
 bool Discard(Queue& queue, size_t sampleCount)

@@ -91,10 +91,40 @@ inline constexpr float kMaxRateDeviation = 0.003f;
 // so shrinks a queue that is running ahead.
 float RateRatioFor(size_t bufferedSamples, size_t targetSamples);
 
+// How a trim joins the two sides of the cut.
+//
+// A hard cut lands on an arbitrary pair of samples, and the step between them
+// is a click -- the one artefact of an otherwise invisible mechanism. Two
+// cheap measures remove it, both standard practice for splicing audio:
+//
+//   * the cut may move by up to kSpliceSearchMs to land where the audio after
+//     it best resembles the audio before it, so the join falls on matching
+//     waveform rather than wherever the arithmetic happened to point;
+//   * the two sides are blended over kSpliceCrossfadeMs instead of butted
+//     together, so whatever step remains is spread over hundreds of samples.
+//
+// Both are bounded by the tolerance the trim already has: it only runs once a
+// lane is 150 ms past its target, so moving the cut a few milliseconds either
+// way costs nothing.
+inline constexpr unsigned int kSpliceCrossfadeMs = 5;
+inline constexpr unsigned int kSpliceSearchMs = 5;
+
+struct TrimOptions
+{
+  // Interleaved channel count. The number of samples dropped is kept a
+  // multiple of it, because dropping an odd number from a stereo lane swaps
+  // left and right for the rest of the session.
+  unsigned int channels = 1;
+  // Length of the blended join. Zero cuts hard.
+  size_t crossfadeSamples = 0;
+  // How far the cut may move in either direction to find a better join.
+  size_t searchSamples = 0;
+};
+
 // Drops the oldest samples back to `targetSamples`, but only once the queue has
 // passed `highWaterSamples`. Returns how many were dropped, which is zero in
 // the ordinary case.
-size_t TrimToTarget(Queue& queue, size_t targetSamples, size_t highWaterSamples);
+size_t TrimToTarget(Queue& queue, size_t targetSamples, size_t highWaterSamples, const TrimOptions& options = {});
 
 // Mixes up to `sampleCount` samples additively into `mixBuffer`, consuming the
 // queue as it goes. Returns true if any sample mixed reached
