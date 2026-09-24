@@ -187,6 +187,34 @@ TEST_CASE("Flash multiball rule") {
         harness.engine().ProcessCoilState(kCoilEjectHole, 1).forwardToBoard);
   }
 
+  SUBCASE("the waiting light is ended by another effect, not by a stop") {
+    // The firmware has no stop: an endless effect ends when something of
+    // higher priority takes the device. If the rule ever stopped triggering
+    // one, the cabinet would sit on a rainbow for the rest of the game.
+    RulesHarness harness(script);
+    harness.LoadOrFail();
+    ClearBothBanks(harness);
+    REQUIRE(harness.triggers.size() == 1);
+    const uint16_t waiting = harness.triggers[0].id;
+
+    harness.engine().ProcessCoilState(kCoilEjectHole, 1);
+    REQUIRE(harness.triggers.size() == 2);
+    CHECK(harness.triggers[1].id != waiting);
+    CHECK(harness.triggers[1].value == 1);
+  }
+
+  SUBCASE("draining while it waits ends the light too") {
+    RulesHarness harness(script);
+    harness.LoadOrFail();
+    ClearBothBanks(harness);
+    REQUIRE(harness.triggers.size() == 1);
+    const uint16_t waiting = harness.triggers[0].id;
+
+    harness.engine().SetCurrentBall(2);
+    REQUIRE(harness.triggers.size() == 2);
+    CHECK(harness.triggers[1].id != waiting);
+  }
+
   SUBCASE("a flipper button is not a plunge; a playfield switch is") {
     RulesHarness harness(script);
     harness.LoadOrFail();
