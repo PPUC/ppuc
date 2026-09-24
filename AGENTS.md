@@ -35,6 +35,15 @@ documentation:
 
 Repository-local reference documentation:
 
+- `HANDBOOK.md`: **the operator's manual, and it must be kept up to date.** It
+  is the one document written for the person who owns or runs a machine rather
+  than for whoever is changing the code. Any change to something an operator
+  sees or touches -- a key binding, a menu entry, an INI key, a game-folder
+  path, what appears on the backbox screen, what a switch or button does -- is
+  not finished until `HANDBOOK.md` says so. Design documents under `docs/`
+  explain why something works the way it does and are no substitute: nobody
+  standing at a machine reads them. When a feature's behaviour and the handbook
+  disagree, one of the two is a bug; decide which before moving on.
 - `README.md`: full CLI reference, game-folder layout, INI, Lua rules, build
   instructions
 - `docs/RULES_AND_EFFECTS.md`: what Lua rules can do and the `ppuc.*` API
