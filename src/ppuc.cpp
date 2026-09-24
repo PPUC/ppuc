@@ -494,6 +494,9 @@ std::vector<std::string> g_ruleScripts;
 // call into LuaRulesEngine: the path OnCoilChanged -> OnCoilState -> a Lua
 // onCoilChanged handler -> ppuc.pulseCoil -> HandleAction comes straight back in
 // here, and a non-recursive mutex held across that would deadlock.
+// Defined with the rest of the monitor, further down.
+static void NoteCoilMonitorState(int number, uint8_t state);
+
 struct InterceptorOutputOverrides
 {
   struct CoilPulse
@@ -527,9 +530,11 @@ struct InterceptorOutputOverrides
     const auto pulseIt = coilPulses.find(number);
     if (pulseIt != coilPulses.end() && now < pulseIt->second.until)
     {
+      NoteCoilMonitorState(number, 1);
       controller->SetSolenoidState(number, 1);
       return;
     }
+    NoteCoilMonitorState(number, state == 0 ? 0 : 1);
     controller->SetSolenoidState(number, state == 0 ? 0 : 1);
   }
 
@@ -554,6 +559,7 @@ struct InterceptorOutputOverrides
     {
       pulse.until = until;
     }
+    NoteCoilMonitorState(number, 1);
     controller->SetSolenoidState(number, 1);
   }
 
@@ -599,6 +605,7 @@ struct InterceptorOutputOverrides
         const int number = coilIt->first;
         coilIt = coilPulses.erase(coilIt);
         const uint8_t restore = engineCoils.count(number) == 0 ? 0 : engineCoils[number];
+        NoteCoilMonitorState(number, restore);
         controller->SetSolenoidState(number, restore);
       }
       else
@@ -1934,78 +1941,92 @@ static FirmwareImage FindNewestFirmwareImage(const char* directory, uint8_t boar
 // So this takes over the backbox screen for the duration and says what is
 // happening and what not to do.
 
-// A live switch matrix on the backbox screen.
+// A live switch and coil matrix on the backbox screen.
 //
-// Reading a scrolling log to answer "is the outhole switch closed right now"
-// is the wrong shape of question for a scrolling log: the answer is a state,
-// not an event, and the interesting case is a switch that is NOT changing. So
-// this paints every configured switch once and keeps it painted, green for
-// closed and red for open.
+// A scrolling log is the wrong shape for "is the outhole switch closed right
+// now, and did Ball Release ever fire". Those are states, and the interesting
+// case -- a ball resting on a switch the game never noticed -- is the one
+// where nothing is being logged at all. So this paints every configured device
+// once and keeps it painted.
 //
-// What it shows is the host's own view -- the bitmap libppuc maintains from
-// what the boards report -- which is exactly the thing in doubt when a ball
-// sits in a trough the game never notices. A board sends its full switch
-// bitmap at least every hundred replies even when nothing changes, so the host
-// view converges on the board view within a second. If a switch under a ball
-// reads open here, the closure is not being lost between board and host: it
-// never reached the board.
-struct SwitchMonitorEntry
+// Switches show the host's own view: the bitmap libppuc keeps from what the
+// boards report. That is exactly the thing in doubt when a ball sits in a
+// trough the game never notices. A board re-sends its full switch bitmap at
+// least every hundred replies even when nothing changes, so the host view
+// converges on the board view within a second. If a switch under a ball reads
+// open here, the closure never reached the board.
+//
+// Coils show the opposite direction: what PPUC has commanded. A coil that
+// reads idle while a ball waits to be kicked out says the game never asked,
+// which separates "the ROM does not know" from "the ROM asked and nothing
+// moved" -- the two halves of a machine that will not serve a ball.
+struct MonitorEntry
 {
     int number = 0;
     uint8_t board = 0;
     uint8_t port = 0;
-    std::string description;
+    std::string description = {};
     uint8_t state = 0;
     uint64_t lastChangeMs = 0;
+    // Coils only: a pulse is over long before the next repaint, so the count
+    // and the age are what make one visible at all.
+    uint32_t activations = 0;
 };
 
 static bool g_switchMonitorEnabled = false;
-static std::vector<SwitchMonitorEntry> g_switchMonitorEntries;
+static std::vector<MonitorEntry> g_switchMonitorEntries;
 static std::unordered_map<int, size_t> g_switchMonitorIndex;
+static std::vector<MonitorEntry> g_coilMonitorEntries;
+static std::unordered_map<int, size_t> g_coilMonitorIndex;
 static uint64_t g_switchMonitorLastRenderMs = 0;
 static uint32_t g_switchMonitorChanges = 0;
 
-// Built lazily, because the switch list does not exist until the boards have
-// been configured: libppuc fills m_switches while it sends the mapping frames,
-// not when it parses the YAML. Asking at startup got an empty table and a
-// screen that said "0 switches".
-static void EnsureSwitchMonitorTable();
+// Built lazily, because neither list exists until the boards have been
+// configured: libppuc fills them while it sends the mapping frames, not when
+// it parses the YAML. Asking at startup got an empty table and a screen that
+// said "0 switches".
+static void EnsureMonitorTables();
 
-static void InitSwitchMonitor(const std::vector<PPUCSwitch>& switches)
+static void BuildMonitorTable(std::vector<MonitorEntry>& entries, std::unordered_map<int, size_t>& index,
+                              std::vector<MonitorEntry> built)
 {
-    g_switchMonitorEntries.clear();
-    g_switchMonitorIndex.clear();
-    g_switchMonitorEntries.reserve(switches.size());
-    for (const PPUCSwitch& sw : switches)
+    entries = std::move(built);
+    std::sort(entries.begin(), entries.end(),
+              [](const MonitorEntry& a, const MonitorEntry& b) { return a.number < b.number; });
+    index.clear();
+    for (size_t i = 0; i < entries.size(); ++i)
     {
-        SwitchMonitorEntry entry;
-        entry.number = sw.number;
-        entry.board = sw.board;
-        entry.port = sw.port;
-        entry.description = sw.description;
-        g_switchMonitorIndex[entry.number] = g_switchMonitorEntries.size();
-        g_switchMonitorEntries.push_back(std::move(entry));
-    }
-    std::sort(g_switchMonitorEntries.begin(), g_switchMonitorEntries.end(),
-              [](const SwitchMonitorEntry& a, const SwitchMonitorEntry& b) { return a.number < b.number; });
-    g_switchMonitorIndex.clear();
-    for (size_t i = 0; i < g_switchMonitorEntries.size(); ++i)
-    {
-        g_switchMonitorIndex[g_switchMonitorEntries[i].number] = i;
+        index[entries[i].number] = i;
     }
 }
 
-static void EnsureSwitchMonitorTable()
+static void EnsureMonitorTables()
 {
     if (!g_switchMonitorEntries.empty() || pPpuc == nullptr)
     {
         return;
     }
-    InitSwitchMonitor(pPpuc->GetSwitches());
-    if (!g_switchMonitorEntries.empty())
+
+    std::vector<MonitorEntry> switches;
+    for (const PPUCSwitch& sw : pPpuc->GetSwitches())
     {
-        printf("PPUC: switch monitor showing %zu switches\n", g_switchMonitorEntries.size());
+        switches.push_back({sw.number, sw.board, sw.port, sw.description, 0, 0, 0});
     }
+    if (switches.empty())
+    {
+        return;
+    }
+    BuildMonitorTable(g_switchMonitorEntries, g_switchMonitorIndex, std::move(switches));
+
+    std::vector<MonitorEntry> coils;
+    for (const PPUCCoil& coil : pPpuc->GetCoils())
+    {
+        coils.push_back({coil.number, coil.board, coil.port, coil.description, 0, 0, 0});
+    }
+    BuildMonitorTable(g_coilMonitorEntries, g_coilMonitorIndex, std::move(coils));
+
+    printf("PPUC: switch monitor showing %zu switches and %zu coils\n", g_switchMonitorEntries.size(),
+           g_coilMonitorEntries.size());
 }
 
 // Every switch the host hears about, including the ones it does not forward to
@@ -2018,13 +2039,13 @@ static void NoteSwitchMonitorState(int number, uint8_t state)
     {
         return;
     }
-    EnsureSwitchMonitorTable();
+    EnsureMonitorTables();
     const auto it = g_switchMonitorIndex.find(number);
     if (it == g_switchMonitorIndex.end())
     {
         return;
     }
-    SwitchMonitorEntry& entry = g_switchMonitorEntries[it->second];
+    MonitorEntry& entry = g_switchMonitorEntries[it->second];
     if (entry.state != state)
     {
         entry.state = state;
@@ -2033,6 +2054,31 @@ static void NoteSwitchMonitorState(int number, uint8_t state)
     }
 }
 
+// Every coil PPUC commands, whoever asked for it: the ROM through
+// OnCoilChanged, a Lua rule's pulse, an interceptor restore.
+static void NoteCoilMonitorState(int number, uint8_t state)
+{
+    if (!g_switchMonitorEnabled)
+    {
+        return;
+    }
+    EnsureMonitorTables();
+    const auto it = g_coilMonitorIndex.find(number);
+    if (it == g_coilMonitorIndex.end())
+    {
+        return;
+    }
+    MonitorEntry& entry = g_coilMonitorEntries[it->second];
+    if (entry.state != state)
+    {
+        entry.state = state;
+        entry.lastChangeMs = SDL_GetTicks();
+        if (state != 0)
+        {
+            ++entry.activations;
+        }
+    }
+}
 struct FirmwareScreen
 {
     bool active = false;
@@ -2319,9 +2365,118 @@ static void RenderFirmwareScreen(double progress)
 }
 
 
+// One section of the screen: a background of its own, a heading, and as many
+// columns of rows as fit.
+static void DrawMonitorSection(const char* title, const std::vector<MonitorEntry>& entries, bool coils, int x, int y,
+                               int w, int h, SDL_Color background)
+{
+    const SDL_Color white{235, 235, 235, 255};
+    const SDL_Color dim{120, 120, 130, 255};
+    const SDL_Color green{70, 210, 100, 255};
+    const SDL_Color red{225, 70, 70, 255};
+    const SDL_Color amber{255, 200, 70, 255};
+
+    SDL_SetRenderDrawColor(pTransliteRenderer, background.r, background.g, background.b, 255);
+    const SDL_FRect panel{static_cast<float>(x), static_cast<float>(y), static_cast<float>(w),
+                          static_cast<float>(h)};
+    SDL_RenderFillRect(pTransliteRenderer, &panel);
+
+    const uint64_t now = SDL_GetTicks();
+    size_t active = 0;
+    for (const MonitorEntry& entry : entries)
+    {
+        active += entry.state ? 1 : 0;
+    }
+
+    char line[192];
+    snprintf(line, sizeof(line), "%s -- %zu, %zu %s", title, entries.size(), active, coils ? "on" : "closed");
+    DrawFirmwareTextLeft(line, pFirmwareFontSmall, x + 20, y + 10, white);
+
+    const int top = y + 52;
+    const int bottom = y + h - 12;
+    const int rowH = 32;
+    const int maxRows = std::max(1, (bottom - top) / rowH);
+
+    // A column is as wide as a row needs, not as wide as the section divided
+    // by however many columns happen to be required. Dividing the width put
+    // the state word half a metre from the name it belonged to.
+    const int kColumnWidth = 560;
+    const int maxColumns = std::max(1, (w - 20) / kColumnWidth);
+    const int columns =
+        std::max(1, std::min(maxColumns, static_cast<int>((entries.size() + static_cast<size_t>(maxRows) - 1) /
+                                                          static_cast<size_t>(maxRows))));
+    const int rows = std::max(
+        1, static_cast<int>((entries.size() + static_cast<size_t>(columns) - 1) / static_cast<size_t>(columns)));
+
+    // A section with one column spreads into whatever width it was given
+    // rather than leaving it blank: coil names are the long ones -- "5-Bank
+    // 4,5 (Bottom) Reset" -- and they were being cut short beside an empty
+    // third of the screen.
+    const int columnWidth = columns == 1 ? std::min(w - 28, 820) : kColumnWidth;
+
+    for (size_t i = 0; i < entries.size(); ++i)
+    {
+        const MonitorEntry& entry = entries[i];
+        const int col = static_cast<int>(i) / rows;
+        const int row = static_cast<int>(i) % rows;
+        if (col >= columns)
+        {
+            break;  // More than fits; the section is as tall as it is.
+        }
+        const int rx = x + 14 + col * columnWidth;
+        const int ry = top + row * rowH;
+        const bool isActive = entry.state != 0;
+        const bool recent = entry.lastChangeMs != 0 && now - entry.lastChangeMs < 2000;
+
+        // A block of colour as well as a word, so the screen still says
+        // something on a machine with no font installed, and so a wrong device
+        // can be spotted from across the room.
+        const SDL_Color blockColour = isActive ? green : (recent ? amber : (coils ? dim : red));
+        SDL_SetRenderDrawColor(pTransliteRenderer, blockColour.r, blockColour.g, blockColour.b, 255);
+        const SDL_FRect box{static_cast<float>(rx), static_cast<float>(ry) + 6.0f, 16.0f, 16.0f};
+        SDL_RenderFillRect(pTransliteRenderer, &box);
+
+        const SDL_Color nameColour = recent ? amber : (isActive ? white : dim);
+        snprintf(line, sizeof(line), "%3d %u/%-2u %s", entry.number, static_cast<unsigned>(entry.board),
+                 static_cast<unsigned>(entry.port), entry.description.c_str());
+        // Truncated rather than wrapped: a column is a fixed width, and a name
+        // that runs into the next column is worse than a name cut short.
+        TruncateToWidth(line, pFirmwareFontSmall, columnWidth - 150);
+        DrawFirmwareTextLeft(line, pFirmwareFontSmall, rx + 26, ry, nameColour);
+
+        if (coils)
+        {
+            // A pulse is milliseconds long and the screen repaints ten times a
+            // second, so "on" is almost never what is seen. The count and the
+            // age are what make a coil that did fire visible afterwards, and a
+            // coil that never fired unmistakable.
+            if (isActive)
+            {
+                DrawFirmwareTextLeft("on", pFirmwareFontSmall, rx + columnWidth - 110, ry, green);
+            }
+            else if (entry.activations != 0)
+            {
+                snprintf(line, sizeof(line), "%ux %.0fs", entry.activations,
+                         static_cast<double>(now - entry.lastChangeMs) / 1000.0);
+                DrawFirmwareTextLeft(line, pFirmwareFontSmall, rx + columnWidth - 110, ry, recent ? amber : dim);
+            }
+            else
+            {
+                DrawFirmwareTextLeft("never", pFirmwareFontSmall, rx + columnWidth - 110, ry, dim);
+            }
+        }
+        else
+        {
+            DrawFirmwareTextLeft(isActive ? "closed" : "open", pFirmwareFontSmall, rx + columnWidth - 110, ry,
+                                 isActive ? green : red);
+        }
+    }
+}
+
 static void RenderSwitchMonitor()
 {
-    EnsureSwitchMonitorTable();
+    EnsureMonitorTables();
+
     // Takes the backbox screen the same way the firmware warning does, and for
     // the same reason: on a machine configured for B2S or PUP there is no
     // other window to draw into. Which is why enabling the monitor turns those
@@ -2341,89 +2496,53 @@ static void RenderSwitchMonitor()
 
     const SDL_Color white{235, 235, 235, 255};
     const SDL_Color dim{120, 120, 130, 255};
-    const SDL_Color green{70, 210, 100, 255};
-    const SDL_Color red{225, 70, 70, 255};
-    const SDL_Color amber{255, 200, 70, 255};
 
-    SDL_SetRenderDrawColor(pTransliteRenderer, 12, 12, 16, 255);
+    SDL_SetRenderDrawColor(pTransliteRenderer, 0, 0, 0, 255);
     SDL_RenderClear(pTransliteRenderer);
 
     char line[192];
-    DrawFirmwareText("SWITCH MONITOR", pFirmwareFontLarge, w / 2, 12, white);
+    DrawFirmwareText("SWITCH AND COIL MONITOR", pFirmwareFontLarge, w / 2, 8, white);
+    snprintf(line, sizeof(line), "%u switch changes seen", g_switchMonitorChanges);
+    DrawFirmwareText(line, pFirmwareFontSmall, w / 2, 62, dim);
 
-    const uint64_t now = SDL_GetTicks();
-    size_t closed = 0;
-    for (const SwitchMonitorEntry& entry : g_switchMonitorEntries)
-    {
-        closed += entry.state ? 1 : 0;
-    }
-    snprintf(line, sizeof(line), "%zu switches, %zu closed, %u changes seen", g_switchMonitorEntries.size(), closed,
-             g_switchMonitorChanges);
-    DrawFirmwareText(line, pFirmwareFontSmall, w / 2, 70, dim);
-
-    const int top = 120;
-    const int bottom = h - 60;
-    const int rowH = 32;
-    const int maxRows = std::max(1, (bottom - top) / rowH);
-
-    // A column is as wide as a row needs, not as wide as the screen divided by
-    // however many columns happen to be required. Dividing the screen put the
-    // state word half a metre from the name it belonged to on a 1080p backbox.
+    // Split by what each side needs rather than down the middle: a game with
+    // fifty switches and twenty coils wants two columns and one, and an even
+    // split would waste half the screen on the smaller list.
+    const int top = 100;
+    const int bottom = h - 46;
+    const int sectionH = bottom - top;
     const int kColumnWidth = 560;
-    const int maxColumns = std::max(1, (w - 40) / kColumnWidth);
-    const int columns = std::max(
-        1, std::min(maxColumns, static_cast<int>((g_switchMonitorEntries.size() + static_cast<size_t>(maxRows) - 1) /
-                                                 static_cast<size_t>(maxRows))));
-    const int rows = std::max(1, static_cast<int>((g_switchMonitorEntries.size() + static_cast<size_t>(columns) - 1) /
-                                                  static_cast<size_t>(columns)));
-    const int colW = kColumnWidth;
-
-    for (size_t i = 0; i < g_switchMonitorEntries.size(); ++i)
+    const int usableRows = std::max(1, (sectionH - 64) / 32);
+    const auto columnsFor = [&](size_t count) {
+        return std::max(1, static_cast<int>((count + static_cast<size_t>(usableRows) - 1) /
+                                            static_cast<size_t>(usableRows)));
+    };
+    const int switchColumns = columnsFor(g_switchMonitorEntries.size());
+    const int coilColumns = columnsFor(g_coilMonitorEntries.size());
+    int switchW = (switchColumns * kColumnWidth) + 28;
+    int coilW = w - switchW;
+    const int minCoilW = kColumnWidth + 28;
+    if (coilW < minCoilW)
     {
-        const SwitchMonitorEntry& entry = g_switchMonitorEntries[i];
-        const int col = static_cast<int>(i) / rows;
-        const int row = static_cast<int>(i) % rows;
-        const int x = 20 + col * colW;
-        const int y = top + row * rowH;
-        const bool isClosed = entry.state != 0;
-
-        // A block of colour as well as a word, so the screen still says
-        // something on a machine with no font installed, and so a wrong switch
-        // can be spotted from across the room.
-        const SDL_FRect box{static_cast<float>(x), static_cast<float>(y) + 6.0f, 16.0f, 16.0f};
-        if (isClosed)
-        {
-            SDL_SetRenderDrawColor(pTransliteRenderer, green.r, green.g, green.b, 255);
-        }
-        else
-        {
-            SDL_SetRenderDrawColor(pTransliteRenderer, red.r, red.g, red.b, 255);
-        }
-        SDL_RenderFillRect(pTransliteRenderer, &box);
-
-        // Recently changed switches are worth picking out: when a ball drains
-        // and nothing happens, the question is which switch moved last.
-        const bool recent = entry.lastChangeMs != 0 && now - entry.lastChangeMs < 2000;
-        const SDL_Color nameColour = recent ? amber : (isClosed ? white : dim);
-
-        snprintf(line, sizeof(line), "%3d %u/%-2u %s", entry.number, static_cast<unsigned>(entry.board),
-                 static_cast<unsigned>(entry.port), entry.description.c_str());
-        // Truncated rather than wrapped: a column is a fixed width, and a name
-        // that runs into the next column is worse than a name cut short.
-        TruncateToWidth(line, pFirmwareFontSmall, colW - 140);
-        DrawFirmwareTextLeft(line, pFirmwareFontSmall, x + 26, y, nameColour);
-        DrawFirmwareTextLeft(isClosed ? "closed" : "open", pFirmwareFontSmall, x + colW - 100, y,
-                             isClosed ? green : red);
+        coilW = std::min(w / 2, minCoilW);
+        switchW = w - coilW;
     }
+    (void)coilColumns;
 
-    DrawFirmwareText("green = closed    red = open    amber = changed in the last 2 s", pFirmwareFontSmall, w / 2,
-                     h - 40, dim);
+    // Two backgrounds, because at a glance the eye should not have to read a
+    // heading to know which half it is looking at.
+    const SDL_Color switchBackground{14, 18, 30, 255};
+    const SDL_Color coilBackground{30, 18, 14, 255};
+    DrawMonitorSection("SWITCHES", g_switchMonitorEntries, false, 0, top, switchW, sectionH, switchBackground);
+    DrawMonitorSection("COILS", g_coilMonitorEntries, true, switchW, top, coilW, sectionH, coilBackground);
+
+    DrawFirmwareText("green = closed / on    red = open    amber = changed in the last 2 s    coils show count and age",
+                     pFirmwareFontSmall, w / 2, h - 36, dim);
 
     SDL_RenderPresent(pTransliteRenderer);
     SDL_FlushRenderer(pTransliteRenderer);
     SDL_PumpEvents();
 }
-
 static void CloseFirmwareScreen()
 {
 #ifdef PPUC_HAS_SDL3_TTF
@@ -3176,7 +3295,7 @@ static struct cag_option options[] = {
     {.identifier = '`',
      .access_name = "switch-monitor",
      .value_name = NULL,
-     .description = "Show a live switch matrix on the backbox screen instead of the translite, B2S or PUP (diagnostics)"},
+     .description = "Show live switch and coil state on the backbox screen instead of the translite, B2S or PUP (diagnostics)"},
     {.identifier = '\'',
      .access_name = "volume",
      .value_name = "VALUE",
