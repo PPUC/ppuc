@@ -42,6 +42,18 @@ class LuaRulesEngine
     bool forwardToCpu = true;
   };
 
+  // What the rules decided about a coil the engine just asked for.
+  //
+  // A rule that takes over a coil has to answer before the board is driven,
+  // which is why coil events now reach the rules ahead of the interceptor
+  // rather than after it. Flash's multiball needs exactly this: the ROM fires
+  // the eject hole the instant the ball arrives, and the rule has to put that
+  // ball's neighbour into the shooter lane instead.
+  struct CoilProcessResult
+  {
+    bool forwardToBoard = true;
+  };
+
   LuaRulesEngine();
   ~LuaRulesEngine();
 
@@ -82,7 +94,15 @@ class LuaRulesEngine
 
   SwitchProcessResult ProcessSwitchState(int number, uint8_t state);
   void OnLampState(int number, uint8_t state);
-  void OnCoilState(int number, uint8_t state);
+  // Replaces OnCoilState: same notification, but its answer decides whether
+  // the coil reaches the board.
+  CoilProcessResult ProcessCoilState(int number, uint8_t state);
+
+  // The switches the configuration marks as buttons -- flippers, coin door,
+  // service. Rules ask so that "the player hit something on the playfield" can
+  // be told from "the player pressed a button", using the same definition the
+  // ball search already uses rather than a second list that can disagree.
+  void SetButtonSwitches(std::unordered_set<int> buttons);
   void SetCurrentBall(uint8_t currentBall);
   void SetCurrentPlayer(uint8_t currentPlayer);
   void SetAttractMode(bool attractMode);
@@ -170,6 +190,9 @@ class LuaRulesEngine
   static int LuaSerumScene(lua_State* L);
   static int LuaEffectTrigger(lua_State* L);
   static int LuaSuppressSwitch(lua_State* L);
+  static int LuaSuppressCoil(lua_State* L);
+  static int LuaIsButtonSwitch(lua_State* L);
+  static int LuaHoldBallSearch(lua_State* L);
   static int LuaSendSwitchToCpu(lua_State* L);
   static int LuaPulseCoil(lua_State* L);
   static int LuaBlinkLamp(lua_State* L);
@@ -184,6 +207,8 @@ class LuaRulesEngine
   std::unordered_map<std::string, std::vector<uint16_t>> m_switchGroups;
   std::unordered_map<std::string, std::vector<int>> m_handlers;
   std::unordered_set<int> m_suppressedSwitchOpen;
+  std::unordered_set<int> m_buttonSwitches;
+  bool m_suppressCurrentCoil = false;
   std::deque<HistoryEntry> m_history;
   std::deque<ScheduledCallback> m_scheduledCallbacks;
   CurrentEvent m_currentEvent;

@@ -90,6 +90,96 @@ end
   }
 }
 
+TEST_CASE("coils are driven unless a rule takes one over") {
+  SUBCASE("not suppressed") {
+    RulesHarness harness(R"LUA(
+function ppuc.onCoilChanged(number, state)
+end
+)LUA");
+    harness.LoadOrFail();
+
+    CHECK(harness.engine().ProcessCoilState(5, 1).forwardToBoard);
+  }
+
+  SUBCASE("suppressed") {
+    // Flash's multiball: the ROM fires the eject hole the moment the ball
+    // arrives, and the rule has to put the second ball into the shooter lane
+    // instead. The answer has to come before the coil reaches the board.
+    RulesHarness harness(R"LUA(
+function ppuc.onCoilChanged(number, state)
+  if number == 5 and state == 1 then
+    ppuc.suppressCoil(5)
+  end
+end
+)LUA");
+    harness.LoadOrFail();
+
+    CHECK_FALSE(harness.engine().ProcessCoilState(5, 1).forwardToBoard);
+  }
+
+  SUBCASE("suppressing one coil does not affect another, or the next activation") {
+    RulesHarness harness(R"LUA(
+function ppuc.onCoilChanged(number, state)
+  if number == 5 and state == 1 then
+    ppuc.suppressCoil(5)
+  end
+end
+)LUA");
+    harness.LoadOrFail();
+
+    CHECK_FALSE(harness.engine().ProcessCoilState(5, 1).forwardToBoard);
+    CHECK(harness.engine().ProcessCoilState(1, 1).forwardToBoard);
+    // The rule answers for the activation in front of it and nothing else, so
+    // a coil is never left disabled by a rule that stopped looking.
+    CHECK(harness.engine().ProcessCoilState(5, 0).forwardToBoard);
+  }
+}
+
+TEST_CASE("a rule can tell a playfield hit from a button press") {
+  // The same definition the ball search uses, rather than a second list in the
+  // rules that can disagree with the configuration.
+  RulesHarness harness(R"LUA(
+function ppuc.onSwitchChanged(number, state)
+  if ppuc.isButtonSwitch(number) then
+    ppuc.speech("button")
+  else
+    ppuc.speech("playfield")
+  end
+end
+)LUA");
+  harness.LoadOrFail();
+  harness.engine().SetButtonSwitches({201, 202, 203});
+
+  harness.engine().ProcessSwitchState(201, 1);
+  harness.engine().ProcessSwitchState(27, 1);
+
+  REQUIRE(harness.speech.size() == 2);
+  CHECK(harness.speech[0] == "button");
+  CHECK(harness.speech[1] == "playfield");
+}
+
+TEST_CASE("a rule can hold the ball search off and let it run again") {
+  RulesHarness harness(R"LUA(
+function ppuc.onSwitchChanged(number, state)
+  if number == 27 then
+    ppuc.holdBallSearch(true)
+  elseif number == 28 then
+    ppuc.holdBallSearch(false)
+  end
+end
+)LUA");
+  harness.LoadOrFail();
+
+  harness.engine().ProcessSwitchState(27, 1);
+  harness.engine().ProcessSwitchState(28, 1);
+
+  REQUIRE(harness.actions.size() == 2);
+  CHECK(harness.actions[0].type == RulesActionType::HoldBallSearch);
+  CHECK(harness.actions[0].state == 1);
+  CHECK(harness.actions[1].type == RulesActionType::HoldBallSearch);
+  CHECK(harness.actions[1].state == 0);
+}
+
 TEST_CASE("state helpers reflect what the engine has been told") {
   RulesHarness harness(R"LUA(
 lampWasOn = nil

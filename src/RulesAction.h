@@ -10,7 +10,13 @@ enum class RulesActionType
   StopBlinkLamp,
   // Starts or extends a ball save for durationMs. Works under either engine:
   // ball save lives in PlayfieldAssist, in the switch path, not in the engine.
-  GrantBallSave
+  GrantBallSave,
+  // Holds the ball search off, or lets it run again. For the stretch of a
+  // multiball start where a ball waits in the shooter lane and another sits in
+  // a kickout hole: nothing is lost, the machine is simply waiting for the
+  // player, and a search would fire coils under a ball that is exactly where it
+  // should be. `state` is 1 to hold it off.
+  HoldBallSearch
 };
 
 struct RulesAction

@@ -454,6 +454,11 @@ const char* opt_virtual_dmd_renderer = "dots";
 const char* opt_pinmame_path = NULL;
 const char* opt_rom = NULL;
 std::atomic<bool> ball_search_game_running{false};
+// Held off by a rule for as long as the machine is deliberately waiting: a
+// multiball start leaves a ball in the shooter lane and another in a kickout
+// hole, and nothing is lost -- a search would fire coils under balls that are
+// exactly where they should be.
+std::atomic<bool> g_ballSearchHeld{false};
 std::atomic<bool> running{true};
 volatile std::sig_atomic_t shutdown_requested = 0;
 static uint64_t CurrentUnixMs();
@@ -522,10 +527,18 @@ struct InterceptorOutputOverrides
   // running. Keeps this struct free of any engine header.
   std::function<void(int, uint8_t)> sendSwitch;
 
-  void ApplyEngineCoil(PPUC* controller, int number, uint8_t state)
+  // `drive` false records what the engine wanted without putting it on the
+  // wire: a rule has taken this coil over for the moment. The record still
+  // has to be kept, because a pulse expiring later restores the engine's
+  // intent and a stale one would restore the wrong thing.
+  void ApplyEngineCoil(PPUC* controller, int number, uint8_t state, bool drive = true)
   {
     std::lock_guard<std::mutex> lock(mutex);
     engineCoils[number] = state == 0 ? 0 : 1;
+    if (!drive)
+    {
+      return;
+    }
     const auto now = std::chrono::steady_clock::now();
     const auto pulseIt = coilPulses.find(number);
     if (pulseIt != coilPulses.end() && now < pulseIt->second.until)
@@ -649,6 +662,9 @@ struct InterceptorOutputOverrides
         break;
       case RulesActionType::GrantBallSave:
         g_playfieldAssist.GrantBallSave(action.durationMs);
+        break;
+      case RulesActionType::HoldBallSearch:
+        g_ballSearchHeld.store(action.state != 0, std::memory_order_release);
         break;
     }
   }
@@ -1193,6 +1209,16 @@ static void ServiceBallSearchRunner(PPUC* pPpuc, BallSearchRunner& runner, bool 
 {
   if (runner.steps.empty())
   {
+    return;
+  }
+
+  // A rule is holding it off. Any round already running is stopped rather than
+  // left mid-sequence, and the idle timer is pushed out so releasing the hold
+  // does not immediately trip a search that was due while it was held.
+  if (g_ballSearchHeld.load(std::memory_order_acquire))
+  {
+    CancelActiveBallSearch(pPpuc, runner);
+    ResetBallSearchIdle(runner, delayMs);
     return;
   }
 
@@ -3962,7 +3988,20 @@ struct PpucEngineHost final : GameEngineHost
       pMediaPluginHost->QueueEvent('S', number, state);
     }
 
-    g_interceptorOutputs.ApplyEngineCoil(pPpuc, number, state);
+    // The rules answer before the board is driven, not after. A rule that
+    // takes a coil over -- Flash's multiball puts a ball in the shooter lane
+    // instead of letting the eject hole fire -- has to be able to stop the
+    // activation, and by the time the coil has been sent it is too late.
+    //
+    // Deliberately outside any interceptor lock: a Lua onCoilChanged handler
+    // may call ppuc.pulseCoil, which comes straight back into the interceptor.
+    bool driveCoil = true;
+    if (pLuaRulesEngine)
+    {
+      driveCoil = pLuaRulesEngine->ProcessCoilState(number, state).forwardToBoard;
+    }
+
+    g_interceptorOutputs.ApplyEngineCoil(pPpuc, number, state, driveCoil);
 
     for (const PPUCCoilGiMapping& mapping : pPpuc->GetCoilGiMappings())
     {
@@ -3978,12 +4017,6 @@ struct PpucEngineHost final : GameEngineHost
       pPpuc->SetGIState(mapping.gi, brightness);
     }
 
-    // Deliberately outside any interceptor lock: a Lua onCoilChanged handler may
-    // call ppuc.pulseCoil, which comes straight back into the interceptor.
-    if (pLuaRulesEngine)
-    {
-      pLuaRulesEngine->OnCoilState(number, state);
-    }
   }
 
   void OnGameRunningChanged(bool gameRunning) override
@@ -6169,6 +6202,22 @@ int main(int argc, char** argv)
 
   // Rules-injected switches go to whichever engine is running.
   g_interceptorOutputs.sendSwitch = [&pEngine](int number, uint8_t state) { pEngine->SendSwitch(number, state); };
+
+  // One definition of "that was a button, not the playfield", shared by the
+  // ball search and by any rule that needs to know a player plunged rather
+  // than pressed a flipper.
+  if (pLuaRulesEngine && pPpuc != nullptr)
+  {
+    std::unordered_set<int> buttons;
+    for (const PPUCSwitch& sw : pPpuc->GetSwitches())
+    {
+      if (sw.button)
+      {
+        buttons.insert(sw.number);
+      }
+    }
+    pLuaRulesEngine->SetButtonSwitches(std::move(buttons));
+  }
 
   std::string engineError;
   if (pEngine->Start(engineError))

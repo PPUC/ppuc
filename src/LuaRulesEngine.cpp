@@ -204,6 +204,9 @@ void LuaRulesEngine::RegisterApi()
   SetPpucFunction(m_lua, this, "blinkLamp", LuaBlinkLamp);
   SetPpucFunction(m_lua, this, "stopBlinkLamp", LuaStopBlinkLamp);
   SetPpucFunction(m_lua, this, "ballSave", LuaBallSave);
+  SetPpucFunction(m_lua, this, "suppressCoil", LuaSuppressCoil);
+  SetPpucFunction(m_lua, this, "isButtonSwitch", LuaIsButtonSwitch);
+  SetPpucFunction(m_lua, this, "holdBallSearch", LuaHoldBallSearch);
 
   // Registered only when the ROM-less game is running, so `ppuc.game == nil` is
   // a reliable feature test for a script that must work under either engine.
@@ -545,18 +548,29 @@ void LuaRulesEngine::OnLampState(int number, uint8_t state)
   m_currentEvent = CurrentEvent{};
 }
 
-void LuaRulesEngine::OnCoilState(int number, uint8_t state)
+LuaRulesEngine::CoilProcessResult LuaRulesEngine::ProcessCoilState(int number, uint8_t state)
 {
   std::lock_guard<std::recursive_mutex> lock(m_mutex);
+  CoilProcessResult result;
   const uint8_t normalized = state == 0 ? 0 : 1;
   const uint8_t old = GetState(m_coilStates, number);
   m_coilStates[number] = normalized;
   m_currentEvent = CurrentEvent{EventType::Coil, number, old, normalized};
+  m_suppressCurrentCoil = false;
   if (m_lua != nullptr && !m_fatalError)
   {
     CallHandler("onCoilChanged", {number, normalized});
   }
+  result.forwardToBoard = !m_suppressCurrentCoil;
+  m_suppressCurrentCoil = false;
   m_currentEvent = CurrentEvent{};
+  return result;
+}
+
+void LuaRulesEngine::SetButtonSwitches(std::unordered_set<int> buttons)
+{
+  std::lock_guard<std::recursive_mutex> lock(m_mutex);
+  m_buttonSwitches = std::move(buttons);
 }
 
 void LuaRulesEngine::SetCurrentBall(uint8_t currentBall)
@@ -981,6 +995,41 @@ int LuaRulesEngine::LuaSuppressSwitch(lua_State* L)
       engine->m_currentEvent.newValue != 0)
   {
     engine->m_suppressedSwitchOpen.insert(number);
+  }
+  return 0;
+}
+
+// Only for the coil event being handled, like suppressSwitch. A rule cannot
+// disable a coil from a distance: it answers for the activation in front of it
+// and nothing else, so a rule that stops running leaves the machine whole.
+int LuaRulesEngine::LuaSuppressCoil(lua_State* L)
+{
+  auto* engine = FromLua(L);
+  const int number = static_cast<int>(luaL_checkinteger(L, 1));
+  if (engine->m_currentEvent.type == EventType::Coil && engine->m_currentEvent.number == number)
+  {
+    engine->m_suppressCurrentCoil = true;
+  }
+  return 0;
+}
+
+int LuaRulesEngine::LuaIsButtonSwitch(lua_State* L)
+{
+  auto* engine = FromLua(L);
+  const int number = static_cast<int>(luaL_checkinteger(L, 1));
+  lua_pushboolean(L, engine->m_buttonSwitches.find(number) != engine->m_buttonSwitches.end() ? 1 : 0);
+  return 1;
+}
+
+int LuaRulesEngine::LuaHoldBallSearch(lua_State* L)
+{
+  auto* engine = FromLua(L);
+  if (engine->m_actionCallback)
+  {
+    const bool hold = lua_isnoneornil(L, 1) ? true : lua_toboolean(L, 1) != 0;
+    engine->m_actionCallback(
+        RulesAction{RulesActionType::HoldBallSearch, 0, hold ? static_cast<uint8_t>(1) : static_cast<uint8_t>(0), 0, 0,
+                    0});
   }
   return 0;
 }
