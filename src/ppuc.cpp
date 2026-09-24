@@ -2245,6 +2245,17 @@ static void TruncateToWidth(char* text, TTF_Font* font, int maxWidth)
     }
 }
 
+static int MeasureTextWidth(const char* text, TTF_Font* font)
+{
+    int w = 0;
+    int h = 0;
+    if (!font || !text || !*text || !TTF_GetStringSize(font, text, 0, &w, &h))
+    {
+        return 0;
+    }
+    return w;
+}
+
 // Left-aligned, for anything laid out in columns rather than centred.
 static void DrawFirmwareTextLeft(const char* text, TTF_Font* font, int x, int y, SDL_Color colour)
 {
@@ -2304,6 +2315,7 @@ static void EnsureFirmwareFont() {}
 static void DrawFirmwareText(const char*, TTF_Font*, int, int, SDL_Color) {}
 static void DrawFirmwareTextLeft(const char*, TTF_Font*, int, int, SDL_Color) {}
 static void TruncateToWidth(char*, TTF_Font*, int) {}
+static int MeasureTextWidth(const char*, TTF_Font*) { return 0; }
 #endif
 
 // Opens a window for the warning when the game has no translite.
@@ -2610,7 +2622,11 @@ static void DrawMonitorSection(const char* title, const std::vector<MonitorEntry
         DrawFirmwareTextLeft(line, pFirmwareFontSmall, rx, ry, nameColour);
 
         char age[16];
-        FormatAge(age, sizeof(age), now, entry.lastActivationMs);
+        // How long it has been in the state it is in, whichever that is. A
+        // switch that has been open for five minutes is as much a fact as one
+        // closed three seconds ago, and on a machine with a ball stuck
+        // somewhere it is often the more useful one.
+        FormatAge(age, sizeof(age), now, coils ? entry.lastActivationMs : entry.lastChangeMs);
 
         if (coils)
         {
@@ -2638,7 +2654,7 @@ static void DrawMonitorSection(const char* title, const std::vector<MonitorEntry
                                  isActive ? green : dim);
         }
 
-        if (entry.lastActivationMs != 0)
+        if ((coils ? entry.lastActivationMs : entry.lastChangeMs) != 0)
         {
             DrawFirmwareTextLeft(age, pFirmwareFontSmall, rx + contentWidth - 55, ry, recent ? amber : dim);
         }
@@ -2694,9 +2710,31 @@ static void DrawSwitchMonitorInto(int w, int h)
     DrawMonitorSection("COILS", g_coilMonitorEntries, true, switchW, top, coilW, sectionH, coilBackground,
                        g_coilMonitorEntries.empty() ? -1 : g_coilSelection);
 
-    DrawFirmwareText("green = closed / on    grey = open / idle    amber = changed in the last 2 s    "
-                     "cursor keys pick a coil, ENTER fires it once",
-                     pFirmwareFontSmall, w / 2, h - 36, dim);
+    // Each colour word in its own colour. A legend that has to be decoded is
+    // one more thing to read on a screen whose whole point is not reading.
+    const SDL_Color green{70, 210, 100, 255};
+    const SDL_Color amber{255, 200, 70, 255};
+    struct LegendPart
+    {
+        const char* text;
+        SDL_Color colour;
+    };
+    const LegendPart legend[] = {
+        {"green", green}, {" = closed / on    ", dim},
+        {"grey", dim},    {" = open / idle    ", dim},
+        {"amber", amber}, {" = changed in the last 2 s    cursor keys pick a coil, ENTER fires it once", dim},
+    };
+    int legendWidth = 0;
+    for (const LegendPart& part : legend)
+    {
+        legendWidth += MeasureTextWidth(part.text, pFirmwareFontSmall);
+    }
+    int legendX = (w - legendWidth) / 2;
+    for (const LegendPart& part : legend)
+    {
+        DrawFirmwareTextLeft(part.text, pFirmwareFontSmall, legendX, h - 36, part.colour);
+        legendX += MeasureTextWidth(part.text, pFirmwareFontSmall);
+    }
 
 }
 
