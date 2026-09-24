@@ -281,6 +281,8 @@ if(NOT (PLATFORM STREQUAL "win" OR PLATFORM STREQUAL "win-mingw"))
 endif()
 
 add_executable(ppuc-pinmame
+   src/AttractSlides.cpp
+   src/AttractSlidesLoader.cpp
    src/AudioLanes.cpp
    src/AudioMixer.cpp
    src/AudioOutput.cpp
@@ -772,6 +774,7 @@ if(PPUC_BUILD_TESTS)
    # reader, while map loading lives in PinmameNvramMapLoader.cpp and is not
    # part of this target.
    add_executable(ppuc_tests
+      src/AttractSlides.cpp
       src/AudioLanes.cpp
       src/AudioMixer.cpp
       src/LuaGameApi.cpp
@@ -801,6 +804,7 @@ if(PPUC_BUILD_TESTS)
       tests/test_lua_rules_engine.cpp
       tests/test_lua_rules_timing.cpp
       tests/test_pinmame_nvram_tracking.cpp
+      tests/test_attract_slides.cpp
       tests/test_audio_lanes.cpp
       tests/test_audio_mixer.cpp
       tests/test_plugin_switch_map.cpp

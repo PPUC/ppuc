@@ -47,6 +47,7 @@
 #else
 #include "SDLDMD/SDLDMD.h"
 #endif
+#include "AttractSlides.h"
 #include "AudioLanes.h"
 #include "AudioOutput.h"
 #include "LuaRulesEngine.h"
@@ -433,6 +434,16 @@ uint8_t opt_volume = 100;
 uint8_t opt_rom_volume = 100;
 uint8_t opt_speech_volume = 100;
 uint8_t opt_music_volume = 100;
+// How-to-play slides in attract mode. On by default: a game folder that has a
+// slides directory is a machine whose owner wants slides, and a second switch
+// to turn them on would only be a way to have them silently not appear.
+bool opt_attract_slides = true;
+// Null until a game folder with slides in it has been read. Everything that
+// asks about it goes through SlidesVisible(), so the common case -- a game with
+// no slides -- costs one null check per pass.
+static std::unique_ptr<AttractSlides::Show> g_attractSlides;
+uint32_t opt_attract_slides_idle_ms = 60000;
+uint32_t opt_attract_slide_duration_ms = 8000;
 const char* opt_speech_backend = "auto";
 const char* opt_speech_voice = NULL;
 const char* opt_speech_rate_arg = NULL;
@@ -1957,6 +1968,47 @@ static FirmwareImage FindNewestFirmwareImage(const char* directory, uint8_t boar
 // of date is the part worth getting visibly right before anything writes to
 // one.
 
+// On-screen tools, reached from a keyboard.
+//
+// A cabinet has no keyboard in normal use, which is the point: plug one in and
+// the machine grows a service menu, unplug it and nothing has changed. SPACE
+// opens the menu, the cursor keys move, ENTER selects, ESC steps back out --
+// tool to menu, menu to game.
+//
+// Kept as one small state machine rather than a window toolkit because every
+// tool here is a page of text over a black rectangle, and because it has to
+// run on a machine whose only display is a backbox screen with no compositor.
+//
+// Declared out here, ahead of the drawing, because which tool is open is a
+// decision the main loop makes on either graphics path -- while everything that
+// paints one exists only where there is an SDL window to paint into.
+enum class OverlayScreen
+{
+    None,
+    Menu,
+    Monitor,
+    Volume,
+    Confirm,
+};
+
+static OverlayScreen g_overlay = OverlayScreen::None;
+// When the service screen was last repainted. Out here with g_overlay for the
+// same reason: the main loop decides when to repaint on either graphics path.
+static uint64_t g_switchMonitorLastRenderMs = 0;
+
+// Set when the machine should go down rather than the program restart. Acted
+// on after everything else has been shut down properly, which is main()'s job
+// on either graphics path.
+static bool g_powerOffRequested = false;
+static bool g_restartRequested = false;
+
+// Runtime levels, in percent, seeded from ppuc.ini and never written back.
+// This is a knob for a person standing at the machine with a ball in the
+// shooter lane, not a way to edit the configuration: the game folder is the
+// record of what the machine should sound like, and a service menu that
+// silently rewrote it would lose that.
+static uint8_t g_runtimeVolumes[4] = {100, 100, 100, 100};
+
 #ifndef PPUC_USE_KMSDMD
 // The screen shown while a board is being flashed.
 //
@@ -2034,7 +2086,6 @@ static std::vector<MonitorEntry> g_switchMonitorEntries;
 static std::unordered_map<int, size_t> g_switchMonitorIndex;
 static std::vector<MonitorEntry> g_coilMonitorEntries;
 static std::unordered_map<int, size_t> g_coilMonitorIndex;
-static uint64_t g_switchMonitorLastRenderMs = 0;
 static uint32_t g_switchMonitorChanges = 0;
 // The coil the cursor keys are on, and how long ENTER fires it for.
 //
@@ -2286,6 +2337,36 @@ static void DrawFirmwareTextLeft(const char* text, TTF_Font* font, int x, int y,
     SDL_DestroyTexture(texture);
 }
 
+// Left-aligned and word-wrapped to `maxWidth`. Only the slideshow needs this:
+// everything else on these screens is one measured line per row, while a slide
+// carries a sentence somebody typed into a text field.
+static void DrawFirmwareTextWrapped(const char* text, TTF_Font* font, int x, int y, int maxWidth, SDL_Color colour)
+{
+    if (!font || !text || !*text || maxWidth <= 0)
+    {
+        return;
+    }
+
+    SDL_Surface* surface = TTF_RenderText_Blended_Wrapped(font, text, 0, colour, maxWidth);
+    if (!surface)
+    {
+        return;
+    }
+
+    SDL_Texture* texture = SDL_CreateTextureFromSurface(g_uiRenderer, surface);
+    const float w = static_cast<float>(surface->w);
+    const float h = static_cast<float>(surface->h);
+    SDL_DestroySurface(surface);
+    if (!texture)
+    {
+        return;
+    }
+
+    const SDL_FRect dst{static_cast<float>(x), static_cast<float>(y), w, h};
+    SDL_RenderTexture(g_uiRenderer, texture, nullptr, &dst);
+    SDL_DestroyTexture(texture);
+}
+
 static void DrawFirmwareText(const char* text, TTF_Font* font, int centerX, int y, SDL_Color colour)
 {
     if (!font || !text || !*text)
@@ -2316,6 +2397,7 @@ static void DrawFirmwareText(const char* text, TTF_Font* font, int centerX, int 
 static void EnsureFirmwareFont() {}
 static void DrawFirmwareText(const char*, TTF_Font*, int, int, SDL_Color) {}
 static void DrawFirmwareTextLeft(const char*, TTF_Font*, int, int, SDL_Color) {}
+static void DrawFirmwareTextWrapped(const char*, TTF_Font*, int, int, int, SDL_Color) {}
 static void TruncateToWidth(char*, TTF_Font*, int) {}
 static int MeasureTextWidth(const char*, TTF_Font*) { return 0; }
 #endif
@@ -2452,25 +2534,6 @@ static void RenderFirmwareScreen(double progress)
 }
 
 
-// On-screen tools, reached from a keyboard.
-//
-// A cabinet has no keyboard in normal use, which is the point: plug one in and
-// the machine grows a service menu, unplug it and nothing has changed. SPACE
-// opens the menu, the cursor keys move, ENTER selects, ESC steps back out --
-// tool to menu, menu to game.
-//
-// Kept as one small state machine rather than a window toolkit because every
-// tool here is a page of text over a black rectangle, and because it has to
-// run on a machine whose only display is a backbox screen with no compositor.
-enum class OverlayScreen
-{
-    None,
-    Menu,
-    Monitor,
-    Volume,
-    Confirm,
-};
-
 // Menu entries that do something rather than open something. Both of these end
 // the session, so neither happens without being asked twice.
 enum class OverlayAction
@@ -2480,24 +2543,13 @@ enum class OverlayAction
     PowerOff,
 };
 
-static OverlayScreen g_overlay = OverlayScreen::None;
 static int g_menuSelection = 0;
 static int g_volumeSelection = 0;
 static OverlayAction g_pendingAction = OverlayAction::None;
 // The confirmation starts on "No". A menu that ends the game if ENTER is
 // pressed twice by reflex is a menu nobody should open during a game.
 static bool g_confirmYes = false;
-// Set when the machine should go down rather than the program restart. Acted
-// on after everything else has been shut down properly.
-static bool g_powerOffRequested = false;
-static bool g_restartRequested = false;
 
-// Runtime levels, in percent, seeded from ppuc.ini and never written back.
-// This is a knob for a person standing at the machine with a ball in the
-// shooter lane, not a way to edit the configuration: the game folder is the
-// record of what the machine should sound like, and a service menu that
-// silently rewrote it would lose that.
-static uint8_t g_runtimeVolumes[4] = {100, 100, 100, 100};
 static const char* const kVolumeNames[4] = {"Master", "Game sound", "Speech", "Music"};
 
 static void ApplyRuntimeVolumes()
@@ -3146,11 +3198,349 @@ static void DrawOverlayInto(SDL_Renderer* renderer, int w, int h, bool clearFirs
     }
 }
 
+
+// The how-to-play slideshow, drawn into the same frame as the service tools.
+//
+// Everything here is procedural rather than baked into the photograph, which is
+// the whole point of storing markers as coordinates: one photograph of the
+// playfield can be re-marked, or the numbering changed, by editing two numbers
+// in the config tool. Nothing is pre-rendered and no new library is linked in.
+
+// One texture at a time. A slideshow shows one photograph for eight seconds,
+// so a cache is a cache of one -- and keeping the renderer it was made for
+// means the same slide survives moving between the media host's backglass and
+// a window opened here, which do not share textures.
+static SDL_Texture* pSlideTexture = nullptr;
+static SDL_Renderer* pSlideTextureRenderer = nullptr;
+static size_t slideTextureIndex = static_cast<size_t>(-1);
+static std::string slideTexturePath;
+
+static void ReleaseSlideTexture()
+{
+    if (pSlideTexture)
+    {
+        SDL_DestroyTexture(pSlideTexture);
+        pSlideTexture = nullptr;
+    }
+    pSlideTextureRenderer = nullptr;
+    slideTextureIndex = static_cast<size_t>(-1);
+    slideTexturePath.clear();
+}
+
+static SDL_Texture* SlideTexture(SDL_Renderer* renderer, const AttractSlides::Slide& slide, size_t index)
+{
+    if (slide.imagePath.empty())
+    {
+        return nullptr;
+    }
+    if (pSlideTexture && pSlideTextureRenderer == renderer && slideTextureIndex == index &&
+        slideTexturePath == slide.imagePath)
+    {
+        return pSlideTexture;
+    }
+
+    ReleaseSlideTexture();
+    SDL_Texture* texture = IMG_LoadTexture(renderer, slide.imagePath.c_str());
+    if (!texture)
+    {
+        // Said once per load rather than per frame, and the slide still shows
+        // its words over black. A missing photograph is a slide worth fixing,
+        // not a reason to stop the show.
+        printf("PPUC: slide image %s: %s\n", slide.imagePath.c_str(), SDL_GetError());
+        slideTextureIndex = index;
+        slideTexturePath = slide.imagePath;
+        pSlideTextureRenderer = renderer;
+        return nullptr;
+    }
+    pSlideTexture = texture;
+    pSlideTextureRenderer = renderer;
+    slideTextureIndex = index;
+    slideTexturePath = slide.imagePath;
+    return texture;
+}
+
+// A filled circle, drawn as horizontal spans. SDL has no circle, and the badge
+// behind a number has to be a circle rather than a rectangle so that it reads
+// as a label on the photograph instead of a hole cut in it.
+static void FillCircle(SDL_Renderer* renderer, float cx, float cy, float radius)
+{
+    const int r = static_cast<int>(radius);
+    for (int dy = -r; dy <= r; ++dy)
+    {
+        const float dx = std::sqrt(static_cast<float>(r * r - dy * dy));
+        const SDL_FRect span{cx - dx, cy + static_cast<float>(dy), dx * 2.0f, 1.0f};
+        SDL_RenderFillRect(renderer, &span);
+    }
+}
+
+// An arrow pointing at (tipX, tipY) from `from`, `length` long.
+//
+// Built from spans rather than SDL_RenderGeometry so it needs no vertex colours
+// or texture state, and so the head and the shaft scale together from one
+// number.
+static void DrawArrow(SDL_Renderer* renderer, float tipX, float tipY, AttractSlides::Marker::Pointer from,
+                      float length)
+{
+    const float head = length * 0.42f;
+    const float halfShaft = std::max(2.0f, length * 0.07f);
+
+    const bool horizontal =
+        from == AttractSlides::Marker::Pointer::Left || from == AttractSlides::Marker::Pointer::Right;
+    // +1 when the arrow comes from the low side and so points towards higher
+    // coordinates.
+    const float dir = (from == AttractSlides::Marker::Pointer::Left || from == AttractSlides::Marker::Pointer::Above)
+                          ? 1.0f
+                          : -1.0f;
+
+    // The head: spans that narrow towards the tip.
+    const int steps = static_cast<int>(head);
+    for (int i = 0; i <= steps; ++i)
+    {
+        const float t = static_cast<float>(i) / static_cast<float>(std::max(1, steps));
+        const float halfWidth = (1.0f - t) * head * 0.6f;
+        const float offset = head * (1.0f - t) * dir;
+        if (horizontal)
+        {
+            const SDL_FRect span{tipX - offset, tipY - halfWidth, 1.0f, halfWidth * 2.0f};
+            SDL_RenderFillRect(renderer, &span);
+        }
+        else
+        {
+            const SDL_FRect span{tipX - halfWidth, tipY - offset, halfWidth * 2.0f, 1.0f};
+            SDL_RenderFillRect(renderer, &span);
+        }
+    }
+
+    // The shaft, behind the head.
+    const float shaftLength = length - head;
+    if (shaftLength <= 0.0f)
+    {
+        return;
+    }
+    if (horizontal)
+    {
+        const float x = dir > 0.0f ? tipX - length : tipX + head;
+        const SDL_FRect shaft{x, tipY - halfShaft, shaftLength, halfShaft * 2.0f};
+        SDL_RenderFillRect(renderer, &shaft);
+    }
+    else
+    {
+        const float y = dir > 0.0f ? tipY - length : tipY + head;
+        const SDL_FRect shaft{tipX - halfShaft, y, halfShaft * 2.0f, shaftLength};
+        SDL_RenderFillRect(renderer, &shaft);
+    }
+}
+
+// Where each marker's pulse sits in the cycle.
+//
+// Markers pulse one after another rather than together, because the numbers are
+// there to be read in order -- "the left standup (1), then the eject hole (2)"
+// only works if the eye is led from one to the next. Every marker keeps a faint
+// glow outside its own slot so none of them disappears.
+static float MarkerPulse(size_t index, size_t count, uint64_t elapsedMs)
+{
+    constexpr uint64_t kSlotMs = 900;
+    const uint64_t cycle = kSlotMs * std::max<size_t>(1, count);
+    const uint64_t within = elapsedMs % cycle;
+    const uint64_t slotStart = kSlotMs * index;
+    if (within < slotStart || within >= slotStart + kSlotMs)
+    {
+        return 0.35f;
+    }
+    const float t = static_cast<float>(within - slotStart) / static_cast<float>(kSlotMs);
+    // One smooth rise and fall across the slot.
+    return 0.35f + 0.65f * static_cast<float>(std::sin(t * 3.14159265f));
+}
+
+static void DrawSlideMarkers(SDL_Renderer* renderer, const AttractSlides::Slide& slide, const SDL_FRect& image,
+                            uint64_t elapsedMs)
+{
+    if (slide.markers.empty())
+    {
+        return;
+    }
+
+    // Scaled off the picture rather than the screen: a marker has to stay in
+    // proportion to what it is pointing at, and on a letterboxed portrait photo
+    // the picture is much narrower than the screen.
+    const float unit = std::min(image.w, image.h);
+    const float badgeRadius = std::max(14.0f, unit * 0.035f);
+    const float arrowLength = std::max(30.0f, unit * 0.11f);
+
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+
+    for (size_t i = 0; i < slide.markers.size(); ++i)
+    {
+        const AttractSlides::Marker& marker = slide.markers[i];
+        const float x = image.x + marker.x * image.w;
+        const float y = image.y + marker.y * image.h;
+        const float pulse = MarkerPulse(i, slide.markers.size(), elapsedMs);
+        const uint8_t alpha = static_cast<uint8_t>(90.0f + 165.0f * pulse);
+
+        // The arrow keeps its distance from what it points at, and that distance
+        // is what pulses: a marker that changed size would look like the target
+        // moving.
+        const float gap = (marker.number > 0 ? badgeRadius : 0.0f) + 6.0f + arrowLength * 0.35f * pulse;
+        float tipX = x;
+        float tipY = y;
+        switch (marker.pointer)
+        {
+            case AttractSlides::Marker::Pointer::Left:
+                tipX = x - gap;
+                break;
+            case AttractSlides::Marker::Pointer::Right:
+                tipX = x + gap;
+                break;
+            case AttractSlides::Marker::Pointer::Above:
+                tipY = y - gap;
+                break;
+            case AttractSlides::Marker::Pointer::Below:
+                tipY = y + gap;
+                break;
+        }
+
+        // Black first, one pixel out, so the arrow is visible over a pale
+        // playfield as well as a dark one.
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, static_cast<uint8_t>(alpha * 0.7f));
+        DrawArrow(renderer, tipX + 2.0f, tipY + 2.0f, marker.pointer, arrowLength);
+        SDL_SetRenderDrawColor(renderer, 255, 196, 0, alpha);
+        DrawArrow(renderer, tipX, tipY, marker.pointer, arrowLength);
+
+        if (marker.number > 0)
+        {
+            SDL_SetRenderDrawColor(renderer, 0, 0, 0, 200);
+            FillCircle(renderer, x + 2.0f, y + 2.0f, badgeRadius);
+            SDL_SetRenderDrawColor(renderer, 255, 196, 0, static_cast<uint8_t>(150.0f + 105.0f * pulse));
+            FillCircle(renderer, x, y, badgeRadius);
+
+            char label[8];
+            snprintf(label, sizeof(label), "%d", marker.number);
+            // Centred on the badge, measured rather than guessed: "10" is twice
+            // as wide as "1".
+            const int textWidth = MeasureTextWidth(label, pFirmwareFontSmall);
+            int textHeight = 0;
+#ifdef PPUC_HAS_SDL3_TTF
+            textHeight = pFirmwareFontSmall ? TTF_GetFontHeight(pFirmwareFontSmall) : 0;
+#endif
+            const SDL_Color black{0, 0, 0, 255};
+            DrawFirmwareTextLeft(label, pFirmwareFontSmall, static_cast<int>(x) - textWidth / 2,
+                                 static_cast<int>(y) - textHeight / 2, black);
+        }
+    }
+}
+
+// The words, over a dimmed strip across the bottom.
+//
+// A strip rather than plain text on the photograph: a caption over a bright
+// playfield is unreadable, and dimming only the band it sits in keeps the
+// picture visible where it matters.
+static void DrawSlideText(SDL_Renderer* renderer, const AttractSlides::Slide& slide, int w, int h)
+{
+    if (slide.title.empty() && slide.text.empty())
+    {
+        return;
+    }
+
+    const int margin = std::max(24, w / 24);
+    const int stripHeight = std::max(90, h / 5);
+    const float stripY = static_cast<float>(h - stripHeight);
+
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 200);
+    const SDL_FRect strip{0.0f, stripY, static_cast<float>(w), static_cast<float>(stripHeight)};
+    SDL_RenderFillRect(renderer, &strip);
+
+    int y = static_cast<int>(stripY) + 14;
+    const SDL_Color white{255, 255, 255, 255};
+    const SDL_Color amber{255, 196, 0, 255};
+    if (!slide.title.empty())
+    {
+        DrawFirmwareTextLeft(slide.title.c_str(), pFirmwareFontLarge, margin, y, amber);
+#ifdef PPUC_HAS_SDL3_TTF
+        y += pFirmwareFontLarge ? TTF_GetFontHeight(pFirmwareFontLarge) + 6 : 40;
+#endif
+    }
+    if (!slide.text.empty())
+    {
+        DrawFirmwareTextWrapped(slide.text.c_str(), pFirmwareFontSmall, margin, y, w - margin * 2, white);
+    }
+}
+
+static void DrawSlidesInto(SDL_Renderer* renderer, int w, int h)
+{
+    if (!g_attractSlides || !g_attractSlides->Visible() || renderer == nullptr || w <= 0 || h <= 0)
+    {
+        return;
+    }
+
+    g_uiRenderer = renderer;
+    EnsureFirmwareFont();
+
+    const AttractSlides::Slide& slide = g_attractSlides->Current();
+
+    // Opaque, like the monitor: a photograph half-blended with a backglass is
+    // two pictures and no information.
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+    SDL_RenderClear(renderer);
+
+    SDL_FRect image{0.0f, 0.0f, static_cast<float>(w), static_cast<float>(h)};
+    SDL_Texture* texture = SlideTexture(renderer, slide, g_attractSlides->CurrentIndex());
+    if (texture)
+    {
+        // Letterboxed rather than stretched. A playfield photograph distorted to
+        // 16:9 is worse than black bars, and the markers are placed in the
+        // photograph's own coordinates, so they only land on the right targets
+        // if its aspect ratio is kept.
+        float tw = 0.0f;
+        float th = 0.0f;
+        if (SDL_GetTextureSize(texture, &tw, &th) && tw > 0.0f && th > 0.0f)
+        {
+            const float scale = std::min(static_cast<float>(w) / tw, static_cast<float>(h) / th);
+            image.w = tw * scale;
+            image.h = th * scale;
+            image.x = (static_cast<float>(w) - image.w) / 2.0f;
+            image.y = (static_cast<float>(h) - image.h) / 2.0f;
+        }
+        SDL_RenderTexture(renderer, texture, nullptr, &image);
+    }
+
+    const uint64_t elapsedMs = SDL_GetTicks() - g_attractSlides->CurrentSinceMs();
+    DrawSlideMarkers(renderer, slide, image, elapsedMs);
+    DrawSlideText(renderer, slide, w, h);
+}
+
+// What the backbox screen shows when something other than the game wants it.
+//
+// The service tools win outright. Somebody with a keyboard open at the switch
+// monitor is diagnosing a machine, and slides appearing over that would be a
+// fault in their own right -- so the slideshow is what happens when no tool is
+// open, not something layered with one.
+static void DrawServiceScreenInto(SDL_Renderer* renderer, int w, int h, bool clearFirst)
+{
+    if (g_overlay != OverlayScreen::None)
+    {
+        DrawOverlayInto(renderer, w, h, clearFirst);
+        return;
+    }
+    DrawSlidesInto(renderer, w, h);
+}
+
+// Whether anything here wants the screen this pass.
+static bool ServiceScreenWanted()
+{
+    if (g_firmwareScreen.active)
+    {
+        return false;
+    }
+    return g_overlay != OverlayScreen::None || (g_attractSlides && g_attractSlides->Visible());
+}
+
 // The own-window path, for a machine whose backglass nothing else is drawing:
 // a translite, or no video at all.
 static void RenderOverlay()
 {
-    if (g_overlay == OverlayScreen::None || g_firmwareScreen.active || !EnsureFirmwareWindow())
+    if (!ServiceScreenWanted() || !EnsureFirmwareWindow())
     {
         return;
     }
@@ -3161,7 +3551,7 @@ static void RenderOverlay()
         return;
     }
 
-    DrawOverlayInto(pTransliteRenderer, w, h, true);
+    DrawServiceScreenInto(pTransliteRenderer, w, h, true);
 
     SDL_RenderPresent(pTransliteRenderer);
     SDL_FlushRenderer(pTransliteRenderer);
@@ -3212,7 +3602,15 @@ static void CloseFirmwareScreen()
 // the warning stays on the console there.
 static void RenderFirmwareScreen(double) {}
 static void RenderSwitchMonitor() {}
+// Nothing records what it cannot show. The monitor is a screen, and this path
+// has no window to put one in.
+static void NoteSwitchMonitorState(int, uint8_t) {}
+static void NoteCoilMonitorState(int, uint8_t) {}
 static void RenderOverlay() {}
+static void DrawServiceScreenInto(SDL_Renderer*, int, int, bool) {}
+static bool ServiceScreenWanted() { return false; }
+static void DrawSlidesInto(SDL_Renderer*, int, int) {}
+static void ReleaseSlideTexture() {}
 static bool HandleOverlayKey(SDL_Keycode) { return false; }
 static void CloseFirmwareScreen() {}
 struct FirmwareScreen
@@ -4780,6 +5178,17 @@ int main(int argc, char** argv)
         else if (key == "MusicVolume")
           opt_music_volume = ParseVolumePercent(value.c_str());
       }
+      // Slides default to on, so a game folder with a slides directory shows
+      // them without a second switch to forget. Slides=false suppresses them.
+      else if (section == "Attract")
+      {
+        if (key == "Slides")
+          opt_attract_slides = ParseIniBool(value);
+        else if (key == "SlidesIdleMs")
+          opt_attract_slides_idle_ms = static_cast<uint32_t>(atoi(value.c_str()));
+        else if (key == "SlideDurationMs")
+          opt_attract_slide_duration_ms = static_cast<uint32_t>(atoi(value.c_str()));
+      }
       else if (section == "Backbox")
       {
         if (key == "Address")
@@ -5586,6 +5995,31 @@ int main(int argc, char** argv)
   g_runtimeVolumes[2] = opt_speech_volume;
   g_runtimeVolumes[3] = opt_music_volume;
 
+  // How-to-play slides. Read here rather than with the rest of the game folder
+  // because Slides= in ppuc.ini has to be able to turn them off, and because
+  // --switch-monitor has already decided by this point whether anything else
+  // owns the backbox screen.
+  if (opt_attract_slides && !opt_switch_monitor && HasOptionValue(opt_game_folder))
+  {
+    std::vector<AttractSlides::Slide> slides;
+    std::string slidesError;
+    if (!AttractSlides::Load(opt_game_folder, &slides, &slidesError))
+    {
+      // Not fatal, and said loudly: a malformed slides.yaml is a game that
+      // still plays, and a machine that refused to start over a caption would
+      // be a worse trade than one that says so and carries on.
+      printf("PPUC: slides not loaded: %s\n", slidesError.c_str());
+    }
+    else if (!slides.empty())
+    {
+      g_attractSlides =
+          std::make_unique<AttractSlides::Show>(opt_attract_slides_idle_ms, opt_attract_slide_duration_ms);
+      g_attractSlides->SetSlides(std::move(slides));
+      printf("Attract slides: %zu, after %u ms idle\n", g_attractSlides->Slides().size(),
+             opt_attract_slides_idle_ms);
+    }
+  }
+
   const bool needPluginBus = opt_pup || opt_altsound || opt_b2s || !useScriptEngine;
   if (needPluginBus)
   {
@@ -5632,7 +6066,7 @@ int main(int argc, char** argv)
     // window beside it. Two fullscreen windows on KMSDRM means the panel
     // alternates between them as fast as they present.
     pMediaPluginHost->SetOverlayDraw([](SDL_Renderer* renderer, int w, int h)
-                                     { DrawOverlayInto(renderer, w, h, false); });
+                                     { DrawServiceScreenInto(renderer, w, h, false); });
 #endif
     MediaPluginHost::Options mediaOptions;
     mediaOptions.enablePup = opt_pup;
@@ -6610,6 +7044,14 @@ int main(int argc, char** argv)
         // Before any suppression: the screen answers what the machine is
         // doing, not what the engine was told about it.
         NoteSwitchMonitorState(switchState->number, newSwitchState);
+        // Any switch at all, deliberately including the flipper buttons and the
+        // coin door that the ball search ignores. Those are the first things a
+        // curious passer-by touches, and somebody who has just pressed a flipper
+        // button is somebody who has started reading.
+        if (g_attractSlides)
+        {
+          g_attractSlides->NoteActivity(SDL_GetTicks());
+        }
         NoteBallSearchSwitchUpdate(pPpuc, ballSearchRunner, switchState->number, newSwitchState,
                                    opt_ball_search_delay_ms);
 
@@ -6807,13 +7249,31 @@ int main(int argc, char** argv)
       // 10 Hz. Fast enough that a flipper button looks live, slow enough that
       // the repaint is not what the machine spends its time on.
       // Only when nothing else owns a frame to draw into. With a backglass up
-      // the media host calls DrawOverlayInto itself, once per frame it
+      // the media host calls DrawServiceScreenInto itself, once per frame it
       // presents, and a second presenter here is what made the screen flicker.
-      if (g_overlay != OverlayScreen::None &&
-          (pMediaPluginHost == nullptr || !pMediaPluginHost->HasBackglass()))
+      if (g_attractSlides)
+      {
+        const bool wasVisible = g_attractSlides->Visible();
+        g_attractSlides->Update(!ball_search_game_running.load(std::memory_order_acquire), SDL_GetTicks());
+        if (wasVisible && !g_attractSlides->Visible())
+        {
+          // Somebody walked up. Give the photograph's memory back, and ask the
+          // translite for the frame the slideshow was covering.
+          ReleaseSlideTexture();
+          QueueTransliteRender(ball_search_game_running.load(std::memory_order_acquire)
+                                   ? RenderCommand::RENDER_GAME
+                                   : RenderCommand::RENDER_ATTRACT);
+        }
+      }
+
+      // The slides carry the only animation on these screens, and a pulse
+      // stepped at 10 Hz reads as a stutter rather than a pulse.
+      const uint64_t serviceRenderIntervalMs =
+          (g_overlay == OverlayScreen::None && g_attractSlides && g_attractSlides->Visible()) ? 50 : 100;
+      if (ServiceScreenWanted() && (pMediaPluginHost == nullptr || !pMediaPluginHost->HasBackglass()))
       {
         const uint64_t nowMs = SDL_GetTicks();
-        if (nowMs - g_switchMonitorLastRenderMs >= 100)
+        if (nowMs - g_switchMonitorLastRenderMs >= serviceRenderIntervalMs)
         {
           g_switchMonitorLastRenderMs = nowMs;
           RenderOverlay();
