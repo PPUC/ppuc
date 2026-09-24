@@ -128,9 +128,14 @@ down. A slideshow shows one photograph for eight seconds; a cache of one is the
 right size, and a machine that has just had somebody walk up to it should not
 still be holding a 1920x1080 texture it is not drawing.
 
-The caption strip is sized from the words rather than fixed, and a slide with
-no photograph puts its words in the middle of the screen instead of hugging the
-bottom edge of an empty frame. A slide is written by somebody typing into a text
+The caption goes in one of three places, in order of preference: beside the
+picture when it is portrait and leaves a wide enough gutter, over a dimmed
+strip across the bottom when it fills the frame, and in the middle of the
+screen when there is no picture at all. The flyers are all portrait, so the
+gutter is not a corner case -- a caption in the empty margin covers none of the
+flyer. The strip is sized from the words rather than fixed, and the title wraps
+like the body, because a title is something somebody typed into a node title
+field. A slide is written by somebody typing into a text
 field, and the one thing they should not have to think about is how many lines
 fit. Past a third of the screen the strip stops growing: at that point the slide
 wants fewer words, and clipping says so more usefully than covering the

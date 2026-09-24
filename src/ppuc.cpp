@@ -3443,18 +3443,59 @@ static void DrawSlideMarkers(SDL_Renderer* renderer, const AttractSlides::Slide&
     }
 }
 
+// Title and body as one block, wrapped to `width`. Returns how tall it is, and
+// draws nothing when `renderer` is null -- so the same code measures the block
+// and draws it, and the two can never disagree.
+//
+// The title is wrapped rather than drawn as one line because it is a node
+// title somebody typed, and "Record breaking earnings" in a narrow column next
+// to a portrait flyer is three words too many for one line.
+static int SlideTextBlock(SDL_Renderer* renderer, const AttractSlides::Slide& slide, int x, int y, int width)
+{
+    int height = 0;
+    const SDL_Color white{255, 255, 255, 255};
+    const SDL_Color amber{255, 196, 0, 255};
+
+    if (!slide.title.empty())
+    {
+        const int titleHeight = MeasureWrappedTextHeight(slide.title.c_str(), pFirmwareFontLarge, width);
+        if (renderer)
+        {
+            DrawFirmwareTextWrapped(slide.title.c_str(), pFirmwareFontLarge, x, y + height, width, amber);
+        }
+        height += titleHeight + 6;
+    }
+    if (!slide.text.empty())
+    {
+        const int bodyHeight = MeasureWrappedTextHeight(slide.text.c_str(), pFirmwareFontSmall, width);
+        if (renderer)
+        {
+            DrawFirmwareTextWrapped(slide.text.c_str(), pFirmwareFontSmall, x, y + height, width, white);
+        }
+        height += bodyHeight;
+    }
+    return height;
+}
+
 // The words.
 //
-// Over a dimmed strip across the bottom when there is a photograph, because a
-// caption over a bright playfield is unreadable and dimming only the band it
-// sits in keeps the picture visible where it matters. On a slide with no
-// photograph the whole screen is the strip, and the words sit in the middle of
-// it rather than hugging the bottom edge of an empty black frame.
+// Three placements, in order of preference:
 //
-// The strip is sized from the text rather than fixed, which is the whole point
-// of measuring: a slide is written by somebody typing into a text field, and
-// the one thing they must not have to think about is how many lines fit.
-static void DrawSlideText(SDL_Renderer* renderer, const AttractSlides::Slide& slide, int w, int h, bool hasImage)
+// - Beside the picture, when it is portrait and leaves a wide enough gutter.
+//   All five of the 1978 flyers are portrait, so this is not a corner case,
+//   and a caption in the empty margin covers none of the flyer.
+// - Over a dimmed strip across the bottom, when the picture fills the frame.
+//   A caption over a bright playfield is unreadable, and dimming only the band
+//   it sits in keeps the picture visible where it matters.
+// - In the middle of the screen, when there is no picture at all. Those are
+//   the rules and the tips, and hanging them off the bottom edge of an empty
+//   black frame wastes the whole screen.
+//
+// Every one of them is sized from the text rather than fixed. A slide is
+// written by somebody typing into a text field, and the one thing they should
+// not have to think about is how many lines fit.
+static void DrawSlideText(SDL_Renderer* renderer, const AttractSlides::Slide& slide, int w, int h, bool hasImage,
+                          const SDL_FRect& image)
 {
     if (slide.title.empty() && slide.text.empty())
     {
@@ -3462,51 +3503,45 @@ static void DrawSlideText(SDL_Renderer* renderer, const AttractSlides::Slide& sl
     }
 
     const int margin = std::max(24, w / 24);
-    const int textWidth = w - margin * 2;
     const int pad = 16;
 
-    int titleHeight = 0;
-#ifdef PPUC_HAS_SDL3_TTF
-    if (!slide.title.empty() && pFirmwareFontLarge)
-    {
-        titleHeight = TTF_GetFontHeight(pFirmwareFontLarge) + 6;
-    }
-#endif
-    const int bodyHeight = MeasureWrappedTextHeight(slide.text.c_str(), pFirmwareFontSmall, textWidth);
-    const int blockHeight = titleHeight + bodyHeight;
-
-    int y = 0;
     if (hasImage)
     {
-        // Tall enough for the words, and never so tall that it swallows the
-        // picture: past a third of the screen the slide wants fewer words, and
-        // clipping says so more usefully than covering the photograph would.
-        const int stripHeight = std::clamp(blockHeight + pad * 2, 90, h / 3);
-        const float stripY = static_cast<float>(h - stripHeight);
-
-        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 200);
-        const SDL_FRect strip{0.0f, stripY, static_cast<float>(w), static_cast<float>(stripHeight)};
-        SDL_RenderFillRect(renderer, &strip);
-
-        y = static_cast<int>(stripY) + pad;
-    }
-    else
-    {
-        y = std::max(pad, (h - blockHeight) / 2);
+        const int gutter = static_cast<int>(image.x) - margin * 2;
+        if (gutter >= w / 5)
+        {
+            const int gutterHeight = SlideTextBlock(nullptr, slide, 0, 0, gutter);
+            // Only when it fits. A long caption in a narrow column is a tall
+            // column, and one that runs off both ends reads worse than a strip.
+            if (gutterHeight <= h - pad * 2)
+            {
+                SlideTextBlock(renderer, slide, margin, std::max(pad, (h - gutterHeight) / 2), gutter);
+                return;
+            }
+        }
     }
 
-    const SDL_Color white{255, 255, 255, 255};
-    const SDL_Color amber{255, 196, 0, 255};
-    if (!slide.title.empty())
+    const int textWidth = w - margin * 2;
+    const int blockHeight = SlideTextBlock(nullptr, slide, 0, 0, textWidth);
+
+    if (!hasImage)
     {
-        DrawFirmwareTextLeft(slide.title.c_str(), pFirmwareFontLarge, margin, y, amber);
-        y += titleHeight;
+        SlideTextBlock(renderer, slide, margin, std::max(pad, (h - blockHeight) / 2), textWidth);
+        return;
     }
-    if (!slide.text.empty())
-    {
-        DrawFirmwareTextWrapped(slide.text.c_str(), pFirmwareFontSmall, margin, y, textWidth, white);
-    }
+
+    // Tall enough for the words, and never so tall that it swallows the
+    // picture: past a third of the screen the slide wants fewer words, and
+    // clipping says so more usefully than covering the photograph would.
+    const int stripHeight = std::clamp(blockHeight + pad * 2, 90, h / 3);
+    const float stripY = static_cast<float>(h - stripHeight);
+
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 200);
+    const SDL_FRect strip{0.0f, stripY, static_cast<float>(w), static_cast<float>(stripHeight)};
+    SDL_RenderFillRect(renderer, &strip);
+
+    SlideTextBlock(renderer, slide, margin, static_cast<int>(stripY) + pad, textWidth);
 }
 
 static void DrawSlidesInto(SDL_Renderer* renderer, int w, int h)
@@ -3550,7 +3585,7 @@ static void DrawSlidesInto(SDL_Renderer* renderer, int w, int h)
 
     const uint64_t elapsedMs = SDL_GetTicks() - g_attractSlides->CurrentSinceMs();
     DrawSlideMarkers(renderer, slide, image, elapsedMs);
-    DrawSlideText(renderer, slide, w, h, texture != nullptr);
+    DrawSlideText(renderer, slide, w, h, texture != nullptr, image);
 }
 
 // What the backbox screen shows when something other than the game wants it.
