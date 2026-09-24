@@ -2758,7 +2758,8 @@ static bool HandleOverlayKey(SDL_Keycode key)
     {
         case SDLK_ESCAPE:
             // One step back, not all the way out: a tool returns to the menu
-            // it was opened from, and the menu returns to the game.
+            // it was opened from, and the menu returns to the game. It never
+            // reaches the game bindings, so ESC cannot end the session.
             if (g_overlay == OverlayScreen::Menu)
             {
                 CloseOverlay();
@@ -5251,6 +5252,12 @@ int main(int argc, char** argv)
   {
     g_overlay = OverlayScreen::Monitor;
   }
+#ifndef PPUC_USE_KMSDMD
+  // Said once at startup rather than drawn on the screen: the menu is only
+  // discoverable if something tells you it is there, and the quit key is only
+  // safe to mention where it cannot be mistaken for a menu control.
+  printf("PPUC: keyboard: SPACE opens the tools menu, Q quits\n");
+#endif
   // Seeded from ppuc.ini, adjustable from the menu, never written back.
   g_runtimeVolumes[0] = opt_volume;
   g_runtimeVolumes[1] = opt_rom_volume;
@@ -6487,7 +6494,11 @@ int main(int argc, char** argv)
             }
             switch (event.key.key)
             {
-              case SDLK_ESCAPE:
+              case SDLK_Q:
+                // Q, not ESC. ESC belongs to the menu, and a key that closes a
+                // menu in one context and kills the machine mid-game in
+                // another is the kind of difference nobody remembers while a
+                // ball is in play.
                 running = false;
                 break;
               case 53:  // 5
