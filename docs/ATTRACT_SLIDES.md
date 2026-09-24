@@ -135,7 +135,12 @@ screen when there is no picture at all. The flyers are all portrait, so the
 gutter is not a corner case -- a caption in the empty margin covers none of the
 flyer. The strip is sized from the words rather than fixed, and the title wraps
 like the body, because a title is something somebody typed into a node title
-field. A slide is written by somebody typing into a text
+field.
+
+The gutter is only used when the widest single word fits in it. SDL_ttf breaks
+a word that does not fit rather than letting it overhang, and "Electrifying"
+split across two lines as "Electrifyin / g" is worse than the layout it was
+avoiding -- that slide drops back to the strip. A slide is written by somebody typing into a text
 field, and the one thing they should not have to think about is how many lines
 fit. Past a third of the screen the strip stops growing: at that point the slide
 wants fewer words, and clipping says so more usefully than covering the

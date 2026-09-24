@@ -3443,6 +3443,32 @@ static void DrawSlideMarkers(SDL_Renderer* renderer, const AttractSlides::Slide&
     }
 }
 
+// The width of the widest single word, which is the narrowest a column can be
+// before the wrap starts breaking words in half. SDL_ttf splits a word that
+// does not fit rather than letting it overhang, and "Electrifying" broken
+// across two lines as "Electrifyin / g" is worse than any layout it was
+// avoiding.
+static int WidestWordWidth(const std::string& text, TTF_Font* font)
+{
+    int widest = 0;
+    size_t start = 0;
+    while (start <= text.size())
+    {
+        const size_t end = text.find(' ', start);
+        const std::string word = text.substr(start, end == std::string::npos ? std::string::npos : end - start);
+        if (!word.empty())
+        {
+            widest = std::max(widest, MeasureTextWidth(word.c_str(), font));
+        }
+        if (end == std::string::npos)
+        {
+            break;
+        }
+        start = end + 1;
+    }
+    return widest;
+}
+
 // Title and body as one block, wrapped to `width`. Returns how tall it is, and
 // draws nothing when `renderer` is null -- so the same code measures the block
 // and draws it, and the two can never disagree.
@@ -3508,7 +3534,9 @@ static void DrawSlideText(SDL_Renderer* renderer, const AttractSlides::Slide& sl
     if (hasImage)
     {
         const int gutter = static_cast<int>(image.x) - margin * 2;
-        if (gutter >= w / 5)
+        const int widestWord = std::max(WidestWordWidth(slide.title, pFirmwareFontLarge),
+                                        WidestWordWidth(slide.text, pFirmwareFontSmall));
+        if (gutter >= w / 5 && gutter >= widestWord)
         {
             const int gutterHeight = SlideTextBlock(nullptr, slide, 0, 0, gutter);
             // Only when it fits. A long caption in a narrow column is a tall
