@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -67,6 +68,19 @@ class MediaPluginHost
   void OnGameStart();
   void OnGameEnd();
   void QueueEvent(char source, int id, int value);
+
+  // Drawn on top of the backglass, in the same frame, by whoever set it.
+  //
+  // The service overlay used to open a fullscreen window of its own. On KMSDRM
+  // there is no compositor and no overlapping: two windows both presenting
+  // means the panel alternates between them as fast as they draw, which is
+  // exactly what it looked like. One window, one present, and the overlay is
+  // simply the last thing drawn into it.
+  using OverlayDraw = std::function<void(SDL_Renderer*, int, int)>;
+  void SetOverlayDraw(OverlayDraw draw);
+  // Whether there is a backglass window to draw into at all. A machine with a
+  // translite, or with no video, has none and the overlay opens its own.
+  bool HasBackglass() const;
   void QueueSegmentDisplay(int digit, int value);
   void QueuePlayerScore(int player, int score);
   void QueueDmdTrigger(uint16_t id);

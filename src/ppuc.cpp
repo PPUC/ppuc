@@ -2098,6 +2098,11 @@ struct FirmwareScreenWindowOptions
 static FirmwareScreenWindowOptions g_firmwareWindowOptions;
 static bool firmwareOwnsWindow = false;
 
+// Whichever renderer the service UI is drawing into this frame: the backglass
+// the media host already owns, or a window opened here when there is none.
+// Set by each entry point before it draws anything.
+static SDL_Renderer* g_uiRenderer = nullptr;
+
 #ifdef PPUC_HAS_SDL3_TTF
 static TTF_Font* pFirmwareFontLarge = nullptr;
 static TTF_Font* pFirmwareFontSmall = nullptr;
@@ -2182,7 +2187,7 @@ static void DrawFirmwareTextLeft(const char* text, TTF_Font* font, int x, int y,
         return;
     }
 
-    SDL_Texture* texture = SDL_CreateTextureFromSurface(pTransliteRenderer, surface);
+    SDL_Texture* texture = SDL_CreateTextureFromSurface(g_uiRenderer, surface);
     const float w = static_cast<float>(surface->w);
     const float h = static_cast<float>(surface->h);
     SDL_DestroySurface(surface);
@@ -2192,7 +2197,7 @@ static void DrawFirmwareTextLeft(const char* text, TTF_Font* font, int x, int y,
     }
 
     const SDL_FRect dst{static_cast<float>(x), static_cast<float>(y), w, h};
-    SDL_RenderTexture(pTransliteRenderer, texture, nullptr, &dst);
+    SDL_RenderTexture(g_uiRenderer, texture, nullptr, &dst);
     SDL_DestroyTexture(texture);
 }
 
@@ -2209,7 +2214,7 @@ static void DrawFirmwareText(const char* text, TTF_Font* font, int centerX, int 
         return;
     }
 
-    SDL_Texture* texture = SDL_CreateTextureFromSurface(pTransliteRenderer, surface);
+    SDL_Texture* texture = SDL_CreateTextureFromSurface(g_uiRenderer, surface);
     const float w = static_cast<float>(surface->w);
     const float h = static_cast<float>(surface->h);
     SDL_DestroySurface(surface);
@@ -2219,7 +2224,7 @@ static void DrawFirmwareText(const char* text, TTF_Font* font, int centerX, int 
     }
 
     const SDL_FRect dst{static_cast<float>(centerX) - w / 2.0f, static_cast<float>(y), w, h};
-    SDL_RenderTexture(pTransliteRenderer, texture, nullptr, &dst);
+    SDL_RenderTexture(g_uiRenderer, texture, nullptr, &dst);
     SDL_DestroyTexture(texture);
 }
 #else
@@ -2288,16 +2293,18 @@ static void RenderFirmwareScreen(double progress)
         return;
     }
 
+    g_uiRenderer = pTransliteRenderer;
+
     EnsureFirmwareFont();
 
     int w = 0, h = 0;
-    if (!SDL_GetCurrentRenderOutputSize(pTransliteRenderer, &w, &h) || w <= 0 || h <= 0)
+    if (!SDL_GetCurrentRenderOutputSize(g_uiRenderer, &w, &h) || w <= 0 || h <= 0)
     {
         return;
     }
 
-    SDL_SetRenderDrawColor(pTransliteRenderer, 110, 0, 0, 255);
-    SDL_RenderClear(pTransliteRenderer);
+    SDL_SetRenderDrawColor(g_uiRenderer, 110, 0, 0, 255);
+    SDL_RenderClear(g_uiRenderer);
 
     const int centerX = w / 2;
     const SDL_Color white{255, 255, 255, 255};
@@ -2323,15 +2330,15 @@ static void RenderFirmwareScreen(double progress)
     const float barY = static_cast<float>(h) / 2.0f;
 
     SDL_FRect frame{barX - 4.0f, barY - 4.0f, barW + 8.0f, barH + 8.0f};
-    SDL_SetRenderDrawColor(pTransliteRenderer, 255, 255, 255, 255);
-    SDL_RenderRect(pTransliteRenderer, &frame);
+    SDL_SetRenderDrawColor(g_uiRenderer, 255, 255, 255, 255);
+    SDL_RenderRect(g_uiRenderer, &frame);
 
     if (progress > 0.0)
     {
         const double clamped = progress > 1.0 ? 1.0 : progress;
         SDL_FRect fill{barX, barY, barW * static_cast<float>(clamped), barH};
-        SDL_SetRenderDrawColor(pTransliteRenderer, 255, 210, 0, 255);
-        SDL_RenderFillRect(pTransliteRenderer, &fill);
+        SDL_SetRenderDrawColor(g_uiRenderer, 255, 210, 0, 255);
+        SDL_RenderFillRect(g_uiRenderer, &fill);
     }
 
     if (progress >= 0.0)
@@ -2344,8 +2351,8 @@ static void RenderFirmwareScreen(double progress)
     DrawFirmwareText("Interrupting an update ruins the board being written to.", pFirmwareFontSmall, centerX,
                      h - h / 4 + 60, white);
 
-    SDL_RenderPresent(pTransliteRenderer);
-    SDL_FlushRenderer(pTransliteRenderer);
+    SDL_RenderPresent(g_uiRenderer);
+    SDL_FlushRenderer(g_uiRenderer);
 
     // Nothing else is pumping the event queue.
     //
@@ -2422,10 +2429,10 @@ static void DrawMonitorSection(const char* title, const std::vector<MonitorEntry
     const SDL_Color green{70, 210, 100, 255};
     const SDL_Color amber{255, 200, 70, 255};
 
-    SDL_SetRenderDrawColor(pTransliteRenderer, background.r, background.g, background.b, 255);
+    SDL_SetRenderDrawColor(g_uiRenderer, background.r, background.g, background.b, 255);
     const SDL_FRect panel{static_cast<float>(x), static_cast<float>(y), static_cast<float>(w),
                           static_cast<float>(h)};
-    SDL_RenderFillRect(pTransliteRenderer, &panel);
+    SDL_RenderFillRect(g_uiRenderer, &panel);
 
     const uint64_t now = SDL_GetTicks();
     size_t active = 0;
@@ -2437,6 +2444,16 @@ static void DrawMonitorSection(const char* title, const std::vector<MonitorEntry
     char line[192];
     snprintf(line, sizeof(line), "%s -- %zu, %zu %s", title, entries.size(), active, coils ? "on" : "closed");
     DrawFirmwareTextLeft(line, pFirmwareFontSmall, x + 20, y + 10, white);
+
+    if (entries.empty())
+    {
+        // Says why rather than showing nothing. The list is filled while the
+        // boards are configured, so an empty panel means the bus has not got
+        // that far -- which is worth knowing, and indistinguishable from a
+        // broken screen otherwise.
+        DrawFirmwareTextLeft("waiting for the boards to be configured", pFirmwareFontSmall, x + 20, y + 60, dim);
+        return;
+    }
 
     const int top = y + 52;
     const int bottom = y + h - 12;
@@ -2490,10 +2507,10 @@ static void DrawMonitorSection(const char* title, const std::vector<MonitorEntry
         // hides the one thing being looked for; grey lets the green of a
         // closed switch be the only thing that carries.
         const SDL_Color blockColour = isActive ? green : (recent ? amber : dim);
-        SDL_SetRenderDrawColor(pTransliteRenderer, blockColour.r, blockColour.g, blockColour.b, 255);
+        SDL_SetRenderDrawColor(g_uiRenderer, blockColour.r, blockColour.g, blockColour.b, 255);
         const SDL_FRect box{static_cast<float>(rx + contentWidth - 128), static_cast<float>(ry) + 6.0f, 16.0f,
                             16.0f};
-        SDL_RenderFillRect(pTransliteRenderer, &box);
+        SDL_RenderFillRect(g_uiRenderer, &box);
 
         const SDL_Color nameColour = recent ? amber : (isActive ? white : dim);
         snprintf(line, sizeof(line), "%3d %u/%-2u %s", entry.number, static_cast<unsigned>(entry.board),
@@ -2532,32 +2549,17 @@ static void DrawMonitorSection(const char* title, const std::vector<MonitorEntry
     }
 }
 
-static void RenderSwitchMonitor()
+// Draws the matrix into whatever g_uiRenderer currently is. No present: the
+// caller owns the frame.
+static void DrawSwitchMonitorInto(int w, int h)
 {
     EnsureMonitorTables();
-
-    // Takes the backbox screen the same way the firmware warning does, and for
-    // the same reason: on a machine configured for B2S or PUP there is no
-    // other window to draw into. Which is why enabling the monitor turns those
-    // off -- see where the option is read.
-    if (g_firmwareScreen.active || !EnsureFirmwareWindow())
-    {
-        return;
-    }
-
-    EnsureFirmwareFont();
-
-    int w = 0, h = 0;
-    if (!SDL_GetCurrentRenderOutputSize(pTransliteRenderer, &w, &h) || w <= 0 || h <= 0)
-    {
-        return;
-    }
 
     const SDL_Color white{235, 235, 235, 255};
     const SDL_Color dim{120, 120, 130, 255};
 
-    SDL_SetRenderDrawColor(pTransliteRenderer, 0, 0, 0, 255);
-    SDL_RenderClear(pTransliteRenderer);
+    SDL_SetRenderDrawColor(g_uiRenderer, 0, 0, 0, 255);
+    SDL_RenderClear(g_uiRenderer);
 
     char line[192];
     DrawFirmwareText("SWITCH AND COIL MONITOR", pFirmwareFontLarge, w / 2, 8, white);
@@ -2599,10 +2601,8 @@ static void RenderSwitchMonitor()
                      "how often and how long ago",
                      pFirmwareFontSmall, w / 2, h - 36, dim);
 
-    SDL_RenderPresent(pTransliteRenderer);
-    SDL_FlushRenderer(pTransliteRenderer);
-    SDL_PumpEvents();
 }
+
 // Panel geometry, shared by every tool so they line up with each other.
 static constexpr int kOverlayPanelTop = 104;     // heading, down to the first row
 static constexpr int kOverlayRowHeight = 52;
@@ -2622,15 +2622,15 @@ static SDL_FRect DrawOverlayPanel(int w, int h, int rows, const char* title)
 
     // Dimmed rather than cleared: whatever is behind stays faintly visible, so
     // it is obvious the machine is still running underneath the menu.
-    SDL_SetRenderDrawBlendMode(pTransliteRenderer, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(pTransliteRenderer, 0, 0, 0, 200);
+    SDL_SetRenderDrawBlendMode(g_uiRenderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(g_uiRenderer, 0, 0, 0, 200);
     const SDL_FRect full{0.0f, 0.0f, static_cast<float>(w), static_cast<float>(h)};
-    SDL_RenderFillRect(pTransliteRenderer, &full);
-    SDL_SetRenderDrawColor(pTransliteRenderer, 24, 26, 34, 255);
-    SDL_RenderFillRect(pTransliteRenderer, &panel);
-    SDL_SetRenderDrawColor(pTransliteRenderer, 90, 96, 120, 255);
-    SDL_RenderRect(pTransliteRenderer, &panel);
-    SDL_SetRenderDrawBlendMode(pTransliteRenderer, SDL_BLENDMODE_NONE);
+    SDL_RenderFillRect(g_uiRenderer, &full);
+    SDL_SetRenderDrawColor(g_uiRenderer, 24, 26, 34, 255);
+    SDL_RenderFillRect(g_uiRenderer, &panel);
+    SDL_SetRenderDrawColor(g_uiRenderer, 90, 96, 120, 255);
+    SDL_RenderRect(g_uiRenderer, &panel);
+    SDL_SetRenderDrawBlendMode(g_uiRenderer, SDL_BLENDMODE_NONE);
 
     DrawFirmwareText(title, pFirmwareFontLarge, w / 2, static_cast<int>(panel.y) + 24, white);
     return panel;
@@ -2650,9 +2650,9 @@ static void RenderOverlayMenu(int w, int h)
         const int y = static_cast<int>(panel.y) + kOverlayPanelTop + i * kOverlayRowHeight;
         if (selected)
         {
-            SDL_SetRenderDrawColor(pTransliteRenderer, 44, 48, 62, 255);
+            SDL_SetRenderDrawColor(g_uiRenderer, 44, 48, 62, 255);
             const SDL_FRect row{panel.x + 16.0f, static_cast<float>(y) - 6.0f, panel.w - 32.0f, 44.0f};
-            SDL_RenderFillRect(pTransliteRenderer, &row);
+            SDL_RenderFillRect(g_uiRenderer, &row);
         }
         DrawFirmwareTextLeft(selected ? ">" : " ", pFirmwareFontSmall, static_cast<int>(panel.x) + 32, y,
                              selected ? amber : dim);
@@ -2681,9 +2681,9 @@ static void RenderOverlayVolume(int w, int h)
         const int y = static_cast<int>(panel.y) + kOverlayPanelTop + i * kOverlayRowHeight;
         if (selected)
         {
-            SDL_SetRenderDrawColor(pTransliteRenderer, 44, 48, 62, 255);
+            SDL_SetRenderDrawColor(g_uiRenderer, 44, 48, 62, 255);
             const SDL_FRect row{panel.x + 16.0f, static_cast<float>(y) - 6.0f, panel.w - 32.0f, 44.0f};
-            SDL_RenderFillRect(pTransliteRenderer, &row);
+            SDL_RenderFillRect(g_uiRenderer, &row);
         }
         DrawFirmwareTextLeft(selected ? ">" : " ", pFirmwareFontSmall, static_cast<int>(panel.x) + 32, y,
                              selected ? amber : dim);
@@ -2695,12 +2695,12 @@ static void RenderOverlayVolume(int w, int h)
         // have to be read one at a time.
         const float barX = panel.x + 300.0f;
         const float barW = 300.0f;
-        SDL_SetRenderDrawColor(pTransliteRenderer, 60, 62, 76, 255);
+        SDL_SetRenderDrawColor(g_uiRenderer, 60, 62, 76, 255);
         const SDL_FRect track{barX, static_cast<float>(y) + 10.0f, barW, 14.0f};
-        SDL_RenderFillRect(pTransliteRenderer, &track);
-        SDL_SetRenderDrawColor(pTransliteRenderer, green.r, green.g, green.b, 255);
+        SDL_RenderFillRect(g_uiRenderer, &track);
+        SDL_SetRenderDrawColor(g_uiRenderer, green.r, green.g, green.b, 255);
         const SDL_FRect fill{barX, static_cast<float>(y) + 10.0f, barW * (g_runtimeVolumes[i] / 100.0f), 14.0f};
-        SDL_RenderFillRect(pTransliteRenderer, &fill);
+        SDL_RenderFillRect(g_uiRenderer, &fill);
 
         snprintf(line, sizeof(line), "%3u%%", static_cast<unsigned>(g_runtimeVolumes[i]));
         DrawFirmwareTextLeft(line, pFirmwareFontSmall, static_cast<int>(barX + barW) + 20, y,
@@ -2721,6 +2721,12 @@ static void RenderOverlayVolume(int w, int h)
 static void CloseOverlay()
 {
     g_overlay = OverlayScreen::None;
+    // Drawn into the backglass frame: there is no window to give back, and the
+    // next frame the media host presents simply has no overlay in it.
+    if (pTransliteRenderer == nullptr)
+    {
+        return;
+    }
     if (firmwareOwnsWindow)
     {
         if (pTransliteRenderer)
@@ -2815,29 +2821,31 @@ static bool HandleOverlayKey(SDL_Keycode key)
     }
 }
 
-static void RenderOverlay()
+// Draws the current tool into `renderer`, and nothing else: no clear unless
+// the caller has nothing behind, no present. Used both by the media host,
+// which presents the frame itself, and by the own-window path below.
+static void DrawOverlayInto(SDL_Renderer* renderer, int w, int h, bool clearFirst)
 {
-    if (g_overlay == OverlayScreen::None || g_firmwareScreen.active || !EnsureFirmwareWindow())
+    if (g_overlay == OverlayScreen::None || g_firmwareScreen.active || renderer == nullptr || w <= 0 || h <= 0)
     {
         return;
     }
 
+    g_uiRenderer = renderer;
     EnsureFirmwareFont();
-
-    int w = 0, h = 0;
-    if (!SDL_GetCurrentRenderOutputSize(pTransliteRenderer, &w, &h) || w <= 0 || h <= 0)
-    {
-        return;
-    }
 
     if (g_overlay == OverlayScreen::Monitor)
     {
-        RenderSwitchMonitor();
+        // Opaque: a matrix of small text is unreadable over a backglass.
+        DrawSwitchMonitorInto(w, h);
         return;
     }
 
-    SDL_SetRenderDrawColor(pTransliteRenderer, 0, 0, 0, 255);
-    SDL_RenderClear(pTransliteRenderer);
+    if (clearFirst)
+    {
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+        SDL_RenderClear(renderer);
+    }
 
     if (g_overlay == OverlayScreen::Menu)
     {
@@ -2847,6 +2855,24 @@ static void RenderOverlay()
     {
         RenderOverlayVolume(w, h);
     }
+}
+
+// The own-window path, for a machine whose backglass nothing else is drawing:
+// a translite, or no video at all.
+static void RenderOverlay()
+{
+    if (g_overlay == OverlayScreen::None || g_firmwareScreen.active || !EnsureFirmwareWindow())
+    {
+        return;
+    }
+
+    int w = 0, h = 0;
+    if (!SDL_GetCurrentRenderOutputSize(pTransliteRenderer, &w, &h) || w <= 0 || h <= 0)
+    {
+        return;
+    }
+
+    DrawOverlayInto(pTransliteRenderer, w, h, true);
 
     SDL_RenderPresent(pTransliteRenderer);
     SDL_FlushRenderer(pTransliteRenderer);
@@ -5305,6 +5331,13 @@ int main(int argc, char** argv)
     // sound commands.
     {
     pMediaPluginHost = std::make_unique<MediaPluginHost>(pAudioOutput.get(), *pPluginBus);
+#ifndef PPUC_USE_KMSDMD
+    // The overlay rides along with the backglass frame rather than opening a
+    // window beside it. Two fullscreen windows on KMSDRM means the panel
+    // alternates between them as fast as they present.
+    pMediaPluginHost->SetOverlayDraw([](SDL_Renderer* renderer, int w, int h)
+                                     { DrawOverlayInto(renderer, w, h, false); });
+#endif
     MediaPluginHost::Options mediaOptions;
     mediaOptions.enablePup = opt_pup;
     mediaOptions.enableAltSound = opt_altsound;
@@ -6461,7 +6494,11 @@ int main(int argc, char** argv)
 
       // 10 Hz. Fast enough that a flipper button looks live, slow enough that
       // the repaint is not what the machine spends its time on.
-      if (g_overlay != OverlayScreen::None)
+      // Only when nothing else owns a frame to draw into. With a backglass up
+      // the media host calls DrawOverlayInto itself, once per frame it
+      // presents, and a second presenter here is what made the screen flicker.
+      if (g_overlay != OverlayScreen::None &&
+          (pMediaPluginHost == nullptr || !pMediaPluginHost->HasBackglass()))
       {
         const uint64_t nowMs = SDL_GetTicks();
         if (nowMs - g_switchMonitorLastRenderMs >= 100)

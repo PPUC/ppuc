@@ -470,6 +470,8 @@ public:
   void OnGameStart();
   void OnGameEnd();
   void QueueEvent(char source, int id, int value);
+  void SetOverlayDraw(MediaPluginHost::OverlayDraw draw) { overlayDraw_ = std::move(draw); }
+  bool HasBackglass() const { return backglassRenderer_ != nullptr; }
   void QueueSegmentDisplay(int digit, int value);
   void QueuePlayerScore(int player, int score);
   void QueueDmdTrigger(uint16_t id);
@@ -564,6 +566,7 @@ private:
   bool sdlVideoInitialized_ = false;
   SDL_Window* backglassWindow_ = nullptr;
   SDL_Renderer* backglassRenderer_ = nullptr;
+  MediaPluginHost::OverlayDraw overlayDraw_;
   bool backglassFrameDrewImage_ = false;
   bool loggedNoBackglassRenderer_ = false;
   bool loggedNoPluginBackglassRenderer_ = false;
@@ -1149,6 +1152,18 @@ void MediaPluginHost::Impl::Process()
                 backglassFrameDrewImage_ ? 1 : 0);
     lastBackglassDiagnosticMs_ = nowMs;
   }
+  // Last, so it is on top, and inside this frame so the panel is presented
+  // once. An overlay with a window of its own fought this one for the screen.
+  if (overlayDraw_)
+  {
+    int w = 0;
+    int h = 0;
+    if (SDL_GetCurrentRenderOutputSize(backglassRenderer_, &w, &h) && w > 0 && h > 0)
+    {
+      overlayDraw_(backglassRenderer_, w, h);
+    }
+  }
+
   SDL_RenderPresent(backglassRenderer_);
 }
 
@@ -1794,6 +1809,10 @@ void MediaPluginHost::QueueEvent(char source, int id, int value)
 {
   impl_->QueueEvent(source, id, value);
 }
+
+void MediaPluginHost::SetOverlayDraw(OverlayDraw draw) { impl_->SetOverlayDraw(std::move(draw)); }
+
+bool MediaPluginHost::HasBackglass() const { return impl_->HasBackglass(); }
 
 void MediaPluginHost::QueueSegmentDisplay(int digit, int value)
 {
