@@ -222,10 +222,11 @@ text on its own gets a small panel around the words. Everything left over is
 backglass. `SlideBorderPercent` sets the least backglass that must stay visible
 round the edge, whatever the slide wants.
 
-The panel is slightly see-through as well — `SlideOpacityPercent`, 88 by
-default — so the backglass reads faintly through it and the machine stays one
-thing rather than two. Slides fade into and out of the backglass rather than
-into black. A held slide fades in but never out: a slide somebody is reading
+The panel's black background is slightly see-through — `SlideOpacityPercent`,
+88 by default — so the backglass reads faintly through it and the machine stays
+one thing rather than two. The photograph and the words stay solid, and a thin
+amber edge runs round the panel. Slides fade into and out of the backglass
+rather than into black. A held slide fades in but never out: a slide somebody is reading
 must not dim underneath them.
 
 If somebody has the service menu open, there are no slides. Somebody at the

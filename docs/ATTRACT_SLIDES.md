@@ -123,10 +123,23 @@ different size and shape, and what is left over is backglass.
 is never allowed closer than that to the screen edge. Most slides stay well
 inside it.
 
-The panel is also slightly see-through -- `SlideOpacityPercent`, 88 by default
--- so the backglass reads faintly through the slide and the machine stays one
-thing rather than two. Not much: the caption still has to be readable over
-whatever the backglass is doing underneath it.
+The panel's **black background** is slightly see-through --
+`SlideOpacityPercent`, 88 by default -- so the backglass reads faintly through
+the slide and the machine stays one thing rather than two. The photograph and
+the words are solid: a caption at 88% over a busy backglass is a caption nobody
+reads.
+
+That distinction is why the transparency lives in the background's own alpha
+rather than in the alpha the finished panel is blitted with. The background is
+cleared translucent, the photograph is drawn with blending off so it replaces
+alpha outright, and glyphs blend -- so their antialiased edges melt into the
+background while their solid middles reach full alpha.
+
+A thin solid amber edge runs round the panel, sized from the screen rather than
+from the panel so a small slide and a large one are framed alike. Without it a
+translucent panel over a busy backglass has no edge at all, and a slide that
+fades out at its own boundary reads as a smudge rather than as something put
+there on purpose.
 
 On the own-window path — a translite, or no video at all — the translite is
 drawn first and the slide goes on top of it, so the border shows the same thing

@@ -3702,6 +3702,9 @@ struct SlideLayout
     SDL_FRect panel{};
     SDL_FRect image{};
     SDL_FRect text{};
+    // The amber edge, sized from the screen rather than from the panel so that
+    // a small slide and a large one are framed the same way.
+    float edge = 3.0f;
     bool hasImage = false;
 };
 
@@ -3709,6 +3712,7 @@ static SlideLayout LayOutSlide(SDL_Renderer* renderer, const AttractSlides::Slid
                                int screenH)
 {
     SlideLayout layout;
+    layout.edge = std::max(3.0f, static_cast<float>(std::min(screenW, screenH)) / 240.0f);
 
     // The least backglass that must stay visible, whatever the slide wants.
     const float border = static_cast<float>(std::min(screenW, screenH)) * static_cast<float>(opt_slide_border_percent)
@@ -3821,11 +3825,20 @@ static SlideLayout LayOutSlide(SDL_Renderer* renderer, const AttractSlides::Slid
 static void BuildSlideFrame(SDL_Renderer* renderer, const AttractSlides::Slide& slide, size_t index,
                             const SlideLayout& layout)
 {
+    // The transparency lives here, in the background's own alpha, rather than in
+    // the alpha the finished panel is blitted with. Fading the whole panel made
+    // the photograph and the words see-through as well, which is not what a
+    // slide wants: a caption at 88% over a busy backglass is a caption nobody
+    // reads. So the black is laid down translucent and everything drawn on top
+    // of it replaces or accumulates alpha up to solid.
+    //
     // Clear rather than a filled rectangle: the target is the panel's own
     // texture, so clearing it is both exactly what is meant and the cheaper of
     // the two.
+    const uint8_t backgroundAlpha =
+        static_cast<uint8_t>(std::clamp(static_cast<int>(opt_slide_opacity_percent), 10, 100) * 255 / 100);
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, backgroundAlpha);
     SDL_RenderClear(renderer);
 
     if (layout.hasImage)
@@ -3834,15 +3847,35 @@ static void BuildSlideFrame(SDL_Renderer* renderer, const AttractSlides::Slide& 
                               layout.image.h};
         if (SDL_Texture* photo = SlideTexture(renderer, slide, index))
         {
+            // Replaces what is under it, alpha included: a photograph is the
+            // one thing on a slide that should be exactly itself.
+            SDL_SetTextureBlendMode(photo, SDL_BLENDMODE_NONE);
             SDL_RenderTexture(renderer, photo, nullptr, &image);
         }
     }
 
+    // Glyphs blend, so their antialiased edges melt into the background while
+    // their solid middles reach full alpha -- which is the whole point of
+    // putting the transparency in the background rather than over the top.
     if (layout.text.w > 0.0f)
     {
         SlideTextBlock(renderer, slide, static_cast<int>(layout.text.x - layout.panel.x),
                        static_cast<int>(layout.text.y - layout.panel.y), static_cast<int>(layout.text.w) + 2);
     }
+
+    // A thin amber edge, solid. Without it a translucent panel over a busy
+    // backglass has no edge at all, and a slide that fades out at its own
+    // boundary reads as a smudge rather than as something put there on purpose.
+    const float edge = layout.edge;
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+    SDL_SetRenderDrawColor(renderer, 255, 196, 0, 255);
+    const SDL_FRect edges[4] = {
+        {0.0f, 0.0f, layout.panel.w, edge},
+        {0.0f, layout.panel.h - edge, layout.panel.w, edge},
+        {0.0f, 0.0f, edge, layout.panel.h},
+        {layout.panel.w - edge, 0.0f, edge, layout.panel.h},
+    };
+    SDL_RenderFillRects(renderer, edges, 4);
 
     // Scaled off the picture rather than the screen: a marker has to stay in
     // proportion to what it is pointing at.
@@ -3904,8 +3937,10 @@ static void DrawSlidesInto(SDL_Renderer* renderer, int w, int h)
     const uint64_t elapsedMs = SDL_GetTicks() - g_attractSlides->CurrentSinceMs();
     const uint8_t dim = AttractSlides::FadeAlpha(elapsedMs, g_attractSlides->CurrentDurationMs(), opt_slide_fade_ms,
                                                  g_attractSlides->Paused());
-    const float opacity = std::clamp(static_cast<float>(opt_slide_opacity_percent) / 100.0f, 0.1f, 1.0f) *
-                          (1.0f - static_cast<float>(dim) / 255.0f);
+    // The panel already carries its own alpha, so this is the fade alone. It
+    // multiplies whatever each pixel has, which is what makes the whole slide --
+    // translucent background, solid picture, solid words -- fade together.
+    const float opacity = 1.0f - static_cast<float>(dim) / 255.0f;
     if (opacity <= 0.0f)
     {
         return;
@@ -7776,18 +7811,28 @@ int main(int argc, char** argv)
       // presents, and a second presenter here is what made the screen flicker.
       if (g_attractSlides)
       {
-        const bool wasVisible = g_attractSlides->Visible();
         g_attractSlides->Update(!ball_search_game_running.load(std::memory_order_acquire), SDL_GetTicks());
-        if (wasVisible && !g_attractSlides->Visible())
+
+        // Compared against what was on the screen last pass, not against what
+        // was true a line ago. A show can be taken down from three places --
+        // ESC, a switch, or the clock -- and two of them happen earlier in this
+        // same pass, so sampling just before Update() sees "already hidden" and
+        // asks for nothing. On a machine with a B2S that goes unnoticed because
+        // the backglass repaints anyway; on a translite, the last slide stays
+        // on the screen until something else happens to redraw it.
+        static bool slidesWereShowing = false;
+        const bool showing = g_attractSlides->Visible();
+        if (slidesWereShowing && !showing)
         {
-          // Somebody walked up. Give the photograph and the panel back, and ask
-          // the translite for the frame the slideshow was covering.
+          // Give the photograph and the panel back, and ask the translite for
+          // the frame the slideshow was covering.
           ReleaseSlideTexture();
           ReleaseSlideFrame();
           QueueTransliteRender(ball_search_game_running.load(std::memory_order_acquire)
                                    ? RenderCommand::RENDER_GAME
                                    : RenderCommand::RENDER_ATTRACT);
         }
+        slidesWereShowing = showing;
       }
 
       // The slides carry the only animation on these screens, and a pulse
