@@ -375,10 +375,21 @@ static bool HasTransliteAttractImage()
 #endif
 }
 
-static void QueueTransliteRender(RenderCommand command)
+// `force` redraws the translite even when it is already the image being asked
+// for.
+//
+// The de-duplication exists because the game state is polled and would
+// otherwise repaint the same picture forever. But it answers "is this the
+// image the translite was last told to show", not "is this what is on the
+// screen" -- and the service menu and the slideshow both paint over the
+// translite without telling it. Without this, putting the translite back after
+// either of them is dropped as a duplicate and the menu or the last slide
+// stays frozen on the screen, which looks exactly like the key that closed it
+// not working.
+static void QueueTransliteRender(RenderCommand command, bool force = false)
 {
   std::lock_guard<std::mutex> lock(renderMutex);
-  if (transliteCommandApplied && currentTransliteCommand == command)
+  if (!force && transliteCommandApplied && currentTransliteCommand == command)
   {
     return;
   }
@@ -3013,8 +3024,10 @@ static void CloseOverlay()
         firmwareOwnsWindow = false;
         return;
     }
-    QueueTransliteRender(ball_search_game_running.load(std::memory_order_acquire) ? RenderCommand::RENDER_GAME
-                                                                                  : RenderCommand::RENDER_ATTRACT);
+    QueueTransliteRender(
+        ball_search_game_running.load(std::memory_order_acquire) ? RenderCommand::RENDER_GAME
+                                                                 : RenderCommand::RENDER_ATTRACT,
+        true);
 }
 
 static const char* PendingActionLabel()
@@ -7830,7 +7843,8 @@ int main(int argc, char** argv)
           ReleaseSlideFrame();
           QueueTransliteRender(ball_search_game_running.load(std::memory_order_acquire)
                                    ? RenderCommand::RENDER_GAME
-                                   : RenderCommand::RENDER_ATTRACT);
+                                   : RenderCommand::RENDER_ATTRACT,
+                               true);
         }
         slidesWereShowing = showing;
       }
