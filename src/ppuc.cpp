@@ -3238,6 +3238,36 @@ static SDL_Renderer* pSlideTextureRenderer = nullptr;
 static size_t slideTextureIndex = static_cast<size_t>(-1);
 static std::string slideTexturePath;
 
+static void ReleaseMarkerArt();
+
+// The finished slide, everything except what moves.
+//
+// The backglass frame is presented on every pass of the main loop, and the
+// slide has to be drawn into each one because the B2S redraws underneath it.
+// Laying out the text and scaling the photograph 250 times a second to produce
+// the same pixels is most of what a slideshow costs -- so it is done once per
+// slide and blitted after that. Only the marker pulse and the fade are still
+// drawn per frame, because only they change.
+static SDL_Texture* pSlideFrame = nullptr;
+static SDL_Renderer* pSlideFrameRenderer = nullptr;
+static size_t slideFrameIndex = static_cast<size_t>(-1);
+static int slideFrameWidth = 0;
+static int slideFrameHeight = 0;
+
+static void ReleaseSlideFrame()
+{
+    ReleaseMarkerArt();
+    if (pSlideFrame)
+    {
+        SDL_DestroyTexture(pSlideFrame);
+        pSlideFrame = nullptr;
+    }
+    pSlideFrameRenderer = nullptr;
+    slideFrameIndex = static_cast<size_t>(-1);
+    slideFrameWidth = 0;
+    slideFrameHeight = 0;
+}
+
 static void ReleaseSlideTexture()
 {
     if (pSlideTexture)
@@ -3248,6 +3278,7 @@ static void ReleaseSlideTexture()
     pSlideTextureRenderer = nullptr;
     slideTextureIndex = static_cast<size_t>(-1);
     slideTexturePath.clear();
+    ReleaseSlideFrame();
 }
 
 static SDL_Texture* SlideTexture(SDL_Renderer* renderer, const AttractSlides::Slide& slide, size_t index)
@@ -3375,26 +3406,129 @@ static float MarkerPulse(size_t index, size_t count, uint64_t elapsedMs)
     return 0.35f + 0.65f * static_cast<float>(std::sin(t * 3.14159265f));
 }
 
-static void DrawSlideMarkers(SDL_Renderer* renderer, const AttractSlides::Slide& slide, const SDL_FRect& image,
-                            uint64_t elapsedMs)
+// A marker's artwork, drawn once and then blitted.
+//
+// The arrow and the badge are built from spans -- dozens of one-pixel
+// rectangles each -- and the backglass frame is presented on every pass of the
+// main loop. Rebuilding that geometry 250 times a second to produce the same
+// shape cost more than everything else on the screen put together. Only the
+// pulse changes, and a pulse is an alpha and an offset, which a texture does
+// for free.
+struct MarkerArt
 {
+    SDL_Texture* arrow = nullptr;
+    SDL_Texture* badge = nullptr;
+    float arrowSize = 0.0f;
+    float badgeSize = 0.0f;
+};
+static std::vector<MarkerArt> g_markerArt;
+
+static void ReleaseMarkerArt()
+{
+    for (MarkerArt& art : g_markerArt)
+    {
+        if (art.arrow) SDL_DestroyTexture(art.arrow);
+        if (art.badge) SDL_DestroyTexture(art.badge);
+    }
+    g_markerArt.clear();
+}
+
+// Both shapes are drawn into the middle of a square texture, so blitting one is
+// a matter of centring it on the point it belongs to, whichever way it faces.
+static SDL_Texture* MakeMarkerTexture(SDL_Renderer* renderer, float side)
+{
+    const int edge = std::max(8, static_cast<int>(side));
+    SDL_Texture* texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_TARGET, edge, edge);
+    if (texture)
+    {
+        SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
+    }
+    return texture;
+}
+
+static void BuildMarkerArt(SDL_Renderer* renderer, const AttractSlides::Slide& slide, float badgeRadius,
+                           float arrowLength)
+{
+    ReleaseMarkerArt();
     if (slide.markers.empty())
     {
         return;
     }
 
-    // Scaled off the picture rather than the screen: a marker has to stay in
-    // proportion to what it is pointing at, and on a letterboxed portrait photo
-    // the picture is much narrower than the screen.
-    const float unit = std::min(image.w, image.h);
-    const float badgeRadius = std::max(14.0f, unit * 0.035f);
-    const float arrowLength = std::max(30.0f, unit * 0.11f);
-
-    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    SDL_Texture* previousTarget = SDL_GetRenderTarget(renderer);
+    g_markerArt.resize(slide.markers.size());
 
     for (size_t i = 0; i < slide.markers.size(); ++i)
     {
         const AttractSlides::Marker& marker = slide.markers[i];
+        MarkerArt& art = g_markerArt[i];
+
+        art.arrowSize = arrowLength * 2.0f + 8.0f;
+        art.arrow = MakeMarkerTexture(renderer, art.arrowSize);
+        if (art.arrow)
+        {
+            const float centre = art.arrowSize / 2.0f;
+            SDL_SetRenderTarget(renderer, art.arrow);
+            SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+            SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+            SDL_RenderClear(renderer);
+            SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+            // Black first, one pixel out, so the arrow is visible over a pale
+            // playfield as well as a dark one.
+            SDL_SetRenderDrawColor(renderer, 0, 0, 0, 180);
+            DrawArrow(renderer, centre + 2.0f, centre + 2.0f, marker.pointer, arrowLength);
+            SDL_SetRenderDrawColor(renderer, 255, 196, 0, 255);
+            DrawArrow(renderer, centre, centre, marker.pointer, arrowLength);
+        }
+
+        if (marker.number > 0)
+        {
+            art.badgeSize = badgeRadius * 2.0f + 8.0f;
+            art.badge = MakeMarkerTexture(renderer, art.badgeSize);
+            if (art.badge)
+            {
+                const float centre = art.badgeSize / 2.0f;
+                SDL_SetRenderTarget(renderer, art.badge);
+                SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+                SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+                SDL_RenderClear(renderer);
+                SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+                SDL_SetRenderDrawColor(renderer, 0, 0, 0, 200);
+                FillCircle(renderer, centre + 2.0f, centre + 2.0f, badgeRadius);
+                SDL_SetRenderDrawColor(renderer, 255, 196, 0, 255);
+                FillCircle(renderer, centre, centre, badgeRadius);
+
+                char label[8];
+                snprintf(label, sizeof(label), "%d", marker.number);
+                // Centred on the badge, measured rather than guessed: "10" is
+                // twice as wide as "1".
+                const int textWidth = MeasureTextWidth(label, pFirmwareFontSmall);
+                int textHeight = 0;
+#ifdef PPUC_HAS_SDL3_TTF
+                textHeight = pFirmwareFontSmall ? TTF_GetFontHeight(pFirmwareFontSmall) : 0;
+#endif
+                const SDL_Color black{0, 0, 0, 255};
+                DrawFirmwareTextLeft(label, pFirmwareFontSmall, static_cast<int>(centre) - textWidth / 2,
+                                     static_cast<int>(centre) - textHeight / 2, black);
+            }
+        }
+    }
+
+    SDL_SetRenderTarget(renderer, previousTarget);
+}
+
+static void DrawSlideMarkers(SDL_Renderer* renderer, const AttractSlides::Slide& slide, const SDL_FRect& image,
+                             uint64_t elapsedMs)
+{
+    if (slide.markers.empty() || g_markerArt.size() != slide.markers.size())
+    {
+        return;
+    }
+
+    for (size_t i = 0; i < slide.markers.size(); ++i)
+    {
+        const AttractSlides::Marker& marker = slide.markers[i];
+        const MarkerArt& art = g_markerArt[i];
         const float x = image.x + marker.x * image.w;
         const float y = image.y + marker.y * image.h;
         const float pulse = MarkerPulse(i, slide.markers.size(), elapsedMs);
@@ -3403,7 +3537,7 @@ static void DrawSlideMarkers(SDL_Renderer* renderer, const AttractSlides::Slide&
         // The arrow keeps its distance from what it points at, and that distance
         // is what pulses: a marker that changed size would look like the target
         // moving.
-        const float gap = (marker.number > 0 ? badgeRadius : 0.0f) + 6.0f + arrowLength * 0.35f * pulse;
+        const float gap = (marker.number > 0 ? art.badgeSize / 2.0f : 0.0f) + 6.0f + art.arrowSize * 0.175f * pulse;
         float tipX = x;
         float tipY = y;
         switch (marker.pointer)
@@ -3422,32 +3556,18 @@ static void DrawSlideMarkers(SDL_Renderer* renderer, const AttractSlides::Slide&
                 break;
         }
 
-        // Black first, one pixel out, so the arrow is visible over a pale
-        // playfield as well as a dark one.
-        SDL_SetRenderDrawColor(renderer, 0, 0, 0, static_cast<uint8_t>(alpha * 0.7f));
-        DrawArrow(renderer, tipX + 2.0f, tipY + 2.0f, marker.pointer, arrowLength);
-        SDL_SetRenderDrawColor(renderer, 255, 196, 0, alpha);
-        DrawArrow(renderer, tipX, tipY, marker.pointer, arrowLength);
-
-        if (marker.number > 0)
+        if (art.arrow)
         {
-            SDL_SetRenderDrawColor(renderer, 0, 0, 0, 200);
-            FillCircle(renderer, x + 2.0f, y + 2.0f, badgeRadius);
-            SDL_SetRenderDrawColor(renderer, 255, 196, 0, static_cast<uint8_t>(150.0f + 105.0f * pulse));
-            FillCircle(renderer, x, y, badgeRadius);
-
-            char label[8];
-            snprintf(label, sizeof(label), "%d", marker.number);
-            // Centred on the badge, measured rather than guessed: "10" is twice
-            // as wide as "1".
-            const int textWidth = MeasureTextWidth(label, pFirmwareFontSmall);
-            int textHeight = 0;
-#ifdef PPUC_HAS_SDL3_TTF
-            textHeight = pFirmwareFontSmall ? TTF_GetFontHeight(pFirmwareFontSmall) : 0;
-#endif
-            const SDL_Color black{0, 0, 0, 255};
-            DrawFirmwareTextLeft(label, pFirmwareFontSmall, static_cast<int>(x) - textWidth / 2,
-                                 static_cast<int>(y) - textHeight / 2, black);
+            SDL_SetTextureAlphaMod(art.arrow, alpha);
+            const SDL_FRect dst{tipX - art.arrowSize / 2.0f, tipY - art.arrowSize / 2.0f, art.arrowSize,
+                                art.arrowSize};
+            SDL_RenderTexture(renderer, art.arrow, nullptr, &dst);
+        }
+        if (art.badge)
+        {
+            SDL_SetTextureAlphaMod(art.badge, static_cast<uint8_t>(150.0f + 105.0f * pulse));
+            const SDL_FRect dst{x - art.badgeSize / 2.0f, y - art.badgeSize / 2.0f, art.badgeSize, art.badgeSize};
+            SDL_RenderTexture(renderer, art.badge, nullptr, &dst);
         }
     }
 }
@@ -3602,6 +3722,51 @@ static SDL_FRect SlidePanel(int w, int h)
     return SDL_FRect{border, border, static_cast<float>(w) - border * 2.0f, static_cast<float>(h) - border * 2.0f};
 }
 
+// Lays the photograph and the words into the panel. Called once per slide, with
+// the panel at the origin: what it draws does not change until the slide does.
+static SDL_FRect BuildSlideFrame(SDL_Renderer* renderer, const AttractSlides::Slide& slide, size_t index,
+                                 const SDL_FRect& panel)
+{
+    const SDL_FRect local{0.0f, 0.0f, panel.w, panel.h};
+
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+    SDL_RenderFillRect(renderer, &local);
+
+    SDL_FRect image = local;
+    SDL_Texture* texture = SlideTexture(renderer, slide, index);
+    if (texture)
+    {
+        // Letterboxed rather than stretched. A playfield photograph distorted to
+        // 16:9 is worse than black bars, and the markers are placed in the
+        // photograph's own coordinates, so they only land on the right targets
+        // if its aspect ratio is kept.
+        float tw = 0.0f;
+        float th = 0.0f;
+        if (SDL_GetTextureSize(texture, &tw, &th) && tw > 0.0f && th > 0.0f)
+        {
+            const float scale = std::min(local.w / tw, local.h / th);
+            image.w = tw * scale;
+            image.h = th * scale;
+            image.x = (local.w - image.w) / 2.0f;
+            image.y = (local.h - image.h) / 2.0f;
+        }
+        SDL_RenderTexture(renderer, texture, nullptr, &image);
+    }
+
+    DrawSlideText(renderer, slide, local, texture != nullptr, image);
+
+    // Scaled off the picture rather than the screen: a marker has to stay in
+    // proportion to what it is pointing at, and on a letterboxed portrait photo
+    // the picture is much narrower than the screen.
+    const float unit = std::min(image.w, image.h);
+    BuildMarkerArt(renderer, slide, std::max(14.0f, unit * 0.035f), std::max(30.0f, unit * 0.11f));
+
+    // Where the picture ended up, in the panel's coordinates. The markers are
+    // drawn per frame and need it in the screen's.
+    return image;
+}
+
 static void DrawSlidesInto(SDL_Renderer* renderer, int w, int h)
 {
     if (!g_attractSlides || !g_attractSlides->Visible() || renderer == nullptr || w <= 0 || h <= 0)
@@ -3613,39 +3778,47 @@ static void DrawSlidesInto(SDL_Renderer* renderer, int w, int h)
     EnsureFirmwareFont();
 
     const AttractSlides::Slide& slide = g_attractSlides->Current();
+    const size_t index = g_attractSlides->CurrentIndex();
     const SDL_FRect panel = SlidePanel(w, h);
-
-    // Opaque inside the panel, like the monitor: a photograph half-blended with
-    // a backglass is two pictures and no information. Outside it, whatever the
-    // caller already drew stays.
-    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-    SDL_RenderFillRect(renderer, &panel);
-
-    SDL_FRect image = panel;
-    SDL_Texture* texture = SlideTexture(renderer, slide, g_attractSlides->CurrentIndex());
-    if (texture)
+    const int panelWidth = static_cast<int>(panel.w);
+    const int panelHeight = static_cast<int>(panel.h);
+    if (panelWidth <= 0 || panelHeight <= 0)
     {
-        // Letterboxed rather than stretched. A playfield photograph distorted to
-        // 16:9 is worse than black bars, and the markers are placed in the
-        // photograph's own coordinates, so they only land on the right targets
-        // if its aspect ratio is kept.
-        float tw = 0.0f;
-        float th = 0.0f;
-        if (SDL_GetTextureSize(texture, &tw, &th) && tw > 0.0f && th > 0.0f)
-        {
-            const float scale = std::min(panel.w / tw, panel.h / th);
-            image.w = tw * scale;
-            image.h = th * scale;
-            image.x = panel.x + (panel.w - image.w) / 2.0f;
-            image.y = panel.y + (panel.h - image.h) / 2.0f;
-        }
-        SDL_RenderTexture(renderer, texture, nullptr, &image);
+        return;
     }
 
+    static SDL_FRect slideFrameImage{};
+    if (pSlideFrame == nullptr || pSlideFrameRenderer != renderer || slideFrameIndex != index ||
+        slideFrameWidth != panelWidth || slideFrameHeight != panelHeight)
+    {
+        ReleaseSlideFrame();
+        pSlideFrame = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_TARGET, panelWidth,
+                                        panelHeight);
+        if (pSlideFrame == nullptr)
+        {
+            printf("PPUC: slide frame: %s\n", SDL_GetError());
+            return;
+        }
+        SDL_Texture* previousTarget = SDL_GetRenderTarget(renderer);
+        SDL_SetRenderTarget(renderer, pSlideFrame);
+        slideFrameImage = BuildSlideFrame(renderer, slide, index, panel);
+        // Back to whatever the caller was drawing into -- the backglass frame
+        // this is riding along in, and which still has the B2S in it.
+        SDL_SetRenderTarget(renderer, previousTarget);
+        pSlideFrameRenderer = renderer;
+        slideFrameIndex = index;
+        slideFrameWidth = panelWidth;
+        slideFrameHeight = panelHeight;
+    }
+
+    SDL_SetTextureBlendMode(pSlideFrame, SDL_BLENDMODE_NONE);
+    SDL_RenderTexture(renderer, pSlideFrame, nullptr, &panel);
+
+    // The markers pulse, so they are the one part that cannot be cached.
+    const SDL_FRect image{panel.x + slideFrameImage.x, panel.y + slideFrameImage.y, slideFrameImage.w,
+                          slideFrameImage.h};
     const uint64_t elapsedMs = SDL_GetTicks() - g_attractSlides->CurrentSinceMs();
     DrawSlideMarkers(renderer, slide, image, elapsedMs);
-    DrawSlideText(renderer, slide, panel, texture != nullptr, image);
 
     // Held, and saying so. Without this the machine looks stuck rather than
     // obedient, and whoever pressed both buttons has no way to tell which it

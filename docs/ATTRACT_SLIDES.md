@@ -147,8 +147,20 @@ screen and centred, keeping its aspect ratio -- letterboxed rather than
 stretched, because the markers are placed in the photograph's own coordinates
 and only land on the right targets if its shape is kept.
 
-One texture is held at a time, and it is released as soon as the show comes
-down. A slideshow shows one photograph for eight seconds; a cache of one is the
+The finished slide -- background, photograph and caption -- is rendered into a
+texture once and blitted after that, and each marker's arrow and badge are
+baked into small textures of their own. This is not premature: the backglass
+frame is presented on **every pass of the main loop**, around 250 times a
+second, and the slide has to be drawn into each one because the B2S redraws
+underneath it. Laying out the text, scaling the photograph and rebuilding the
+marker geometry that often cost more than everything else on the screen put
+together -- measured on a Mac, a slide with four markers took the process from
+47% of a core to 81%, and 57% with the textures cached. Only the pulse and the
+fade are still computed per frame, because only they change, and a pulse is an
+alpha and an offset, which a texture does for free.
+
+One photograph texture is held at a time, and it is released as soon as the
+show comes down. A slideshow shows one photograph for eight seconds; a cache of one is the
 right size, and a machine that has just had somebody walk up to it should not
 still be holding a 1920x1080 texture it is not drawing.
 
