@@ -1973,7 +1973,6 @@ struct MonitorEntry
     uint32_t activations = 0;
 };
 
-static bool g_switchMonitorEnabled = false;
 static std::vector<MonitorEntry> g_switchMonitorEntries;
 static std::unordered_map<int, size_t> g_switchMonitorIndex;
 static std::vector<MonitorEntry> g_coilMonitorEntries;
@@ -2033,12 +2032,11 @@ static void EnsureMonitorTables()
 // the game. A switch suppressed by the rules or by tilt handling still shows
 // its true state here, which is the point: the screen answers what the machine
 // is doing, not what the ROM was told.
+// Recorded whether or not the screen is open, because the interesting moment
+// is always before someone thought to look: a menu opened after a ball wedged
+// has to show what the machine did, not start counting from now.
 static void NoteSwitchMonitorState(int number, uint8_t state)
 {
-    if (!g_switchMonitorEnabled)
-    {
-        return;
-    }
     EnsureMonitorTables();
     const auto it = g_switchMonitorIndex.find(number);
     if (it == g_switchMonitorIndex.end())
@@ -2058,10 +2056,6 @@ static void NoteSwitchMonitorState(int number, uint8_t state)
 // OnCoilChanged, a Lua rule's pulse, an interceptor restore.
 static void NoteCoilMonitorState(int number, uint8_t state)
 {
-    if (!g_switchMonitorEnabled)
-    {
-        return;
-    }
     EnsureMonitorTables();
     const auto it = g_coilMonitorIndex.find(number);
     if (it == g_coilMonitorIndex.end())
@@ -2365,6 +2359,59 @@ static void RenderFirmwareScreen(double progress)
 }
 
 
+// On-screen tools, reached from a keyboard.
+//
+// A cabinet has no keyboard in normal use, which is the point: plug one in and
+// the machine grows a service menu, unplug it and nothing has changed. SPACE
+// opens the menu, the cursor keys move, ENTER selects, ESC steps back out --
+// tool to menu, menu to game.
+//
+// Kept as one small state machine rather than a window toolkit because every
+// tool here is a page of text over a black rectangle, and because it has to
+// run on a machine whose only display is a backbox screen with no compositor.
+enum class OverlayScreen
+{
+    None,
+    Menu,
+    Monitor,
+    Volume,
+};
+
+static OverlayScreen g_overlay = OverlayScreen::None;
+static int g_menuSelection = 0;
+static int g_volumeSelection = 0;
+
+// Runtime levels, in percent, seeded from ppuc.ini and never written back.
+// This is a knob for a person standing at the machine with a ball in the
+// shooter lane, not a way to edit the configuration: the game folder is the
+// record of what the machine should sound like, and a service menu that
+// silently rewrote it would lose that.
+static uint8_t g_runtimeVolumes[4] = {100, 100, 100, 100};
+static const char* const kVolumeNames[4] = {"Master", "Game sound", "Speech", "Music"};
+
+static void ApplyRuntimeVolumes()
+{
+    if (pAudioOutput)
+    {
+        pAudioOutput->SetVolumes(g_runtimeVolumes[0] / 100.0f, g_runtimeVolumes[1] / 100.0f,
+                                 g_runtimeVolumes[2] / 100.0f, g_runtimeVolumes[3] / 100.0f);
+    }
+}
+
+struct OverlayMenuItem
+{
+    const char* label;
+    const char* hint;
+    OverlayScreen opens;
+};
+
+// Adding a tool is adding a line here and a case in RenderOverlay.
+static const OverlayMenuItem kOverlayMenu[] = {
+    {"Switch and coil monitor", "Live state of every switch and coil", OverlayScreen::Monitor},
+    {"Volume", "Adjust levels for this session only", OverlayScreen::Volume},
+};
+static constexpr int kOverlayMenuCount = static_cast<int>(sizeof(kOverlayMenu) / sizeof(kOverlayMenu[0]));
+
 // One section of the screen: a background of its own, a heading, and as many
 // columns of rows as fit.
 static void DrawMonitorSection(const char* title, const std::vector<MonitorEntry>& entries, bool coils, int x, int y,
@@ -2493,7 +2540,7 @@ static void RenderSwitchMonitor()
     // the same reason: on a machine configured for B2S or PUP there is no
     // other window to draw into. Which is why enabling the monitor turns those
     // off -- see where the option is read.
-    if (!g_switchMonitorEnabled || g_firmwareScreen.active || !EnsureFirmwareWindow())
+    if (g_firmwareScreen.active || !EnsureFirmwareWindow())
     {
         return;
     }
@@ -2556,6 +2603,255 @@ static void RenderSwitchMonitor()
     SDL_FlushRenderer(pTransliteRenderer);
     SDL_PumpEvents();
 }
+// Panel geometry, shared by every tool so they line up with each other.
+static constexpr int kOverlayPanelTop = 104;     // heading, down to the first row
+static constexpr int kOverlayRowHeight = 52;
+static constexpr int kOverlayPanelFooter = 116;  // two lines of help below the rows
+
+// A panel with a heading, centred, sized to hold `rows` lines.
+static SDL_FRect DrawOverlayPanel(int w, int h, int rows, const char* title)
+{
+    const SDL_Color white{235, 235, 235, 255};
+    // Sized from the parts rather than a round number: heading, one row per
+    // item, then two lines of help. Guessing the height once put the help text
+    // across the last item.
+    const float panelW = 760.0f;
+    const float panelH = static_cast<float>(kOverlayPanelTop + rows * kOverlayRowHeight + kOverlayPanelFooter);
+    const SDL_FRect panel{(static_cast<float>(w) - panelW) / 2.0f, (static_cast<float>(h) - panelH) / 2.0f, panelW,
+                          panelH};
+
+    // Dimmed rather than cleared: whatever is behind stays faintly visible, so
+    // it is obvious the machine is still running underneath the menu.
+    SDL_SetRenderDrawBlendMode(pTransliteRenderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(pTransliteRenderer, 0, 0, 0, 200);
+    const SDL_FRect full{0.0f, 0.0f, static_cast<float>(w), static_cast<float>(h)};
+    SDL_RenderFillRect(pTransliteRenderer, &full);
+    SDL_SetRenderDrawColor(pTransliteRenderer, 24, 26, 34, 255);
+    SDL_RenderFillRect(pTransliteRenderer, &panel);
+    SDL_SetRenderDrawColor(pTransliteRenderer, 90, 96, 120, 255);
+    SDL_RenderRect(pTransliteRenderer, &panel);
+    SDL_SetRenderDrawBlendMode(pTransliteRenderer, SDL_BLENDMODE_NONE);
+
+    DrawFirmwareText(title, pFirmwareFontLarge, w / 2, static_cast<int>(panel.y) + 24, white);
+    return panel;
+}
+
+static void RenderOverlayMenu(int w, int h)
+{
+    const SDL_Color white{235, 235, 235, 255};
+    const SDL_Color dim{140, 140, 150, 255};
+    const SDL_Color amber{255, 200, 70, 255};
+
+    const SDL_FRect panel = DrawOverlayPanel(w, h, kOverlayMenuCount, "PPUC TOOLS");
+
+    for (int i = 0; i < kOverlayMenuCount; ++i)
+    {
+        const bool selected = i == g_menuSelection;
+        const int y = static_cast<int>(panel.y) + kOverlayPanelTop + i * kOverlayRowHeight;
+        if (selected)
+        {
+            SDL_SetRenderDrawColor(pTransliteRenderer, 44, 48, 62, 255);
+            const SDL_FRect row{panel.x + 16.0f, static_cast<float>(y) - 6.0f, panel.w - 32.0f, 44.0f};
+            SDL_RenderFillRect(pTransliteRenderer, &row);
+        }
+        DrawFirmwareTextLeft(selected ? ">" : " ", pFirmwareFontSmall, static_cast<int>(panel.x) + 32, y,
+                             selected ? amber : dim);
+        DrawFirmwareTextLeft(kOverlayMenu[i].label, pFirmwareFontSmall, static_cast<int>(panel.x) + 64, y,
+                             selected ? white : dim);
+    }
+
+    const int helpY = static_cast<int>(panel.y) + kOverlayPanelTop + kOverlayMenuCount * kOverlayRowHeight + 12;
+    DrawFirmwareText(kOverlayMenu[g_menuSelection].hint, pFirmwareFontSmall, w / 2, helpY, dim);
+    DrawFirmwareText("cursor keys move    ENTER selects    ESC closes", pFirmwareFontSmall, w / 2, helpY + 40, dim);
+}
+
+static void RenderOverlayVolume(int w, int h)
+{
+    const SDL_Color white{235, 235, 235, 255};
+    const SDL_Color dim{140, 140, 150, 255};
+    const SDL_Color green{70, 210, 100, 255};
+    const SDL_Color amber{255, 200, 70, 255};
+
+    const SDL_FRect panel = DrawOverlayPanel(w, h, 4, "VOLUME");
+
+    char line[64];
+    for (int i = 0; i < 4; ++i)
+    {
+        const bool selected = i == g_volumeSelection;
+        const int y = static_cast<int>(panel.y) + kOverlayPanelTop + i * kOverlayRowHeight;
+        if (selected)
+        {
+            SDL_SetRenderDrawColor(pTransliteRenderer, 44, 48, 62, 255);
+            const SDL_FRect row{panel.x + 16.0f, static_cast<float>(y) - 6.0f, panel.w - 32.0f, 44.0f};
+            SDL_RenderFillRect(pTransliteRenderer, &row);
+        }
+        DrawFirmwareTextLeft(selected ? ">" : " ", pFirmwareFontSmall, static_cast<int>(panel.x) + 32, y,
+                             selected ? amber : dim);
+        DrawFirmwareTextLeft(kVolumeNames[i], pFirmwareFontSmall, static_cast<int>(panel.x) + 64, y,
+                             selected ? white : dim);
+
+        // A bar as well as a number: a level is a quantity, and a row of bars
+        // shows the balance between the four at a glance where four numbers
+        // have to be read one at a time.
+        const float barX = panel.x + 300.0f;
+        const float barW = 300.0f;
+        SDL_SetRenderDrawColor(pTransliteRenderer, 60, 62, 76, 255);
+        const SDL_FRect track{barX, static_cast<float>(y) + 10.0f, barW, 14.0f};
+        SDL_RenderFillRect(pTransliteRenderer, &track);
+        SDL_SetRenderDrawColor(pTransliteRenderer, green.r, green.g, green.b, 255);
+        const SDL_FRect fill{barX, static_cast<float>(y) + 10.0f, barW * (g_runtimeVolumes[i] / 100.0f), 14.0f};
+        SDL_RenderFillRect(pTransliteRenderer, &fill);
+
+        snprintf(line, sizeof(line), "%3u%%", static_cast<unsigned>(g_runtimeVolumes[i]));
+        DrawFirmwareTextLeft(line, pFirmwareFontSmall, static_cast<int>(barX + barW) + 20, y,
+                             selected ? white : dim);
+    }
+
+    const int helpY = static_cast<int>(panel.y) + kOverlayPanelTop + 4 * kOverlayRowHeight + 12;
+    DrawFirmwareText("this session only -- ppuc.ini is not changed", pFirmwareFontSmall, w / 2, helpY, dim);
+    DrawFirmwareText("up/down chooses    left/right adjusts    ESC goes back", pFirmwareFontSmall, w / 2, helpY + 40,
+                     dim);
+}
+
+// Closing gives the screen back to whatever had it.
+//
+// A window this code opened itself is destroyed, because on KMSDRM B2S or PUP
+// take the panel again the moment it is gone and both repaint continuously. A
+// translite belongs to the game and is simply asked to draw itself again.
+static void CloseOverlay()
+{
+    g_overlay = OverlayScreen::None;
+    if (firmwareOwnsWindow)
+    {
+        if (pTransliteRenderer)
+        {
+            SDL_DestroyRenderer(pTransliteRenderer);
+            pTransliteRenderer = nullptr;
+        }
+        if (pTransliteWindow)
+        {
+            SDL_DestroyWindow(pTransliteWindow);
+            pTransliteWindow = nullptr;
+        }
+        firmwareOwnsWindow = false;
+        return;
+    }
+    QueueTransliteRender(ball_search_game_running.load(std::memory_order_acquire) ? RenderCommand::RENDER_GAME
+                                                                                  : RenderCommand::RENDER_ATTRACT);
+}
+
+// True when the key was the overlay's business, so the game bindings below it
+// never see a keystroke meant for a menu.
+static bool HandleOverlayKey(SDL_Keycode key)
+{
+    if (g_overlay == OverlayScreen::None)
+    {
+        if (key == SDLK_SPACE)
+        {
+            g_overlay = OverlayScreen::Menu;
+            return true;
+        }
+        return false;
+    }
+
+    switch (key)
+    {
+        case SDLK_ESCAPE:
+            // One step back, not all the way out: a tool returns to the menu
+            // it was opened from, and the menu returns to the game.
+            if (g_overlay == OverlayScreen::Menu)
+            {
+                CloseOverlay();
+            }
+            else
+            {
+                g_overlay = OverlayScreen::Menu;
+            }
+            return true;
+
+        case SDLK_UP:
+        case SDLK_DOWN:
+        {
+            const int delta = key == SDLK_UP ? -1 : 1;
+            if (g_overlay == OverlayScreen::Menu)
+            {
+                g_menuSelection = (g_menuSelection + delta + kOverlayMenuCount) % kOverlayMenuCount;
+            }
+            else if (g_overlay == OverlayScreen::Volume)
+            {
+                g_volumeSelection = (g_volumeSelection + delta + 4) % 4;
+            }
+            return true;
+        }
+
+        case SDLK_LEFT:
+        case SDLK_RIGHT:
+        {
+            if (g_overlay != OverlayScreen::Volume)
+            {
+                return true;
+            }
+            const int step = key == SDLK_LEFT ? -5 : 5;
+            const int level = std::clamp(static_cast<int>(g_runtimeVolumes[g_volumeSelection]) + step, 0, 100);
+            g_runtimeVolumes[g_volumeSelection] = static_cast<uint8_t>(level);
+            ApplyRuntimeVolumes();
+            return true;
+        }
+
+        case SDLK_RETURN:
+        case SDLK_KP_ENTER:
+            if (g_overlay == OverlayScreen::Menu)
+            {
+                g_overlay = kOverlayMenu[g_menuSelection].opens;
+            }
+            return true;
+
+        default:
+            // Everything else is swallowed while a tool is open. A stray key
+            // must not reach the game bindings and start a ball behind the
+            // menu.
+            return true;
+    }
+}
+
+static void RenderOverlay()
+{
+    if (g_overlay == OverlayScreen::None || g_firmwareScreen.active || !EnsureFirmwareWindow())
+    {
+        return;
+    }
+
+    EnsureFirmwareFont();
+
+    int w = 0, h = 0;
+    if (!SDL_GetCurrentRenderOutputSize(pTransliteRenderer, &w, &h) || w <= 0 || h <= 0)
+    {
+        return;
+    }
+
+    if (g_overlay == OverlayScreen::Monitor)
+    {
+        RenderSwitchMonitor();
+        return;
+    }
+
+    SDL_SetRenderDrawColor(pTransliteRenderer, 0, 0, 0, 255);
+    SDL_RenderClear(pTransliteRenderer);
+
+    if (g_overlay == OverlayScreen::Menu)
+    {
+        RenderOverlayMenu(w, h);
+    }
+    else if (g_overlay == OverlayScreen::Volume)
+    {
+        RenderOverlayVolume(w, h);
+    }
+
+    SDL_RenderPresent(pTransliteRenderer);
+    SDL_FlushRenderer(pTransliteRenderer);
+    SDL_PumpEvents();
+}
+
 static void CloseFirmwareScreen()
 {
 #ifdef PPUC_HAS_SDL3_TTF
@@ -2600,6 +2896,8 @@ static void CloseFirmwareScreen()
 // the warning stays on the console there.
 static void RenderFirmwareScreen(double) {}
 static void RenderSwitchMonitor() {}
+static void RenderOverlay() {}
+static bool HandleOverlayKey(SDL_Keycode) { return false; }
 static void CloseFirmwareScreen() {}
 struct FirmwareScreen
 {
@@ -4949,7 +5247,15 @@ int main(int argc, char** argv)
     opt_translite_attract = NULL;
   }
 
-  g_switchMonitorEnabled = opt_switch_monitor;
+  if (opt_switch_monitor)
+  {
+    g_overlay = OverlayScreen::Monitor;
+  }
+  // Seeded from ppuc.ini, adjustable from the menu, never written back.
+  g_runtimeVolumes[0] = opt_volume;
+  g_runtimeVolumes[1] = opt_rom_volume;
+  g_runtimeVolumes[2] = opt_speech_volume;
+  g_runtimeVolumes[3] = opt_music_volume;
 
   const bool needPluginBus = opt_pup || opt_altsound || opt_b2s || !useScriptEngine;
   if (needPluginBus)
@@ -6148,19 +6454,22 @@ int main(int argc, char** argv)
 
       // 10 Hz. Fast enough that a flipper button looks live, slow enough that
       // the repaint is not what the machine spends its time on.
-      if (g_switchMonitorEnabled)
+      if (g_overlay != OverlayScreen::None)
       {
         const uint64_t nowMs = SDL_GetTicks();
         if (nowMs - g_switchMonitorLastRenderMs >= 100)
         {
           g_switchMonitorLastRenderMs = nowMs;
-          RenderSwitchMonitor();
+          RenderOverlay();
         }
       }
 
 #ifndef PPUC_USE_KMSDMD
       SDL_Event event;
-      if (SDL_PollEvent(&event))
+      // Drained rather than one per pass: a key held down repeats, and a
+      // queue that only ever loses one event per iteration turns a menu into
+      // something that answers late.
+      while (SDL_PollEvent(&event))
       {
         switch (event.type)
         {
@@ -6169,6 +6478,13 @@ int main(int argc, char** argv)
             break;
           case SDL_EVENT_KEY_DOWN:
             if (opt_debug) printf("Key pressed: %d\n", event.key.key);
+            // SPACE opens the tools menu, and while it is open every key
+            // belongs to it -- including ENTER and ESC, which are bound to a
+            // game below.
+            if (HandleOverlayKey(event.key.key))
+            {
+              break;
+            }
             switch (event.key.key)
             {
               case SDLK_ESCAPE:
