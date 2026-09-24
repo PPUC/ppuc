@@ -797,6 +797,7 @@ if(PPUC_BUILD_TESTS)
       tests/test_game_tilt.cpp
       tests/test_playfield_assist.cpp
       tests/test_lua_game_api.cpp
+      tests/test_flash_multiball.cpp
       tests/test_lua_rules_engine.cpp
       tests/test_lua_rules_timing.cpp
       tests/test_pinmame_nvram_tracking.cpp
