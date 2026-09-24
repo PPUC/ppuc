@@ -113,18 +113,28 @@ presenting on KMSDRM means the panel alternates between them as fast as they
 draw, which is what the tools menu did before it was fixed. One window, one
 present, and the slide is simply the last thing drawn into it.
 
-A slide does not take the whole screen. `SlideBorderPercent` of the shorter
-edge is left showing all the way round, so a frame of the B2S, the PUP video or
-the translite stays visible. The slideshow is something this machine is doing
-while it waits, not a different machine that has taken the screen, and a
-hairline of the backglass around it says so without a word. Set it to 0 for
-full screen.
+A slide is **cut to its own content**, not to the screen. A portrait flyer gets
+a tall narrow panel with its caption in a column beside it; a landscape
+photograph gets the caption underneath, exactly as wide as the picture; a line
+of text on its own gets a small panel around the words. So every slide is a
+different size and shape, and what is left over is backglass.
+
+`SlideBorderPercent` is the *least* backglass that must stay visible: the panel
+is never allowed closer than that to the screen edge. Most slides stay well
+inside it.
+
+The panel is also slightly see-through -- `SlideOpacityPercent`, 88 by default
+-- so the backglass reads faintly through the slide and the machine stays one
+thing rather than two. Not much: the caption still has to be readable over
+whatever the backglass is doing underneath it.
 
 On the own-window path — a translite, or no video at all — the translite is
 drawn first and the slide goes on top of it, so the border shows the same thing
 it would on a B2S machine.
 
-Slides fade in and out of each other through black over `SlideFadeMs`. SDL has
+Slides fade in and out of each other over `SlideFadeMs` by moving that same
+opacity, which means they fade into the **backglass** rather than into black --
+the right thing to fade into when the backglass is what is behind them. SDL has
 no transition effects of its own; this is one rectangle filled with black at a
 computed alpha, and anything fancier (a wipe, a push) would have to be written
 the same way, by drawing two textures with moving rectangles. A held slide

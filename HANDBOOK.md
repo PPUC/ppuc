@@ -215,13 +215,18 @@ other time those keys fall through to whatever else is bound.
 
 ### How it looks
 
-A slide does not take the whole screen. A border of the B2S, PUP video or
-translite stays visible all the way round — the slideshow is something *this*
-machine is doing while it waits, not a different machine that has taken the
-panel. `SlideBorderPercent=0` turns that off.
+A slide is cut to its own content rather than to the screen, so each one is a
+different size: a portrait flyer gets a tall narrow panel with its caption
+beside it, a landscape photograph gets the caption underneath, and a line of
+text on its own gets a small panel around the words. Everything left over is
+backglass. `SlideBorderPercent` sets the least backglass that must stay visible
+round the edge, whatever the slide wants.
 
-Slides fade through black into each other. A held slide fades in but never out:
-a slide somebody is reading must not dim underneath them.
+The panel is slightly see-through as well — `SlideOpacityPercent`, 88 by
+default — so the backglass reads faintly through it and the machine stays one
+thing rather than two. Slides fade into and out of the backglass rather than
+into black. A held slide fades in but never out: a slide somebody is reading
+must not dim underneath them.
 
 If somebody has the service menu open, there are no slides. Somebody at the
 switch monitor is diagnosing a machine, and slides appearing over that would be

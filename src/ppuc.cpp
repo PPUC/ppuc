@@ -453,6 +453,9 @@ int opt_slide_previous_switch = 0;
 // different machine, and a hairline of the backglass around it says so.
 uint32_t opt_slide_border_percent = 4;
 uint32_t opt_slide_fade_ms = 350;
+// How solid a slide is over the backglass, in percent. Not fully opaque: a
+// little of the machine showing through says the slideshow belongs to it.
+uint32_t opt_slide_opacity_percent = 88;
 const char* opt_speech_backend = "auto";
 const char* opt_speech_voice = NULL;
 const char* opt_speech_rate_arg = NULL;
@@ -2378,14 +2381,26 @@ static void DrawFirmwareTextWrapped(const char* text, TTF_Font* font, int x, int
 
 // How tall the wrapped text will be, so a caller can make room for it rather
 // than discover afterwards that it ran off the screen.
-static int MeasureWrappedTextHeight(const char* text, TTF_Font* font, int maxWidth)
+static void MeasureWrappedText(const char* text, TTF_Font* font, int maxWidth, int* width, int* height)
 {
     int w = 0;
     int h = 0;
     if (!font || !text || !*text || maxWidth <= 0 || !TTF_GetStringSizeWrapped(font, text, 0, maxWidth, &w, &h))
     {
-        return 0;
+        w = 0;
+        h = 0;
     }
+    // The width that came back is the width the text actually used, which is
+    // what lets a panel be sized to its words rather than to the space it was
+    // offered.
+    if (width) *width = w;
+    if (height) *height = h;
+}
+
+static int MeasureWrappedTextHeight(const char* text, TTF_Font* font, int maxWidth)
+{
+    int h = 0;
+    MeasureWrappedText(text, font, maxWidth, nullptr, &h);
     return h;
 }
 
@@ -2421,6 +2436,11 @@ static void DrawFirmwareText(const char*, TTF_Font*, int, int, SDL_Color) {}
 static void DrawFirmwareTextLeft(const char*, TTF_Font*, int, int, SDL_Color) {}
 static void DrawFirmwareTextWrapped(const char*, TTF_Font*, int, int, int, SDL_Color) {}
 static int MeasureWrappedTextHeight(const char*, TTF_Font*, int) { return 0; }
+static void MeasureWrappedText(const char*, TTF_Font*, int, int* w, int* h)
+{
+    if (w) *w = 0;
+    if (h) *h = 0;
+}
 static void TruncateToWidth(char*, TTF_Font*, int) {}
 static int MeasureTextWidth(const char*, TTF_Font*) { return 0; }
 #endif
@@ -3251,6 +3271,11 @@ static void ReleaseMarkerArt();
 static SDL_Texture* pSlideFrame = nullptr;
 static SDL_Renderer* pSlideFrameRenderer = nullptr;
 static size_t slideFrameIndex = static_cast<size_t>(-1);
+// Which slide the cached frame was built from, not just which position it sat
+// in. An index alone is stale the moment the same position holds a different
+// slide, which is a reload away and would show the wrong picture with no hint
+// that anything was wrong.
+static const AttractSlides::Slide* pSlideFrameSlide = nullptr;
 static int slideFrameWidth = 0;
 static int slideFrameHeight = 0;
 
@@ -3263,6 +3288,7 @@ static void ReleaseSlideFrame()
         pSlideFrame = nullptr;
     }
     pSlideFrameRenderer = nullptr;
+    pSlideFrameSlide = nullptr;
     slideFrameIndex = static_cast<size_t>(-1);
     slideFrameWidth = 0;
     slideFrameHeight = 0;
@@ -3278,7 +3304,12 @@ static void ReleaseSlideTexture()
     pSlideTextureRenderer = nullptr;
     slideTextureIndex = static_cast<size_t>(-1);
     slideTexturePath.clear();
-    ReleaseSlideFrame();
+    // Deliberately does not touch the panel texture. This runs from inside
+    // SlideTexture() whenever a photograph has to be loaded, and the panel
+    // texture is the render target being drawn into at that moment -- freeing
+    // it here destroys the surface the caller is in the middle of using, and
+    // everything after that quietly lands on the screen instead. Whoever wants
+    // both gone says so.
 }
 
 static SDL_Texture* SlideTexture(SDL_Renderer* renderer, const AttractSlides::Slide& slide, size_t index)
@@ -3518,7 +3549,7 @@ static void BuildMarkerArt(SDL_Renderer* renderer, const AttractSlides::Slide& s
 }
 
 static void DrawSlideMarkers(SDL_Renderer* renderer, const AttractSlides::Slide& slide, const SDL_FRect& image,
-                             uint64_t elapsedMs)
+                             uint64_t elapsedMs, float opacity)
 {
     if (slide.markers.empty() || g_markerArt.size() != slide.markers.size())
     {
@@ -3532,7 +3563,7 @@ static void DrawSlideMarkers(SDL_Renderer* renderer, const AttractSlides::Slide&
         const float x = image.x + marker.x * image.w;
         const float y = image.y + marker.y * image.h;
         const float pulse = MarkerPulse(i, slide.markers.size(), elapsedMs);
-        const uint8_t alpha = static_cast<uint8_t>(90.0f + 165.0f * pulse);
+        const uint8_t alpha = static_cast<uint8_t>((90.0f + 165.0f * pulse) * opacity);
 
         // The arrow keeps its distance from what it points at, and that distance
         // is what pulses: a marker that changed size would look like the target
@@ -3565,7 +3596,7 @@ static void DrawSlideMarkers(SDL_Renderer* renderer, const AttractSlides::Slide&
         }
         if (art.badge)
         {
-            SDL_SetTextureAlphaMod(art.badge, static_cast<uint8_t>(150.0f + 105.0f * pulse));
+            SDL_SetTextureAlphaMod(art.badge, static_cast<uint8_t>((150.0f + 105.0f * pulse) * opacity));
             const SDL_FRect dst{x - art.badgeSize / 2.0f, y - art.badgeSize / 2.0f, art.badgeSize, art.badgeSize};
             SDL_RenderTexture(renderer, art.badge, nullptr, &dst);
         }
@@ -3598,6 +3629,11 @@ static int WidestWordWidth(const std::string& text, TTF_Font* font)
     return widest;
 }
 
+// The air between a slide's title and its text. Shared by the measuring and
+// the drawing, which must agree to the pixel or the panel is cut to the wrong
+// size.
+static constexpr int kSlideTitleGap = 6;
+
 // Title and body as one block, wrapped to `width`. Returns how tall it is, and
 // draws nothing when `renderer` is null -- so the same code measures the block
 // and draws it, and the two can never disagree.
@@ -3618,7 +3654,7 @@ static int SlideTextBlock(SDL_Renderer* renderer, const AttractSlides::Slide& sl
         {
             DrawFirmwareTextWrapped(slide.title.c_str(), pFirmwareFontLarge, x, y + height, width, amber);
         }
-        height += titleHeight + 6;
+        height += titleHeight + kSlideTitleGap;
     }
     if (!slide.text.empty())
     {
@@ -3632,139 +3668,187 @@ static int SlideTextBlock(SDL_Renderer* renderer, const AttractSlides::Slide& sl
     return height;
 }
 
-// The words.
+// Title and body, measured as one block wrapped to `maxWidth`.
 //
-// Three placements, in order of preference:
-//
-// - Beside the picture, when it is portrait and leaves a wide enough gutter.
-//   All five of the 1978 flyers are portrait, so this is not a corner case,
-//   and a caption in the empty margin covers none of the flyer.
-// - Over a dimmed strip across the bottom, when the picture fills the frame.
-//   A caption over a bright playfield is unreadable, and dimming only the band
-//   it sits in keeps the picture visible where it matters.
-// - In the middle of the screen, when there is no picture at all. Those are
-//   the rules and the tips, and hanging them off the bottom edge of an empty
-//   black frame wastes the whole screen.
-//
-// Every one of them is sized from the text rather than fixed. A slide is
-// written by somebody typing into a text field, and the one thing they should
-// not have to think about is how many lines fit.
-static void DrawSlideText(SDL_Renderer* renderer, const AttractSlides::Slide& slide, const SDL_FRect& panel,
-                          bool hasImage, const SDL_FRect& image)
+// The width that comes back is what the words actually used, not what they
+// were offered, which is what lets a slide's panel be cut to its content.
+static void MeasureSlideBlock(const AttractSlides::Slide& slide, int maxWidth, int* width, int* height)
 {
-    if (slide.title.empty() && slide.text.empty())
+    int titleW = 0;
+    int titleH = 0;
+    int bodyW = 0;
+    int bodyH = 0;
+    if (!slide.title.empty())
     {
-        return;
+        MeasureWrappedText(slide.title.c_str(), pFirmwareFontLarge, maxWidth, &titleW, &titleH);
     }
-
-    const int w = static_cast<int>(panel.w);
-    const int h = static_cast<int>(panel.h);
-    const int left = static_cast<int>(panel.x);
-    const int top = static_cast<int>(panel.y);
-    const int margin = std::max(24, w / 24);
-    const int pad = 16;
-
-    if (hasImage)
+    if (!slide.text.empty())
     {
-        const int gutter = static_cast<int>(image.x - panel.x) - margin * 2;
-        const int widestWord = std::max(WidestWordWidth(slide.title, pFirmwareFontLarge),
-                                        WidestWordWidth(slide.text, pFirmwareFontSmall));
-        if (gutter >= w / 5 && gutter >= widestWord)
-        {
-            const int gutterHeight = SlideTextBlock(nullptr, slide, 0, 0, gutter);
-            // Only when it fits. A long caption in a narrow column is a tall
-            // column, and one that runs off both ends reads worse than a strip.
-            if (gutterHeight <= h - pad * 2)
-            {
-                SlideTextBlock(renderer, slide, left + margin, top + std::max(pad, (h - gutterHeight) / 2), gutter);
-                return;
-            }
-        }
+        MeasureWrappedText(slide.text.c_str(), pFirmwareFontSmall, maxWidth, &bodyW, &bodyH);
     }
-
-    const int textWidth = w - margin * 2;
-    const int blockHeight = SlideTextBlock(nullptr, slide, 0, 0, textWidth);
-
-    if (!hasImage)
-    {
-        SlideTextBlock(renderer, slide, left + margin, top + std::max(pad, (h - blockHeight) / 2), textWidth);
-        return;
-    }
-
-    // Tall enough for the words, and never so tall that it swallows the
-    // picture: past a third of the panel the slide wants fewer words, and
-    // clipping says so more usefully than covering the photograph would.
-    const int stripHeight = std::clamp(blockHeight + pad * 2, 90, h / 3);
-    const float stripY = panel.y + panel.h - static_cast<float>(stripHeight);
-
-    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 200);
-    const SDL_FRect strip{panel.x, stripY, panel.w, static_cast<float>(stripHeight)};
-    SDL_RenderFillRect(renderer, &strip);
-
-    SlideTextBlock(renderer, slide, left + margin, static_cast<int>(stripY) + pad, textWidth);
+    if (width) *width = std::max(titleW, bodyW);
+    if (height) *height = titleH + (titleH > 0 && bodyH > 0 ? kSlideTitleGap : 0) + bodyH;
 }
 
-// The panel a slide is drawn in: the whole screen, less a border of whatever
-// is behind it.
+// Where everything goes, in screen coordinates.
 //
-// A hairline of the backglass around the slideshow is worth the pixels it
-// costs. The slides are something this machine is doing while it waits, not a
-// different machine that has taken the screen, and a frame of the B2S or the
-// translite showing around the edge says so without a word.
-static SDL_FRect SlidePanel(int w, int h)
+// The panel is cut to the slide rather than to the screen: a portrait flyer
+// gets a tall narrow panel, a line of text on its own gets a small one, and
+// what is left over is backglass. That is the point -- the slideshow is
+// something this machine is doing while it waits, and the less of the machine
+// it covers to say so, the better.
+struct SlideLayout
 {
-    const float border = static_cast<float>(std::min(w, h)) * static_cast<float>(opt_slide_border_percent) / 100.0f;
-    if (border < 1.0f)
+    SDL_FRect panel{};
+    SDL_FRect image{};
+    SDL_FRect text{};
+    bool hasImage = false;
+};
+
+static SlideLayout LayOutSlide(SDL_Renderer* renderer, const AttractSlides::Slide& slide, size_t index, int screenW,
+                               int screenH)
+{
+    SlideLayout layout;
+
+    // The least backglass that must stay visible, whatever the slide wants.
+    const float border = static_cast<float>(std::min(screenW, screenH)) * static_cast<float>(opt_slide_border_percent)
+                         / 100.0f;
+    const float availW = std::max(64.0f, static_cast<float>(screenW) - border * 2.0f);
+    const float availH = std::max(64.0f, static_cast<float>(screenH) - border * 2.0f);
+    const float pad = std::max(16.0f, static_cast<float>(std::min(screenW, screenH)) * 0.022f);
+    const float gap = pad;
+
+    float textureW = 0.0f;
+    float textureH = 0.0f;
+    SDL_Texture* texture = SlideTexture(renderer, slide, index);
+    if (texture && SDL_GetTextureSize(texture, &textureW, &textureH) && textureW > 0.0f && textureH > 0.0f)
     {
-        return SDL_FRect{0.0f, 0.0f, static_cast<float>(w), static_cast<float>(h)};
+        layout.hasImage = true;
     }
-    return SDL_FRect{border, border, static_cast<float>(w) - border * 2.0f, static_cast<float>(h) - border * 2.0f};
+
+    const bool hasWords = !slide.title.empty() || !slide.text.empty();
+    int blockW = 0;
+    int blockH = 0;
+
+    if (!layout.hasImage)
+    {
+        // Words on their own. Wrapped to a comfortable measure rather than to
+        // the whole screen: a single line stretched across a 1920 pixel panel
+        // is a line nobody reads twice.
+        const int wrap = static_cast<int>(std::min(availW - pad * 2.0f, availW * 0.62f));
+        MeasureSlideBlock(slide, wrap, &blockW, &blockH);
+        layout.panel.w = static_cast<float>(blockW) + pad * 2.0f;
+        layout.panel.h = static_cast<float>(blockH) + pad * 2.0f;
+        layout.panel.x = (static_cast<float>(screenW) - layout.panel.w) / 2.0f;
+        layout.panel.y = (static_cast<float>(screenH) - layout.panel.h) / 2.0f;
+        layout.text = {layout.panel.x + pad, layout.panel.y + pad, static_cast<float>(blockW),
+                       static_cast<float>(blockH)};
+        return layout;
+    }
+
+    // A portrait picture leaves room beside it and none underneath; a landscape
+    // one is the other way round. Deciding from the picture rather than from
+    // the screen is what makes the two flyer shapes both work.
+    const bool portrait = textureH > textureW * 1.05f;
+
+    // SDL_ttf breaks a word that is wider than the wrap width rather than
+    // letting it overhang, so a column narrower than the longest word turns
+    // "Electrifying" into "Electrifyin / g". That slide takes the other layout.
+    const float columnW = std::clamp(availW * 0.30f, 200.0f, availW * 0.45f);
+    const int widestWord = std::max(WidestWordWidth(slide.title, pFirmwareFontLarge),
+                                    WidestWordWidth(slide.text, pFirmwareFontSmall));
+
+    if (portrait && hasWords && static_cast<float>(widestWord) <= columnW)
+    {
+        MeasureSlideBlock(slide, static_cast<int>(columnW), &blockW, &blockH);
+        const float pictureBoxW = availW - static_cast<float>(blockW) - gap - pad * 2.0f;
+        const float pictureBoxH = availH - pad * 2.0f;
+        const float scale = std::min(pictureBoxW / textureW, pictureBoxH / textureH);
+        const float imageW = textureW * scale;
+        const float imageH = textureH * scale;
+        const float contentH = std::max(imageH, static_cast<float>(blockH));
+
+        layout.panel.w = pad + static_cast<float>(blockW) + gap + imageW + pad;
+        layout.panel.h = pad + contentH + pad;
+        layout.panel.x = (static_cast<float>(screenW) - layout.panel.w) / 2.0f;
+        layout.panel.y = (static_cast<float>(screenH) - layout.panel.h) / 2.0f;
+
+        layout.text = {layout.panel.x + pad, layout.panel.y + pad + (contentH - static_cast<float>(blockH)) / 2.0f,
+                       static_cast<float>(blockW), static_cast<float>(blockH)};
+        layout.image = {layout.panel.x + pad + static_cast<float>(blockW) + gap,
+                        layout.panel.y + pad + (contentH - imageH) / 2.0f, imageW, imageH};
+        return layout;
+    }
+
+    // Landscape, or a picture with nothing to say: the words go underneath, as
+    // wide as the picture, so the two line up.
+    float pictureBoxW = availW - pad * 2.0f;
+    float pictureBoxH = availH - pad * 2.0f;
+    if (hasWords)
+    {
+        int firstPassH = 0;
+        MeasureSlideBlock(slide, static_cast<int>(pictureBoxW), nullptr, &firstPassH);
+        pictureBoxH -= static_cast<float>(firstPassH) + gap;
+    }
+    const float scale = std::min(pictureBoxW / textureW, std::max(64.0f, pictureBoxH) / textureH);
+    const float imageW = textureW * scale;
+    const float imageH = textureH * scale;
+
+    float wordsH = 0.0f;
+    if (hasWords)
+    {
+        // Measured again at the width the picture actually came out, so the
+        // caption is exactly as wide as what it is captioning.
+        MeasureSlideBlock(slide, static_cast<int>(imageW), &blockW, &blockH);
+        wordsH = static_cast<float>(blockH) + gap;
+    }
+
+    layout.panel.w = imageW + pad * 2.0f;
+    layout.panel.h = imageH + wordsH + pad * 2.0f;
+    layout.panel.x = (static_cast<float>(screenW) - layout.panel.w) / 2.0f;
+    layout.panel.y = (static_cast<float>(screenH) - layout.panel.h) / 2.0f;
+    layout.image = {layout.panel.x + pad, layout.panel.y + pad, imageW, imageH};
+    if (hasWords)
+    {
+        layout.text = {layout.panel.x + pad, layout.image.y + imageH + gap, static_cast<float>(imageW),
+                       static_cast<float>(blockH)};
+    }
+    return layout;
 }
 
 // Lays the photograph and the words into the panel. Called once per slide, with
 // the panel at the origin: what it draws does not change until the slide does.
-static SDL_FRect BuildSlideFrame(SDL_Renderer* renderer, const AttractSlides::Slide& slide, size_t index,
-                                 const SDL_FRect& panel)
+static void BuildSlideFrame(SDL_Renderer* renderer, const AttractSlides::Slide& slide, size_t index,
+                            const SlideLayout& layout)
 {
-    const SDL_FRect local{0.0f, 0.0f, panel.w, panel.h};
-
+    // Clear rather than a filled rectangle: the target is the panel's own
+    // texture, so clearing it is both exactly what is meant and the cheaper of
+    // the two.
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-    SDL_RenderFillRect(renderer, &local);
+    SDL_RenderClear(renderer);
 
-    SDL_FRect image = local;
-    SDL_Texture* texture = SlideTexture(renderer, slide, index);
-    if (texture)
+    if (layout.hasImage)
     {
-        // Letterboxed rather than stretched. A playfield photograph distorted to
-        // 16:9 is worse than black bars, and the markers are placed in the
-        // photograph's own coordinates, so they only land on the right targets
-        // if its aspect ratio is kept.
-        float tw = 0.0f;
-        float th = 0.0f;
-        if (SDL_GetTextureSize(texture, &tw, &th) && tw > 0.0f && th > 0.0f)
+        const SDL_FRect image{layout.image.x - layout.panel.x, layout.image.y - layout.panel.y, layout.image.w,
+                              layout.image.h};
+        if (SDL_Texture* photo = SlideTexture(renderer, slide, index))
         {
-            const float scale = std::min(local.w / tw, local.h / th);
-            image.w = tw * scale;
-            image.h = th * scale;
-            image.x = (local.w - image.w) / 2.0f;
-            image.y = (local.h - image.h) / 2.0f;
+            SDL_RenderTexture(renderer, photo, nullptr, &image);
         }
-        SDL_RenderTexture(renderer, texture, nullptr, &image);
     }
 
-    DrawSlideText(renderer, slide, local, texture != nullptr, image);
+    if (layout.text.w > 0.0f)
+    {
+        SlideTextBlock(renderer, slide, static_cast<int>(layout.text.x - layout.panel.x),
+                       static_cast<int>(layout.text.y - layout.panel.y), static_cast<int>(layout.text.w) + 2);
+    }
 
     // Scaled off the picture rather than the screen: a marker has to stay in
-    // proportion to what it is pointing at, and on a letterboxed portrait photo
-    // the picture is much narrower than the screen.
-    const float unit = std::min(image.w, image.h);
+    // proportion to what it is pointing at.
+    const float unit = layout.hasImage ? std::min(layout.image.w, layout.image.h)
+                                       : std::min(layout.panel.w, layout.panel.h);
     BuildMarkerArt(renderer, slide, std::max(14.0f, unit * 0.035f), std::max(30.0f, unit * 0.11f));
-
-    // Where the picture ended up, in the panel's coordinates. The markers are
-    // drawn per frame and need it in the screen's.
-    return image;
 }
 
 static void DrawSlidesInto(SDL_Renderer* renderer, int w, int h)
@@ -3779,19 +3863,20 @@ static void DrawSlidesInto(SDL_Renderer* renderer, int w, int h)
 
     const AttractSlides::Slide& slide = g_attractSlides->Current();
     const size_t index = g_attractSlides->CurrentIndex();
-    const SDL_FRect panel = SlidePanel(w, h);
-    const int panelWidth = static_cast<int>(panel.w);
-    const int panelHeight = static_cast<int>(panel.h);
-    if (panelWidth <= 0 || panelHeight <= 0)
-    {
-        return;
-    }
 
-    static SDL_FRect slideFrameImage{};
-    if (pSlideFrame == nullptr || pSlideFrameRenderer != renderer || slideFrameIndex != index ||
-        slideFrameWidth != panelWidth || slideFrameHeight != panelHeight)
+    static SlideLayout layout;
+    if (pSlideFrame == nullptr || pSlideFrameRenderer != renderer || pSlideFrameSlide != &slide ||
+        slideFrameIndex != index || slideFrameWidth != w || slideFrameHeight != h)
     {
         ReleaseSlideFrame();
+        slideFrameIndex = index;
+        layout = LayOutSlide(renderer, slide, index, w, h);
+        const int panelWidth = static_cast<int>(layout.panel.w);
+        const int panelHeight = static_cast<int>(layout.panel.h);
+        if (panelWidth <= 0 || panelHeight <= 0)
+        {
+            return;
+        }
         pSlideFrame = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_TARGET, panelWidth,
                                         panelHeight);
         if (pSlideFrame == nullptr)
@@ -3801,24 +3886,40 @@ static void DrawSlidesInto(SDL_Renderer* renderer, int w, int h)
         }
         SDL_Texture* previousTarget = SDL_GetRenderTarget(renderer);
         SDL_SetRenderTarget(renderer, pSlideFrame);
-        slideFrameImage = BuildSlideFrame(renderer, slide, index, panel);
+        BuildSlideFrame(renderer, slide, index, layout);
         // Back to whatever the caller was drawing into -- the backglass frame
         // this is riding along in, and which still has the B2S in it.
         SDL_SetRenderTarget(renderer, previousTarget);
         pSlideFrameRenderer = renderer;
-        slideFrameIndex = index;
-        slideFrameWidth = panelWidth;
-        slideFrameHeight = panelHeight;
+        pSlideFrameSlide = &slide;
+        slideFrameWidth = w;
+        slideFrameHeight = h;
     }
 
-    SDL_SetTextureBlendMode(pSlideFrame, SDL_BLENDMODE_NONE);
-    SDL_RenderTexture(renderer, pSlideFrame, nullptr, &panel);
+    // Slightly see-through, so the backglass reads through the slide and the
+    // machine stays one thing rather than two. The fade in and out is the same
+    // number moving, which means slides fade into the backglass rather than
+    // into black -- the right thing to fade into when the backglass is what is
+    // behind them.
+    const uint64_t elapsedMs = SDL_GetTicks() - g_attractSlides->CurrentSinceMs();
+    const uint8_t dim = AttractSlides::FadeAlpha(elapsedMs, g_attractSlides->CurrentDurationMs(), opt_slide_fade_ms,
+                                                 g_attractSlides->Paused());
+    const float opacity = std::clamp(static_cast<float>(opt_slide_opacity_percent) / 100.0f, 0.1f, 1.0f) *
+                          (1.0f - static_cast<float>(dim) / 255.0f);
+    if (opacity <= 0.0f)
+    {
+        return;
+    }
+
+    SDL_SetTextureBlendMode(pSlideFrame, SDL_BLENDMODE_BLEND);
+    SDL_SetTextureAlphaMod(pSlideFrame, static_cast<uint8_t>(opacity * 255.0f));
+    SDL_RenderTexture(renderer, pSlideFrame, nullptr, &layout.panel);
 
     // The markers pulse, so they are the one part that cannot be cached.
-    const SDL_FRect image{panel.x + slideFrameImage.x, panel.y + slideFrameImage.y, slideFrameImage.w,
-                          slideFrameImage.h};
-    const uint64_t elapsedMs = SDL_GetTicks() - g_attractSlides->CurrentSinceMs();
-    DrawSlideMarkers(renderer, slide, image, elapsedMs);
+    if (layout.hasImage)
+    {
+        DrawSlideMarkers(renderer, slide, layout.image, elapsedMs, opacity);
+    }
 
     // Held, and saying so. Without this the machine looks stuck rather than
     // obedient, and whoever pressed both buttons has no way to tell which it
@@ -3827,19 +3928,9 @@ static void DrawSlidesInto(SDL_Renderer* renderer, int w, int h)
     {
         const SDL_Color amber{255, 196, 0, 255};
         const int width = MeasureTextWidth("HOLD", pFirmwareFontSmall);
-        DrawFirmwareTextLeft("HOLD", pFirmwareFontSmall, static_cast<int>(panel.x + panel.w) - width - 24,
-                             static_cast<int>(panel.y) + 18, amber);
-    }
-
-    // The fade goes over everything, including the words, because a caption
-    // that arrives before its picture reads as a fault.
-    const uint8_t dim = AttractSlides::FadeAlpha(elapsedMs, g_attractSlides->CurrentDurationMs(), opt_slide_fade_ms,
-                                                 g_attractSlides->Paused());
-    if (dim > 0)
-    {
-        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-        SDL_SetRenderDrawColor(renderer, 0, 0, 0, dim);
-        SDL_RenderFillRect(renderer, &panel);
+        DrawFirmwareTextLeft("HOLD", pFirmwareFontSmall,
+                             static_cast<int>(layout.panel.x + layout.panel.w) - width - 20,
+                             static_cast<int>(layout.panel.y) + 12, amber);
     }
 }
 
@@ -5593,6 +5684,8 @@ int main(int argc, char** argv)
           opt_slide_border_percent = static_cast<uint32_t>(atoi(value.c_str()));
         else if (key == "SlideFadeMs")
           opt_slide_fade_ms = static_cast<uint32_t>(atoi(value.c_str()));
+        else if (key == "SlideOpacityPercent")
+          opt_slide_opacity_percent = static_cast<uint32_t>(atoi(value.c_str()));
       }
       else if (section == "Backbox")
       {
@@ -7687,9 +7780,10 @@ int main(int argc, char** argv)
         g_attractSlides->Update(!ball_search_game_running.load(std::memory_order_acquire), SDL_GetTicks());
         if (wasVisible && !g_attractSlides->Visible())
         {
-          // Somebody walked up. Give the photograph's memory back, and ask the
-          // translite for the frame the slideshow was covering.
+          // Somebody walked up. Give the photograph and the panel back, and ask
+          // the translite for the frame the slideshow was covering.
           ReleaseSlideTexture();
+          ReleaseSlideFrame();
           QueueTransliteRender(ball_search_game_running.load(std::memory_order_acquire)
                                    ? RenderCommand::RENDER_GAME
                                    : RenderCommand::RENDER_ATTRACT);
