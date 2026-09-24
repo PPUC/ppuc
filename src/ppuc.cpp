@@ -444,6 +444,15 @@ bool opt_attract_slides = true;
 static std::unique_ptr<AttractSlides::Show> g_attractSlides;
 uint32_t opt_attract_slides_idle_ms = 60000;
 uint32_t opt_attract_slide_duration_ms = 8000;
+// The two buttons that page through the slides, usually the flipper buttons.
+// 0 means none configured, which leaves the keyboard as the only way to steer.
+int opt_slide_next_switch = 0;
+int opt_slide_previous_switch = 0;
+// How much of the backglass stays visible around the slide, in percent of the
+// shorter screen edge. The slideshow is something the machine is doing, not a
+// different machine, and a hairline of the backglass around it says so.
+uint32_t opt_slide_border_percent = 4;
+uint32_t opt_slide_fade_ms = 350;
 const char* opt_speech_backend = "auto";
 const char* opt_speech_voice = NULL;
 const char* opt_speech_rate_arg = NULL;
@@ -3520,20 +3529,24 @@ static int SlideTextBlock(SDL_Renderer* renderer, const AttractSlides::Slide& sl
 // Every one of them is sized from the text rather than fixed. A slide is
 // written by somebody typing into a text field, and the one thing they should
 // not have to think about is how many lines fit.
-static void DrawSlideText(SDL_Renderer* renderer, const AttractSlides::Slide& slide, int w, int h, bool hasImage,
-                          const SDL_FRect& image)
+static void DrawSlideText(SDL_Renderer* renderer, const AttractSlides::Slide& slide, const SDL_FRect& panel,
+                          bool hasImage, const SDL_FRect& image)
 {
     if (slide.title.empty() && slide.text.empty())
     {
         return;
     }
 
+    const int w = static_cast<int>(panel.w);
+    const int h = static_cast<int>(panel.h);
+    const int left = static_cast<int>(panel.x);
+    const int top = static_cast<int>(panel.y);
     const int margin = std::max(24, w / 24);
     const int pad = 16;
 
     if (hasImage)
     {
-        const int gutter = static_cast<int>(image.x) - margin * 2;
+        const int gutter = static_cast<int>(image.x - panel.x) - margin * 2;
         const int widestWord = std::max(WidestWordWidth(slide.title, pFirmwareFontLarge),
                                         WidestWordWidth(slide.text, pFirmwareFontSmall));
         if (gutter >= w / 5 && gutter >= widestWord)
@@ -3543,7 +3556,7 @@ static void DrawSlideText(SDL_Renderer* renderer, const AttractSlides::Slide& sl
             // column, and one that runs off both ends reads worse than a strip.
             if (gutterHeight <= h - pad * 2)
             {
-                SlideTextBlock(renderer, slide, margin, std::max(pad, (h - gutterHeight) / 2), gutter);
+                SlideTextBlock(renderer, slide, left + margin, top + std::max(pad, (h - gutterHeight) / 2), gutter);
                 return;
             }
         }
@@ -3554,22 +3567,39 @@ static void DrawSlideText(SDL_Renderer* renderer, const AttractSlides::Slide& sl
 
     if (!hasImage)
     {
-        SlideTextBlock(renderer, slide, margin, std::max(pad, (h - blockHeight) / 2), textWidth);
+        SlideTextBlock(renderer, slide, left + margin, top + std::max(pad, (h - blockHeight) / 2), textWidth);
         return;
     }
 
     // Tall enough for the words, and never so tall that it swallows the
-    // picture: past a third of the screen the slide wants fewer words, and
+    // picture: past a third of the panel the slide wants fewer words, and
     // clipping says so more usefully than covering the photograph would.
     const int stripHeight = std::clamp(blockHeight + pad * 2, 90, h / 3);
-    const float stripY = static_cast<float>(h - stripHeight);
+    const float stripY = panel.y + panel.h - static_cast<float>(stripHeight);
 
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 200);
-    const SDL_FRect strip{0.0f, stripY, static_cast<float>(w), static_cast<float>(stripHeight)};
+    const SDL_FRect strip{panel.x, stripY, panel.w, static_cast<float>(stripHeight)};
     SDL_RenderFillRect(renderer, &strip);
 
-    SlideTextBlock(renderer, slide, margin, static_cast<int>(stripY) + pad, textWidth);
+    SlideTextBlock(renderer, slide, left + margin, static_cast<int>(stripY) + pad, textWidth);
+}
+
+// The panel a slide is drawn in: the whole screen, less a border of whatever
+// is behind it.
+//
+// A hairline of the backglass around the slideshow is worth the pixels it
+// costs. The slides are something this machine is doing while it waits, not a
+// different machine that has taken the screen, and a frame of the B2S or the
+// translite showing around the edge says so without a word.
+static SDL_FRect SlidePanel(int w, int h)
+{
+    const float border = static_cast<float>(std::min(w, h)) * static_cast<float>(opt_slide_border_percent) / 100.0f;
+    if (border < 1.0f)
+    {
+        return SDL_FRect{0.0f, 0.0f, static_cast<float>(w), static_cast<float>(h)};
+    }
+    return SDL_FRect{border, border, static_cast<float>(w) - border * 2.0f, static_cast<float>(h) - border * 2.0f};
 }
 
 static void DrawSlidesInto(SDL_Renderer* renderer, int w, int h)
@@ -3583,14 +3613,16 @@ static void DrawSlidesInto(SDL_Renderer* renderer, int w, int h)
     EnsureFirmwareFont();
 
     const AttractSlides::Slide& slide = g_attractSlides->Current();
+    const SDL_FRect panel = SlidePanel(w, h);
 
-    // Opaque, like the monitor: a photograph half-blended with a backglass is
-    // two pictures and no information.
+    // Opaque inside the panel, like the monitor: a photograph half-blended with
+    // a backglass is two pictures and no information. Outside it, whatever the
+    // caller already drew stays.
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-    SDL_RenderClear(renderer);
+    SDL_RenderFillRect(renderer, &panel);
 
-    SDL_FRect image{0.0f, 0.0f, static_cast<float>(w), static_cast<float>(h)};
+    SDL_FRect image = panel;
     SDL_Texture* texture = SlideTexture(renderer, slide, g_attractSlides->CurrentIndex());
     if (texture)
     {
@@ -3602,18 +3634,90 @@ static void DrawSlidesInto(SDL_Renderer* renderer, int w, int h)
         float th = 0.0f;
         if (SDL_GetTextureSize(texture, &tw, &th) && tw > 0.0f && th > 0.0f)
         {
-            const float scale = std::min(static_cast<float>(w) / tw, static_cast<float>(h) / th);
+            const float scale = std::min(panel.w / tw, panel.h / th);
             image.w = tw * scale;
             image.h = th * scale;
-            image.x = (static_cast<float>(w) - image.w) / 2.0f;
-            image.y = (static_cast<float>(h) - image.h) / 2.0f;
+            image.x = panel.x + (panel.w - image.w) / 2.0f;
+            image.y = panel.y + (panel.h - image.h) / 2.0f;
         }
         SDL_RenderTexture(renderer, texture, nullptr, &image);
     }
 
     const uint64_t elapsedMs = SDL_GetTicks() - g_attractSlides->CurrentSinceMs();
     DrawSlideMarkers(renderer, slide, image, elapsedMs);
-    DrawSlideText(renderer, slide, w, h, texture != nullptr, image);
+    DrawSlideText(renderer, slide, panel, texture != nullptr, image);
+
+    // Held, and saying so. Without this the machine looks stuck rather than
+    // obedient, and whoever pressed both buttons has no way to tell which it
+    // is. Top right, away from the caption.
+    if (g_attractSlides->Paused())
+    {
+        const SDL_Color amber{255, 196, 0, 255};
+        const int width = MeasureTextWidth("HOLD", pFirmwareFontSmall);
+        DrawFirmwareTextLeft("HOLD", pFirmwareFontSmall, static_cast<int>(panel.x + panel.w) - width - 24,
+                             static_cast<int>(panel.y) + 18, amber);
+    }
+
+    // The fade goes over everything, including the words, because a caption
+    // that arrives before its picture reads as a fault.
+    const uint8_t dim = AttractSlides::FadeAlpha(elapsedMs, g_attractSlides->CurrentDurationMs(), opt_slide_fade_ms,
+                                                 g_attractSlides->Paused());
+    if (dim > 0)
+    {
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, dim);
+        SDL_RenderFillRect(renderer, &panel);
+    }
+}
+
+// The two navigation buttons, and the cursor keys that stand in for them.
+//
+// Held state for both, so that "both at once" can be recognised: the second
+// button pressed while the first is still down is the hold, not a step.
+static bool g_slideNavClosed[2] = {false, false};
+
+enum class SlideNav
+{
+    Next,
+    Previous,
+};
+
+// True when the slideshow took the input. Callers use that to decide whether
+// the input was also activity -- because these two buttons are the one thing
+// that is not. Pressing them is somebody reading, not somebody walking up.
+static bool HandleSlideNav(SlideNav direction, bool bothHeld)
+{
+    if (!g_attractSlides || g_attractSlides->Empty())
+    {
+        return false;
+    }
+    // Attract only. During a game the flipper buttons belong to the flippers,
+    // and this must never be a thing that happens while a ball is in play.
+    if (ball_search_game_running.load(std::memory_order_acquire))
+    {
+        return false;
+    }
+    // A tool is open, and its keys are its own.
+    if (g_overlay != OverlayScreen::None)
+    {
+        return false;
+    }
+
+    const uint64_t nowMs = SDL_GetTicks();
+    if (bothHeld)
+    {
+        g_attractSlides->TogglePause();
+        return true;
+    }
+    if (direction == SlideNav::Next)
+    {
+        g_attractSlides->Next(nowMs);
+    }
+    else
+    {
+        g_attractSlides->Previous(nowMs);
+    }
+    return true;
 }
 
 // What the backbox screen shows when something other than the game wants it.
@@ -3628,6 +3732,20 @@ static void DrawServiceScreenInto(SDL_Renderer* renderer, int w, int h, bool cle
     {
         DrawOverlayInto(renderer, w, h, clearFirst);
         return;
+    }
+
+    // Only on the own-window path, where nothing has drawn this frame yet. With
+    // a backglass up, what is already in the frame is the B2S or the PUP video,
+    // and that is exactly what should show around the slide.
+    if (clearFirst)
+    {
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+        SDL_RenderClear(renderer);
+        SDL_Texture* behind = pTransliteAttractTexture ? pTransliteAttractTexture : pTransliteTexture;
+        if (behind)
+        {
+            SDL_RenderTexture(renderer, behind, nullptr, nullptr);
+        }
     }
     DrawSlidesInto(renderer, w, h);
 }
@@ -5294,6 +5412,14 @@ int main(int argc, char** argv)
           opt_attract_slides_idle_ms = static_cast<uint32_t>(atoi(value.c_str()));
         else if (key == "SlideDurationMs")
           opt_attract_slide_duration_ms = static_cast<uint32_t>(atoi(value.c_str()));
+        else if (key == "SlideNextSwitch")
+          opt_slide_next_switch = atoi(value.c_str());
+        else if (key == "SlidePreviousSwitch")
+          opt_slide_previous_switch = atoi(value.c_str());
+        else if (key == "SlideBorderPercent")
+          opt_slide_border_percent = static_cast<uint32_t>(atoi(value.c_str()));
+        else if (key == "SlideFadeMs")
+          opt_slide_fade_ms = static_cast<uint32_t>(atoi(value.c_str()));
       }
       else if (section == "Backbox")
       {
@@ -7150,13 +7276,38 @@ int main(int argc, char** argv)
         // Before any suppression: the screen answers what the machine is
         // doing, not what the engine was told about it.
         NoteSwitchMonitorState(switchState->number, newSwitchState);
-        // Any switch at all, deliberately including the flipper buttons and the
-        // coin door that the ball search ignores. Those are the first things a
-        // curious passer-by touches, and somebody who has just pressed a flipper
-        // button is somebody who has started reading.
+        // The slideshow. The two navigation buttons steer it; every other
+        // switch takes it down, deliberately including the flipper buttons and
+        // the coin door that the ball search ignores, because those are the
+        // first things somebody walking up touches.
         if (g_attractSlides)
         {
-          g_attractSlides->NoteActivity(SDL_GetTicks());
+          bool steered = false;
+          const bool isNext = opt_slide_next_switch != 0 && switchState->number == opt_slide_next_switch;
+          const bool isPrevious = opt_slide_previous_switch != 0 && switchState->number == opt_slide_previous_switch;
+          if (isNext || isPrevious)
+          {
+            const int index = isNext ? 0 : 1;
+            const bool wasClosed = g_slideNavClosed[index];
+            g_slideNavClosed[index] = newSwitchState != 0;
+            // On the close, not the release: a button that acts when it is let
+            // go feels broken to anybody used to a pinball machine.
+            if (newSwitchState != 0 && !wasClosed)
+            {
+              steered = HandleSlideNav(isNext ? SlideNav::Next : SlideNav::Previous,
+                                       g_slideNavClosed[isNext ? 1 : 0]);
+            }
+            else
+            {
+              // A release, or a repeat of a state we already had. Neither is
+              // activity, or holding a flipper button would end the show.
+              steered = true;
+            }
+          }
+          if (!steered)
+          {
+            g_attractSlides->NoteActivity(SDL_GetTicks());
+          }
         }
         NoteBallSearchSwitchUpdate(pPpuc, ballSearchRunner, switchState->number, newSwitchState,
                                    opt_ball_search_delay_ms);
@@ -7406,6 +7557,41 @@ int main(int argc, char** argv)
             if (HandleOverlayKey(event.key.key))
             {
               break;
+            }
+            // The cursor keys stand in for the two buttons, for a machine with
+            // a keyboard plugged in and no switches assigned yet. Only while
+            // the slideshow has something to say: otherwise they fall through
+            // to whatever else is bound.
+            if (g_attractSlides && !g_attractSlides->Empty() && g_overlay == OverlayScreen::None &&
+                !ball_search_game_running.load(std::memory_order_acquire))
+            {
+              bool handled = true;
+              switch (event.key.key)
+              {
+                case SDLK_RIGHT:
+                  HandleSlideNav(SlideNav::Next, false);
+                  break;
+                case SDLK_LEFT:
+                  HandleSlideNav(SlideNav::Previous, false);
+                  break;
+                case SDLK_UP:
+                case SDLK_DOWN:
+                  // The keyboard's "both buttons": hold this slide.
+                  g_attractSlides->TogglePause();
+                  break;
+                case SDLK_ESCAPE:
+                  // Out, and the minute starts again -- the same thing that
+                  // happens when somebody touches the machine.
+                  g_attractSlides->NoteActivity(SDL_GetTicks());
+                  break;
+                default:
+                  handled = false;
+                  break;
+              }
+              if (handled)
+              {
+                break;
+              }
             }
             switch (event.key.key)
             {

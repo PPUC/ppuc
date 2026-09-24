@@ -88,6 +88,10 @@ show, unpublished afterwards, with no files to move.
 Slides=true
 SlidesIdleMs=60000
 SlideDurationMs=8000
+SlideNextSwitch=0
+SlidePreviousSwitch=0
+SlideBorderPercent=4
+SlideFadeMs=350
 ```
 
 `Slides` defaults to **true when the folder has slides in it**. A game folder
@@ -109,10 +113,30 @@ presenting on KMSDRM means the panel alternates between them as fast as they
 draw, which is what the tools menu did before it was fixed. One window, one
 present, and the slide is simply the last thing drawn into it.
 
+A slide does not take the whole screen. `SlideBorderPercent` of the shorter
+edge is left showing all the way round, so a frame of the B2S, the PUP video or
+the translite stays visible. The slideshow is something this machine is doing
+while it waits, not a different machine that has taken the screen, and a
+hairline of the backglass around it says so without a word. Set it to 0 for
+full screen.
+
+On the own-window path — a translite, or no video at all — the translite is
+drawn first and the slide goes on top of it, so the border shows the same thing
+it would on a B2S machine.
+
+Slides fade in and out of each other through black over `SlideFadeMs`. SDL has
+no transition effects of its own; this is one rectangle filled with black at a
+computed alpha, and anything fancier (a wipe, a push) would have to be written
+the same way, by drawing two textures with moving rectangles. A held slide
+fades in but never out: a slide somebody is reading must not dim underneath
+them. `FadeAlpha` is a free function in `AttractSlides.cpp` and is tested,
+because its edge cases — a slide shorter than two fades, a slide past its own
+duration — look like a flicker rather than like a failure.
+
 Consequences worth stating:
 
-- A slide is **opaque** — a photograph with text over a dimmed strip, covering
-  whatever the backglass was showing.
+- A slide is **opaque** inside its panel — a photograph with text over a dimmed
+  strip, covering whatever the backglass was showing there.
 - **The service menu wins.** If someone has the tools menu open, no slides.
 - On a machine with a translite and no B2S or PUP, the slideshow opens the same
   window the tools menu does, and closing it asks the translite to redraw.
@@ -161,14 +185,44 @@ that will not go away when a player walks up, is invisible on a bench.
 
 ## What starts and stops it
 
-Starting: attract mode, and no switch has changed for `SlidesIdleMs`.
+Starting: attract mode, and no switch has changed for `SlidesIdleMs`. Or one of
+the two navigation buttons, which brings the show up immediately.
 
-Stopping: **any switch at all**. This deliberately differs from the ball
-search, which ignores flipper buttons and the coin door, because those are
-exactly the switches a curious passer-by touches first — and someone who has
-just pressed a flipper button is someone who has started reading.
+Stopping: **any switch at all**, except those two buttons. This deliberately
+differs from the ball search, which ignores flipper buttons and the coin door,
+because those are exactly the switches a curious passer-by touches first.
 
 A game starting stops it too, by way of leaving attract mode.
+
+## Steering it
+
+Two switches, `SlideNextSwitch` and `SlidePreviousSwitch`, normally the two
+flipper buttons. They are the one input that is not treated as somebody walking
+up: pressing them is somebody reading.
+
+| | |
+|---|---|
+| next button | forward a slide, or start the show at the first slide |
+| previous button | back a slide, or start the show at the first slide |
+| both together | hold the current slide until pressed again — `HOLD` appears top right |
+| any other switch | out, and the minute starts again |
+
+Both buttons start the show at the *first* slide rather than the last: both
+mean "show me", and only then "which way".
+
+A keyboard stands in for them, for a machine where no switches are assigned
+yet: **cursor left and right** step, **up or down** holds, and **ESC** leaves
+the show and restarts the minute. These only apply while the game has slides,
+attract mode is running, and no service tool is open; otherwise the keys fall
+through to whatever else is bound, which matters because ENTER is Game Start on
+Flash.
+
+Both buttons act on the close, not the release. A button that acts when it is
+let go feels broken to anybody used to a pinball machine.
+
+Holding does not survive the show coming down. A hold belongs to the person who
+was reading, not to the machine, and the next show should not begin frozen on
+somebody else's slide.
 
 ## Open questions
 

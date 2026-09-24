@@ -57,6 +57,15 @@ struct Slide
 // unit tested.
 bool Load(const std::string& gameFolder, std::vector<Slide>* slides, std::string* error);
 
+// How much black to lay over a slide, 0 (none) to 255 (all), so that slides
+// fade in and out of each other rather than cutting.
+//
+// Here rather than in the drawing because it is arithmetic with edge cases --
+// a slide shorter than two fades, a held slide that must not fade out while
+// somebody is reading it -- and those are cheap to test and tedious to check
+// by staring at a screen.
+uint8_t FadeAlpha(uint64_t elapsedMs, uint32_t durationMs, uint32_t fadeMs, bool paused);
+
 // When the slideshow runs, and which slide is up.
 //
 // Nothing here draws or touches SDL: it answers "should something be on the
@@ -80,14 +89,33 @@ class Show
   // takes the slides down without needing to hear about a switch.
   void Update(bool attract, uint64_t nowMs);
 
+  // The two navigation buttons, and the cursor keys that stand in for them.
+  //
+  // These are the one thing that does not count as activity: pressing them is
+  // somebody reading, not somebody walking up, so they move the show along
+  // instead of ending it. From hidden they start it, which is how a player who
+  // wants to know the rules asks for them rather than waiting out the minute.
+  void Next(uint64_t nowMs);
+  void Previous(uint64_t nowMs);
+
+  // Both buttons together, or ENTER. Holds the current slide until it is
+  // pressed again -- for the player who is still reading when the eight
+  // seconds are up.
+  void TogglePause();
+  bool Paused() const { return m_paused; }
+
   bool Visible() const { return m_visible; }
   // Only meaningful while Visible().
   const Slide& Current() const { return m_slides[m_index]; }
   size_t CurrentIndex() const { return m_index; }
   // When the current slide came up, for animations that should start with it.
   uint64_t CurrentSinceMs() const { return m_slideStartedMs; }
+  // What the current slide's duration works out to, its own or the default.
+  uint32_t CurrentDurationMs() const { return DurationOf(m_slides[m_index]); }
 
  private:
+  void ShowAt(size_t index, uint64_t nowMs);
+
   uint32_t DurationOf(const Slide& slide) const
   {
     return slide.durationMs != 0 ? slide.durationMs : m_defaultDurationMs;
@@ -99,6 +127,7 @@ class Show
   // A separate flag rather than m_lastActivityMs == 0 meaning "never": SDL's
   // tick count starts at zero, so zero is a time the machine really sees.
   bool m_clockStarted = false;
+  bool m_paused = false;
   uint64_t m_lastActivityMs = 0;
   uint64_t m_slideStartedMs = 0;
   size_t m_index = 0;

@@ -178,3 +178,184 @@ TEST_CASE("loading new slides while a show runs takes it down")
   show.Update(true, kIdleMs * 4);
   CHECK_FALSE(show.Visible());
 }
+
+// The navigation buttons -- usually the two flipper buttons, or the cursor
+// keys. These are the one kind of input that must not take the show down:
+// pressing them is somebody reading, not somebody walking up.
+
+TEST_CASE("a navigation button starts the show from hidden, at the first slide")
+{
+  AttractSlides::Show show = ShowWithSlides();
+  show.Update(true, 1000);
+  REQUIRE_FALSE(show.Visible());
+
+  // Well before the idle time is up: a player who wants the rules should not
+  // have to wait out the minute.
+  show.Next(2000);
+  CHECK(show.Visible());
+  CHECK(show.CurrentIndex() == 0);
+  CHECK(show.CurrentSinceMs() == 2000);
+
+  // And the same from the other button, rather than starting at the last
+  // slide: both buttons mean "show me", and only then "which way".
+  show.NoteActivity(3000);
+  REQUIRE_FALSE(show.Visible());
+  show.Previous(4000);
+  CHECK(show.Visible());
+  CHECK(show.CurrentIndex() == 0);
+}
+
+TEST_CASE("the buttons step both ways and wrap")
+{
+  AttractSlides::Show show = ShowWithSlides();
+  show.Next(1000);
+  REQUIRE(show.CurrentIndex() == 0);
+
+  show.Next(2000);
+  CHECK(show.CurrentIndex() == 1);
+  CHECK(show.CurrentSinceMs() == 2000);
+  // Two slides, so forward from the last wraps to the first.
+  show.Next(3000);
+  CHECK(show.CurrentIndex() == 0);
+  // And back from the first wraps to the last.
+  show.Previous(4000);
+  CHECK(show.CurrentIndex() == 1);
+}
+
+TEST_CASE("stepping resets the slide's own clock")
+{
+  AttractSlides::Show show = ShowWithSlides();
+  show.Next(0);
+  REQUIRE(show.CurrentIndex() == 0);
+
+  // Most of the way through the first slide, then stepped. The second slide
+  // must get its whole duration, not the remainder of the first.
+  show.Update(true, 7000);
+  REQUIRE(show.CurrentIndex() == 0);
+  show.Next(7000);
+  REQUIRE(show.CurrentIndex() == 1);
+
+  show.Update(true, 8000);
+  CHECK(show.CurrentIndex() == 1);
+  // The second slide carries 2000 of its own.
+  show.Update(true, 9000);
+  CHECK(show.CurrentIndex() == 0);
+}
+
+TEST_CASE("pausing holds the slide until it is released")
+{
+  AttractSlides::Show show = ShowWithSlides();
+  show.Next(0);
+  REQUIRE(show.CurrentIndex() == 0);
+  CHECK_FALSE(show.Paused());
+
+  show.TogglePause();
+  CHECK(show.Paused());
+
+  // Five minutes of somebody reading. Nothing moves.
+  for (uint64_t now = 0; now < 300000; now += 1000)
+  {
+    show.Update(true, now);
+    CHECK(show.CurrentIndex() == 0);
+    CHECK(show.Visible());
+  }
+
+  // Stepping still works while held, and leaves it held: a reader moving on
+  // at their own pace has not asked for the timer back.
+  show.Next(300000);
+  CHECK(show.CurrentIndex() == 1);
+  CHECK(show.Paused());
+
+  show.TogglePause();
+  CHECK_FALSE(show.Paused());
+  show.Update(true, 302000);
+  CHECK(show.CurrentIndex() == 0);
+}
+
+TEST_CASE("a hold does not survive the show coming down")
+{
+  AttractSlides::Show show = ShowWithSlides();
+  show.Next(0);
+  show.TogglePause();
+  REQUIRE(show.Paused());
+
+  // Somebody walked up. The next show is for whoever comes next, and it should
+  // not begin frozen on a slide the last person was reading.
+  show.NoteActivity(1000);
+  CHECK_FALSE(show.Paused());
+
+  show.Update(true, 1000 + kIdleMs);
+  REQUIRE(show.Visible());
+  CHECK_FALSE(show.Paused());
+}
+
+TEST_CASE("pausing does nothing when no show is running")
+{
+  AttractSlides::Show show = ShowWithSlides();
+  show.TogglePause();
+  CHECK_FALSE(show.Paused());
+  CHECK_FALSE(show.Visible());
+}
+
+TEST_CASE("the buttons do nothing on a game with no slides")
+{
+  AttractSlides::Show show(kIdleMs, kDefaultDurationMs);
+  show.Next(1000);
+  CHECK_FALSE(show.Visible());
+  show.Previous(2000);
+  CHECK_FALSE(show.Visible());
+}
+
+// The fade. Arithmetic with edge cases, and every one of them looks like a
+// flicker on a real screen rather than like a failure.
+
+TEST_CASE("a slide fades in from black and out again")
+{
+  constexpr uint32_t kDuration = 8000;
+  constexpr uint32_t kFade = 400;
+
+  // Full black at the instant it comes up.
+  CHECK(AttractSlides::FadeAlpha(0, kDuration, kFade, false) == 255);
+  // Half way in, half dimmed.
+  CHECK(AttractSlides::FadeAlpha(200, kDuration, kFade, false) == 127);
+  // Clear once the fade is over, and stays clear through the middle.
+  CHECK(AttractSlides::FadeAlpha(400, kDuration, kFade, false) == 0);
+  CHECK(AttractSlides::FadeAlpha(4000, kDuration, kFade, false) == 0);
+  // And back to black as its time runs out.
+  CHECK(AttractSlides::FadeAlpha(7600, kDuration, kFade, false) == 0);
+  CHECK(AttractSlides::FadeAlpha(7800, kDuration, kFade, false) == 127);
+  CHECK(AttractSlides::FadeAlpha(7999, kDuration, kFade, false) > 250);
+}
+
+TEST_CASE("a held slide does not dim underneath the person reading it")
+{
+  constexpr uint32_t kDuration = 8000;
+  constexpr uint32_t kFade = 400;
+
+  // The fade in still runs: it is what the eye expects when a slide arrives.
+  CHECK(AttractSlides::FadeAlpha(0, kDuration, kFade, true) == 255);
+  CHECK(AttractSlides::FadeAlpha(400, kDuration, kFade, true) == 0);
+
+  // But nothing fades out, however long they hold it -- including well past
+  // the duration it would have had.
+  CHECK(AttractSlides::FadeAlpha(7900, kDuration, kFade, true) == 0);
+  CHECK(AttractSlides::FadeAlpha(300000, kDuration, kFade, true) == 0);
+}
+
+TEST_CASE("the fade has no edges to fall off")
+{
+  // Switched off.
+  CHECK(AttractSlides::FadeAlpha(0, 8000, 0, false) == 0);
+  CHECK(AttractSlides::FadeAlpha(4000, 8000, 0, false) == 0);
+
+  // Past the end, which happens on the pass where a slide is about to be
+  // replaced: no underflow, no wrap to fully black.
+  CHECK(AttractSlides::FadeAlpha(8000, 8000, 400, false) == 0);
+  CHECK(AttractSlides::FadeAlpha(99999, 8000, 400, false) == 0);
+
+  // A slide shorter than two fades never reaches full brightness, and the
+  // honest answer is a dim slide rather than a wrong one.
+  const uint8_t midway = AttractSlides::FadeAlpha(250, 500, 400, false);
+  CHECK(midway > 0);
+  CHECK(midway < 255);
+}
