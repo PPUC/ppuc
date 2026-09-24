@@ -1994,10 +1994,39 @@ struct MonitorEntry
     std::string description = {};
     uint8_t state = 0;
     uint64_t lastChangeMs = 0;
-    // Coils only: a pulse is over long before the next repaint, so the count
-    // and the age are what make one visible at all.
+    // When this last went from open to closed, or from off to on. Not the same
+    // as lastChangeMs, which also moves when something is released: the useful
+    // question about a switch is when it was last *hit*.
+    uint64_t lastActivationMs = 0;
+    // A pulse is over long before the next repaint, so for a coil the count and
+    // the age are what make one visible at all.
     uint32_t activations = 0;
 };
+
+// An age a person can read at a glance. Seconds while that is the interesting
+// scale, then minutes, then hours -- "4m" says more than "271s" about a switch
+// nobody has touched.
+static void FormatAge(char* out, size_t size, uint64_t nowMs, uint64_t stampMs)
+{
+    if (stampMs == 0)
+    {
+        snprintf(out, size, "never");
+        return;
+    }
+    const unsigned long long seconds = (nowMs > stampMs ? nowMs - stampMs : 0) / 1000ull;
+    if (seconds < 60ull)
+    {
+        snprintf(out, size, "%llus", seconds);
+    }
+    else if (seconds < 3600ull)
+    {
+        snprintf(out, size, "%llum", seconds / 60ull);
+    }
+    else
+    {
+        snprintf(out, size, "%lluh", seconds / 3600ull);
+    }
+}
 
 static std::vector<MonitorEntry> g_switchMonitorEntries;
 static std::unordered_map<int, size_t> g_switchMonitorIndex;
@@ -2005,6 +2034,17 @@ static std::vector<MonitorEntry> g_coilMonitorEntries;
 static std::unordered_map<int, size_t> g_coilMonitorIndex;
 static uint64_t g_switchMonitorLastRenderMs = 0;
 static uint32_t g_switchMonitorChanges = 0;
+// The coil the cursor keys are on, and how long ENTER fires it for.
+//
+// Firing a coil from the backbox is how a ball gets out of a trough whose
+// switch has failed, without lifting the glass. The board owns the pulse
+// envelope and caps it at the coil's own maxPulseTime, so this duration is a
+// request rather than a promise.
+static int g_coilSelection = 0;
+// Rows per column in the coil section, as the last repaint laid it out. Left
+// and right move by a column, and only the drawing knows how tall one is.
+static int g_monitorCoilRows = 1;
+static constexpr uint32_t kMonitorCoilPulseMs = 80;
 
 // Built lazily, because neither list exists until the boards have been
 // configured: libppuc fills them while it sends the mapping frames, not when
@@ -2074,6 +2114,11 @@ static void NoteSwitchMonitorState(int number, uint8_t state)
     {
         entry.state = state;
         entry.lastChangeMs = SDL_GetTicks();
+        if (state != 0)
+        {
+            entry.lastActivationMs = entry.lastChangeMs;
+            ++entry.activations;
+        }
         ++g_switchMonitorChanges;
     }
 }
@@ -2095,6 +2140,7 @@ static void NoteCoilMonitorState(int number, uint8_t state)
         entry.lastChangeMs = SDL_GetTicks();
         if (state != 0)
         {
+            entry.lastActivationMs = entry.lastChangeMs;
             ++entry.activations;
         }
     }
@@ -2447,8 +2493,10 @@ static constexpr int kOverlayMenuCount = static_cast<int>(sizeof(kOverlayMenu) /
 
 // One section of the screen: a background of its own, a heading, and as many
 // columns of rows as fit.
+// `selected` is the row to mark, or -1. Only the coil side has one: it is the
+// side a key can act on.
 static void DrawMonitorSection(const char* title, const std::vector<MonitorEntry>& entries, bool coils, int x, int y,
-                               int w, int h, SDL_Color background)
+                               int w, int h, SDL_Color background, int selected = -1)
 {
     const SDL_Color white{235, 235, 235, 255};
     const SDL_Color dim{120, 120, 130, 255};
@@ -2489,7 +2537,7 @@ static void DrawMonitorSection(const char* title, const std::vector<MonitorEntry
     // A column is as wide as a row needs, not as wide as the section divided
     // by however many columns happen to be required. Dividing the width put
     // the state word half a metre from the name it belonged to.
-    const int kColumnWidth = 560;
+    const int kColumnWidth = 620;
     const int maxColumns = std::max(1, (w - 20) / kColumnWidth);
     const int columns =
         std::max(1, std::min(maxColumns, static_cast<int>((entries.size() + static_cast<size_t>(maxRows) - 1) /
@@ -2509,6 +2557,11 @@ static void DrawMonitorSection(const char* title, const std::vector<MonitorEntry
     const int kColumnGap = 44;
     const int contentWidth = columnWidth - kColumnGap;
 
+    if (coils)
+    {
+        g_monitorCoilRows = rows;
+    }
+
     for (size_t i = 0; i < entries.size(); ++i)
     {
         const MonitorEntry& entry = entries[i];
@@ -2520,6 +2573,14 @@ static void DrawMonitorSection(const char* title, const std::vector<MonitorEntry
         }
         const int rx = x + 16 + col * columnWidth;
         const int ry = top + row * rowH;
+
+        if (static_cast<int>(i) == selected)
+        {
+            SDL_SetRenderDrawColor(g_uiRenderer, 58, 62, 80, 255);
+            const SDL_FRect marker{static_cast<float>(rx) - 8.0f, static_cast<float>(ry) - 4.0f,
+                                   static_cast<float>(contentWidth) + 8.0f, static_cast<float>(rowH) - 2.0f};
+            SDL_RenderFillRect(g_uiRenderer, &marker);
+        }
         const bool isActive = entry.state != 0;
         const bool recent = entry.lastChangeMs != 0 && now - entry.lastChangeMs < 2000;
 
@@ -2534,7 +2595,7 @@ static void DrawMonitorSection(const char* title, const std::vector<MonitorEntry
         // closed switch be the only thing that carries.
         const SDL_Color blockColour = isActive ? green : (recent ? amber : dim);
         SDL_SetRenderDrawColor(g_uiRenderer, blockColour.r, blockColour.g, blockColour.b, 255);
-        const SDL_FRect box{static_cast<float>(rx + contentWidth - 128), static_cast<float>(ry) + 6.0f, 16.0f,
+        const SDL_FRect box{static_cast<float>(rx + contentWidth - 211), static_cast<float>(ry) + 6.0f, 16.0f,
                             16.0f};
         SDL_RenderFillRect(g_uiRenderer, &box);
 
@@ -2543,8 +2604,13 @@ static void DrawMonitorSection(const char* title, const std::vector<MonitorEntry
                  static_cast<unsigned>(entry.port), entry.description.c_str());
         // Truncated rather than wrapped: a column is a fixed width, and a name
         // that runs into the next column is worse than a name cut short.
-        TruncateToWidth(line, pFirmwareFontSmall, contentWidth - 140);
+        // Room for the state and, beside it, how long ago. Both sides now read
+        // the same way: what it is doing, and when it last did something.
+        TruncateToWidth(line, pFirmwareFontSmall, contentWidth - 225);
         DrawFirmwareTextLeft(line, pFirmwareFontSmall, rx, ry, nameColour);
+
+        char age[16];
+        FormatAge(age, sizeof(age), now, entry.lastActivationMs);
 
         if (coils)
         {
@@ -2554,23 +2620,27 @@ static void DrawMonitorSection(const char* title, const std::vector<MonitorEntry
             // coil that never fired unmistakable.
             if (isActive)
             {
-                DrawFirmwareTextLeft("on", pFirmwareFontSmall, rx + contentWidth - 100, ry, green);
+                DrawFirmwareTextLeft("on", pFirmwareFontSmall, rx + contentWidth - 185, ry, green);
             }
             else if (entry.activations != 0)
             {
-                snprintf(line, sizeof(line), "%ux %.0fs", entry.activations,
-                         static_cast<double>(now - entry.lastChangeMs) / 1000.0);
-                DrawFirmwareTextLeft(line, pFirmwareFontSmall, rx + contentWidth - 100, ry, recent ? amber : dim);
+                snprintf(line, sizeof(line), "%ux", entry.activations);
+                DrawFirmwareTextLeft(line, pFirmwareFontSmall, rx + contentWidth - 185, ry, recent ? amber : dim);
             }
             else
             {
-                DrawFirmwareTextLeft("never", pFirmwareFontSmall, rx + contentWidth - 100, ry, dim);
+                DrawFirmwareTextLeft("never", pFirmwareFontSmall, rx + contentWidth - 185, ry, dim);
             }
         }
         else
         {
-            DrawFirmwareTextLeft(isActive ? "closed" : "open", pFirmwareFontSmall, rx + contentWidth - 100, ry,
+            DrawFirmwareTextLeft(isActive ? "closed" : "open", pFirmwareFontSmall, rx + contentWidth - 185, ry,
                                  isActive ? green : dim);
+        }
+
+        if (entry.lastActivationMs != 0)
+        {
+            DrawFirmwareTextLeft(age, pFirmwareFontSmall, rx + contentWidth - 55, ry, recent ? amber : dim);
         }
     }
 }
@@ -2598,7 +2668,7 @@ static void DrawSwitchMonitorInto(int w, int h)
     const int top = 100;
     const int bottom = h - 46;
     const int sectionH = bottom - top;
-    const int kColumnWidth = 560;
+    const int kColumnWidth = 620;
     const int usableRows = std::max(1, (sectionH - 64) / 32);
     const auto columnsFor = [&](size_t count) {
         return std::max(1, static_cast<int>((count + static_cast<size_t>(usableRows) - 1) /
@@ -2621,10 +2691,11 @@ static void DrawSwitchMonitorInto(int w, int h)
     const SDL_Color switchBackground{14, 18, 30, 255};
     const SDL_Color coilBackground{30, 18, 14, 255};
     DrawMonitorSection("SWITCHES", g_switchMonitorEntries, false, 0, top, switchW, sectionH, switchBackground);
-    DrawMonitorSection("COILS", g_coilMonitorEntries, true, switchW, top, coilW, sectionH, coilBackground);
+    DrawMonitorSection("COILS", g_coilMonitorEntries, true, switchW, top, coilW, sectionH, coilBackground,
+                       g_coilMonitorEntries.empty() ? -1 : g_coilSelection);
 
-    DrawFirmwareText("green = closed / on    grey = open / idle    amber = changed in the last 2 s    coils show "
-                     "how often and how long ago",
+    DrawFirmwareText("green = closed / on    grey = open / idle    amber = changed in the last 2 s    "
+                     "cursor keys pick a coil, ENTER fires it once",
                      pFirmwareFontSmall, w / 2, h - 36, dim);
 
 }
@@ -2744,6 +2815,22 @@ static void RenderOverlayVolume(int w, int h)
 // A window this code opened itself is destroyed, because on KMSDRM B2S or PUP
 // take the panel again the moment it is gone and both repaint continuously. A
 // translite belongs to the game and is simply asked to draw itself again.
+// Fires the selected coil once. Separate from the key handler so the intent is
+// stated in one place: this is a person at the machine asking for one pulse.
+static void FireSelectedCoil()
+{
+    if (g_coilMonitorEntries.empty() || pPpuc == nullptr)
+    {
+        return;
+    }
+    const int index = std::clamp(g_coilSelection, 0, static_cast<int>(g_coilMonitorEntries.size()) - 1);
+    const MonitorEntry& entry = g_coilMonitorEntries[index];
+    printf("PPUC: monitor firing coil %d (%s)\n", entry.number, entry.description.c_str());
+    // Through the interceptor, so the pulse behaves exactly like one a rule
+    // asks for: the engine's own state for this coil is restored afterwards.
+    g_interceptorOutputs.PulseCoil(pPpuc, entry.number, kMonitorCoilPulseMs);
+}
+
 static void CloseOverlay()
 {
     g_overlay = OverlayScreen::None;
@@ -2814,12 +2901,28 @@ static bool HandleOverlayKey(SDL_Keycode key)
             {
                 g_volumeSelection = (g_volumeSelection + delta + 4) % 4;
             }
+            else if (g_overlay == OverlayScreen::Monitor && !g_coilMonitorEntries.empty())
+            {
+                const int count = static_cast<int>(g_coilMonitorEntries.size());
+                g_coilSelection = (g_coilSelection + delta + count) % count;
+            }
             return true;
         }
 
         case SDLK_LEFT:
         case SDLK_RIGHT:
         {
+            if (g_overlay == OverlayScreen::Monitor && !g_coilMonitorEntries.empty())
+            {
+                // A column at a time. The list is laid out in columns, so left
+                // and right are the only way across a long one without holding
+                // a key down.
+                const int count = static_cast<int>(g_coilMonitorEntries.size());
+                const int step = std::max(1, g_monitorCoilRows);
+                const int delta = key == SDLK_LEFT ? -step : step;
+                g_coilSelection = std::clamp(g_coilSelection + delta, 0, count - 1);
+                return true;
+            }
             if (g_overlay != OverlayScreen::Volume)
             {
                 return true;
@@ -2836,6 +2939,10 @@ static bool HandleOverlayKey(SDL_Keycode key)
             if (g_overlay == OverlayScreen::Menu)
             {
                 g_overlay = kOverlayMenu[g_menuSelection].opens;
+            }
+            else if (g_overlay == OverlayScreen::Monitor)
+            {
+                FireSelectedCoil();
             }
             return true;
 
