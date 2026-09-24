@@ -182,13 +182,20 @@ directory. Nothing needs switching on.
 
 ### Steering it
 
-Assign two switches, normally the two flipper buttons:
+Assign two switches, normally the two flipper buttons. In the config tool they
+are on the game's **PPUC Settings** page, as *Attract: SlideNextSwitch* and
+*Attract: SlidePreviousSwitch*; take the numbers off the **All Slides**
+page's neighbour, **All Switches**. They come out in `ppuc.ini` as:
 
 ```ini
 [Attract]
-SlideNextSwitch=1
-SlidePreviousSwitch=2
+SlideNextSwitch=203
+SlidePreviousSwitch=201
 ```
+
+Set them in the config tool rather than in the file. `ppuc.ini` is regenerated
+every time you download the game folder, so a hand edit survives exactly until
+the next export.
 
 | | |
 |---|---|
@@ -222,9 +229,13 @@ a fault in its own right.
 
 ### Writing slides
 
-In the config tool, on the game's page, *Add slide*. Each slide has a title, a
-line or two of text, an optional photograph, a weight for its position in the
-loop, and an optional duration.
+In the config tool, on the game's **All Slides** tab. It lists every slide of
+the game in the order they play, published or not, with *Add Slide* on the same
+page and the usual bulk operations — so a set of slides can be published or put
+away together without opening each one.
+
+Each slide has a title, a line or two of text, an optional photograph, a weight
+for its position in the loop, and an optional duration.
 
 **Publishing is the switch.** An unpublished slide is not exported and cannot
 appear on the machine, which is also how you keep a set of slides for a show and
