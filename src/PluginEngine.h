@@ -85,6 +85,9 @@ class PluginEngine final : public GameEngine
   {
     void* context = nullptr;
     void (*Set)(void*, const void*) = nullptr;
+    // Read back for the audit below. May be null, in which case the audit
+    // writes without comparing.
+    void (*Get)(void*, void*) = nullptr;
   };
 
   // The solenoid accessors the poll thread reads, republished as a unit
@@ -125,6 +128,24 @@ class PluginEngine final : public GameEngine
   std::vector<OutputEntry> m_lamps;
   std::vector<OutputEntry> m_gis;
   std::unordered_map<int, SwitchEntry> m_switchesByNumber;
+
+  // What this engine was last told each switch is, and the periodic check that
+  // the engine still agrees.
+  //
+  // Switch state is forwarded on change only -- libppuc reports a difference
+  // against its own bitmap, and we pass that on. So if the engine's view of a
+  // switch is ever lost or never arrives, nothing puts it back: our side
+  // already believes it has told the ROM. A ball resting on the outhole switch
+  // with PinMAME believing it open is a game that will not continue, and the
+  // only cure was to lift the ball out and drop it back to make a fresh edge.
+  //
+  // The boards already repair the host's view this way, re-sending their full
+  // switch bitmap even when nothing has changed. This is the same idea one
+  // level up.
+  std::unordered_map<int, uint8_t> m_sentSwitchValues;
+  uint64_t m_nextSwitchAuditMs = 0;
+  uint32_t m_switchCorrections = 0;
+  void AuditSwitches();
   std::vector<uint8_t> m_lastLamp;
   std::vector<uint8_t> m_lastGi;
   std::vector<GameEngineOutputChange> m_lampChanges;

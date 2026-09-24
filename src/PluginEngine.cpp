@@ -212,7 +212,7 @@ void PluginEngine::OnStateSrcChanged()
                 if (def.SetState != nullptr)
                 {
                   const int number = static_cast<int>(static_cast<int16_t>(def.mappingId));
-                  switches[number] = {def.callContext, def.SetState};
+                  switches[number] = {def.callContext, def.SetState, def.GetState};
                 }
                 break;
               default:
@@ -225,6 +225,11 @@ void PluginEngine::OnStateSrcChanged()
   m_lamps = std::move(lamps);
   m_gis = std::move(gis);
   m_switchesByNumber = std::move(switches);
+  // The accessors were all just replaced. Whatever the engine believed about
+  // these switches came through the old ones, so re-apply the ledger before
+  // anything reads it: a source change in the middle of a game must not leave
+  // the ROM with a switch it can no longer be told about.
+  m_nextSwitchAuditMs = 0;
   // Re-announce every output after a source change: a restarted game must not
   // inherit the previous run's edge state.
   m_lastLamp.assign(m_lamps.size(), 0);
@@ -743,7 +748,44 @@ void PluginEngine::SendSwitch(int number, uint8_t state)
     return;
   }
   const uint8_t value = state == 0 ? 0 : 1;
+  // The ledger records what the engine was told, not what the machine is
+  // doing. A switch the rules deliberately keep from the ROM stays kept from
+  // it: the audit repeats this, and never contradicts a decision made above.
+  m_sentSwitchValues[sw] = value;
   it->second.Set(it->second.context, &value);
+}
+
+void PluginEngine::AuditSwitches()
+{
+
+  for (const auto& [number, value] : m_sentSwitchValues)
+  {
+    const auto it = m_switchesByNumber.find(number);
+    if (it == m_switchesByNumber.end())
+    {
+      continue;
+    }
+
+    if (it->second.Get != nullptr)
+    {
+      // Compared before writing, so the ordinary case costs a read and
+      // nothing else. Nothing is re-sent that the engine already agrees
+      // with, which is what keeps this from being able to score a point it
+      // should not: a switch is a level, and the level is not touched unless
+      // it is wrong.
+      uint8_t current = 0;
+      it->second.Get(it->second.context, &current);
+      const uint8_t normalized = current == 0 ? 0 : 1;
+      if (normalized == value)
+      {
+        continue;
+      }
+      ++m_switchCorrections;
+      std::printf("PluginEngine: switch %d reads %u in the engine but was set to %u; correcting (%u so far)\n",
+                  number, static_cast<unsigned>(normalized), static_cast<unsigned>(value), m_switchCorrections);
+    }
+    it->second.Set(it->second.context, &value);
+  }
 }
 
 // ---- Lifecycle -----------------------------------------------------------
@@ -1037,6 +1079,15 @@ void PluginEngine::Update()
   if (!m_identityKnown)
   {
     TryGetIdentity(nullptr);
+  }
+
+  // Once a second. Rare enough to cost nothing, often enough that a divergence
+  // is gone before a player notices the ball has not come back.
+  const uint64_t nowMs = NowMs();
+  if (nowMs >= m_nextSwitchAuditMs)
+  {
+    m_nextSwitchAuditMs = nowMs + 1000;
+    AuditSwitches();
   }
 
   // Throttled deliberately: the main loop ticks every 20 us, and each sample
