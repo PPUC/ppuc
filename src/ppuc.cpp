@@ -2367,6 +2367,19 @@ static void DrawFirmwareTextWrapped(const char* text, TTF_Font* font, int x, int
     SDL_DestroyTexture(texture);
 }
 
+// How tall the wrapped text will be, so a caller can make room for it rather
+// than discover afterwards that it ran off the screen.
+static int MeasureWrappedTextHeight(const char* text, TTF_Font* font, int maxWidth)
+{
+    int w = 0;
+    int h = 0;
+    if (!font || !text || !*text || maxWidth <= 0 || !TTF_GetStringSizeWrapped(font, text, 0, maxWidth, &w, &h))
+    {
+        return 0;
+    }
+    return h;
+}
+
 static void DrawFirmwareText(const char* text, TTF_Font* font, int centerX, int y, SDL_Color colour)
 {
     if (!font || !text || !*text)
@@ -2398,6 +2411,7 @@ static void EnsureFirmwareFont() {}
 static void DrawFirmwareText(const char*, TTF_Font*, int, int, SDL_Color) {}
 static void DrawFirmwareTextLeft(const char*, TTF_Font*, int, int, SDL_Color) {}
 static void DrawFirmwareTextWrapped(const char*, TTF_Font*, int, int, int, SDL_Color) {}
+static int MeasureWrappedTextHeight(const char*, TTF_Font*, int) { return 0; }
 static void TruncateToWidth(char*, TTF_Font*, int) {}
 static int MeasureTextWidth(const char*, TTF_Font*) { return 0; }
 #endif
@@ -3429,12 +3443,18 @@ static void DrawSlideMarkers(SDL_Renderer* renderer, const AttractSlides::Slide&
     }
 }
 
-// The words, over a dimmed strip across the bottom.
+// The words.
 //
-// A strip rather than plain text on the photograph: a caption over a bright
-// playfield is unreadable, and dimming only the band it sits in keeps the
-// picture visible where it matters.
-static void DrawSlideText(SDL_Renderer* renderer, const AttractSlides::Slide& slide, int w, int h)
+// Over a dimmed strip across the bottom when there is a photograph, because a
+// caption over a bright playfield is unreadable and dimming only the band it
+// sits in keeps the picture visible where it matters. On a slide with no
+// photograph the whole screen is the strip, and the words sit in the middle of
+// it rather than hugging the bottom edge of an empty black frame.
+//
+// The strip is sized from the text rather than fixed, which is the whole point
+// of measuring: a slide is written by somebody typing into a text field, and
+// the one thing they must not have to think about is how many lines fit.
+static void DrawSlideText(SDL_Renderer* renderer, const AttractSlides::Slide& slide, int w, int h, bool hasImage)
 {
     if (slide.title.empty() && slide.text.empty())
     {
@@ -3442,27 +3462,50 @@ static void DrawSlideText(SDL_Renderer* renderer, const AttractSlides::Slide& sl
     }
 
     const int margin = std::max(24, w / 24);
-    const int stripHeight = std::max(90, h / 5);
-    const float stripY = static_cast<float>(h - stripHeight);
+    const int textWidth = w - margin * 2;
+    const int pad = 16;
 
-    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 200);
-    const SDL_FRect strip{0.0f, stripY, static_cast<float>(w), static_cast<float>(stripHeight)};
-    SDL_RenderFillRect(renderer, &strip);
+    int titleHeight = 0;
+#ifdef PPUC_HAS_SDL3_TTF
+    if (!slide.title.empty() && pFirmwareFontLarge)
+    {
+        titleHeight = TTF_GetFontHeight(pFirmwareFontLarge) + 6;
+    }
+#endif
+    const int bodyHeight = MeasureWrappedTextHeight(slide.text.c_str(), pFirmwareFontSmall, textWidth);
+    const int blockHeight = titleHeight + bodyHeight;
 
-    int y = static_cast<int>(stripY) + 14;
+    int y = 0;
+    if (hasImage)
+    {
+        // Tall enough for the words, and never so tall that it swallows the
+        // picture: past a third of the screen the slide wants fewer words, and
+        // clipping says so more usefully than covering the photograph would.
+        const int stripHeight = std::clamp(blockHeight + pad * 2, 90, h / 3);
+        const float stripY = static_cast<float>(h - stripHeight);
+
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 200);
+        const SDL_FRect strip{0.0f, stripY, static_cast<float>(w), static_cast<float>(stripHeight)};
+        SDL_RenderFillRect(renderer, &strip);
+
+        y = static_cast<int>(stripY) + pad;
+    }
+    else
+    {
+        y = std::max(pad, (h - blockHeight) / 2);
+    }
+
     const SDL_Color white{255, 255, 255, 255};
     const SDL_Color amber{255, 196, 0, 255};
     if (!slide.title.empty())
     {
         DrawFirmwareTextLeft(slide.title.c_str(), pFirmwareFontLarge, margin, y, amber);
-#ifdef PPUC_HAS_SDL3_TTF
-        y += pFirmwareFontLarge ? TTF_GetFontHeight(pFirmwareFontLarge) + 6 : 40;
-#endif
+        y += titleHeight;
     }
     if (!slide.text.empty())
     {
-        DrawFirmwareTextWrapped(slide.text.c_str(), pFirmwareFontSmall, margin, y, w - margin * 2, white);
+        DrawFirmwareTextWrapped(slide.text.c_str(), pFirmwareFontSmall, margin, y, textWidth, white);
     }
 }
 
@@ -3507,7 +3550,7 @@ static void DrawSlidesInto(SDL_Renderer* renderer, int w, int h)
 
     const uint64_t elapsedMs = SDL_GetTicks() - g_attractSlides->CurrentSinceMs();
     DrawSlideMarkers(renderer, slide, image, elapsedMs);
-    DrawSlideText(renderer, slide, w, h);
+    DrawSlideText(renderer, slide, w, h, texture != nullptr);
 }
 
 // What the backbox screen shows when something other than the game wants it.

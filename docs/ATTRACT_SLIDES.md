@@ -128,6 +128,17 @@ down. A slideshow shows one photograph for eight seconds; a cache of one is the
 right size, and a machine that has just had somebody walk up to it should not
 still be holding a 1920x1080 texture it is not drawing.
 
+The caption strip is sized from the words rather than fixed, and a slide with
+no photograph puts its words in the middle of the screen instead of hugging the
+bottom edge of an empty frame. A slide is written by somebody typing into a text
+field, and the one thing they should not have to think about is how many lines
+fit. Past a third of the screen the strip stops growing: at that point the slide
+wants fewer words, and clipping says so more usefully than covering the
+photograph would.
+
+The font has **no CJK glyphs**. Japanese or Chinese in a slide's text renders as
+empty boxes, so it belongs in the photograph rather than the caption.
+
 On the own-window path the screen is repainted at 20 Hz while slides are up
 rather than the 10 Hz the tools use. The marker pulse is the only animation on
 these screens, and at 10 Hz it reads as a stutter rather than a pulse.
