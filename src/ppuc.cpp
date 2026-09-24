@@ -2413,6 +2413,12 @@ static void DrawMonitorSection(const char* title, const std::vector<MonitorEntry
     // 4,5 (Bottom) Reset" -- and they were being cut short beside an empty
     // third of the screen.
     const int columnWidth = columns == 1 ? std::min(w - 28, 820) : kColumnWidth;
+    // Space between columns, not decoration. Without it the colour block of
+    // one column's row sits against the previous column's state word, and at a
+    // glance the block reads as belonging to that word -- which is exactly the
+    // reading this screen exists to make instant.
+    const int kColumnGap = 44;
+    const int contentWidth = columnWidth - kColumnGap;
 
     for (size_t i = 0; i < entries.size(); ++i)
     {
@@ -2423,7 +2429,7 @@ static void DrawMonitorSection(const char* title, const std::vector<MonitorEntry
         {
             break;  // More than fits; the section is as tall as it is.
         }
-        const int rx = x + 14 + col * columnWidth;
+        const int rx = x + 16 + col * columnWidth;
         const int ry = top + row * rowH;
         const bool isActive = entry.state != 0;
         const bool recent = entry.lastChangeMs != 0 && now - entry.lastChangeMs < 2000;
@@ -2431,9 +2437,12 @@ static void DrawMonitorSection(const char* title, const std::vector<MonitorEntry
         // A block of colour as well as a word, so the screen still says
         // something on a machine with no font installed, and so a wrong device
         // can be spotted from across the room.
+        // Beside the word it describes rather than at the start of the row,
+        // so the block and the text are read as one thing.
         const SDL_Color blockColour = isActive ? green : (recent ? amber : (coils ? dim : red));
         SDL_SetRenderDrawColor(pTransliteRenderer, blockColour.r, blockColour.g, blockColour.b, 255);
-        const SDL_FRect box{static_cast<float>(rx), static_cast<float>(ry) + 6.0f, 16.0f, 16.0f};
+        const SDL_FRect box{static_cast<float>(rx + contentWidth - 128), static_cast<float>(ry) + 6.0f, 16.0f,
+                            16.0f};
         SDL_RenderFillRect(pTransliteRenderer, &box);
 
         const SDL_Color nameColour = recent ? amber : (isActive ? white : dim);
@@ -2441,8 +2450,8 @@ static void DrawMonitorSection(const char* title, const std::vector<MonitorEntry
                  static_cast<unsigned>(entry.port), entry.description.c_str());
         // Truncated rather than wrapped: a column is a fixed width, and a name
         // that runs into the next column is worse than a name cut short.
-        TruncateToWidth(line, pFirmwareFontSmall, columnWidth - 150);
-        DrawFirmwareTextLeft(line, pFirmwareFontSmall, rx + 26, ry, nameColour);
+        TruncateToWidth(line, pFirmwareFontSmall, contentWidth - 140);
+        DrawFirmwareTextLeft(line, pFirmwareFontSmall, rx, ry, nameColour);
 
         if (coils)
         {
@@ -2452,22 +2461,22 @@ static void DrawMonitorSection(const char* title, const std::vector<MonitorEntry
             // coil that never fired unmistakable.
             if (isActive)
             {
-                DrawFirmwareTextLeft("on", pFirmwareFontSmall, rx + columnWidth - 110, ry, green);
+                DrawFirmwareTextLeft("on", pFirmwareFontSmall, rx + contentWidth - 100, ry, green);
             }
             else if (entry.activations != 0)
             {
                 snprintf(line, sizeof(line), "%ux %.0fs", entry.activations,
                          static_cast<double>(now - entry.lastChangeMs) / 1000.0);
-                DrawFirmwareTextLeft(line, pFirmwareFontSmall, rx + columnWidth - 110, ry, recent ? amber : dim);
+                DrawFirmwareTextLeft(line, pFirmwareFontSmall, rx + contentWidth - 100, ry, recent ? amber : dim);
             }
             else
             {
-                DrawFirmwareTextLeft("never", pFirmwareFontSmall, rx + columnWidth - 110, ry, dim);
+                DrawFirmwareTextLeft("never", pFirmwareFontSmall, rx + contentWidth - 100, ry, dim);
             }
         }
         else
         {
-            DrawFirmwareTextLeft(isActive ? "closed" : "open", pFirmwareFontSmall, rx + columnWidth - 110, ry,
+            DrawFirmwareTextLeft(isActive ? "closed" : "open", pFirmwareFontSmall, rx + contentWidth - 100, ry,
                                  isActive ? green : red);
         }
     }
