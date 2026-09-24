@@ -69,7 +69,7 @@ A `slide` node bundle, one node per slide, referenced to the game:
 | `field_image` | image | the photograph |
 | `field_weight` | integer | order, and the filename prefix |
 | `field_duration` | integer | milliseconds this slide is shown |
-| `field_slide_markers` | long text | one `x,y[,number][,pointer]` per line |
+| `field_slide_markers` | long text | a small YAML list, `x` and `y` required |
 | `field_game` | reference | the game it belongs to |
 | published | node status | whether it is exported at all |
 
@@ -159,6 +159,19 @@ slide is authored once but re-marked often. The numbering changes when the rule
 changes, and a shot that needs pointing out this season does not next season --
 and with coordinates that is two numbers in a text field rather than a round
 trip through an image editor and a re-upload.
+
+In the config tool a slide's markers are a small YAML list in a text field:
+
+```yaml
+- x: 0.28
+  y: 0.42
+  number: 1
+  pointer: left
+```
+
+Only `x` and `y` are required, and a marker whose coordinates fall outside 0..1
+is dropped by the exporter rather than written out -- a typo puts a marker
+nowhere, not off the edge of the screen.
 
 A marker is `x,y` in the range 0 to 1 across the *picture*, not the screen, so
 the marking survives being scaled to whatever panel the machine has and stays
