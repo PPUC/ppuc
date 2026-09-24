@@ -3994,6 +3994,22 @@ enum class SlideNav
     Previous,
 };
 
+// Somebody is using the machine.
+//
+// The switch loop calls this for every switch a board reports, which covers a
+// real cabinet: pressing start closes a switch and the slideshow goes away
+// before the ROM has decided anything. Switches injected from the host -- the
+// coin and start keys on a keyboard, and anything else that reaches the engine
+// without passing a board -- never touch that loop, so they say so here. A key
+// that is being turned into a machine switch is somebody at the machine.
+static void NoteMachineActivity()
+{
+    if (g_attractSlides)
+    {
+        g_attractSlides->NoteActivity(SDL_GetTicks());
+    }
+}
+
 // True when the slideshow took the input. Callers use that to decide whether
 // the input was also activity -- because these two buttons are the one thing
 // that is not. Pressing them is somebody reading, not somebody walking up.
@@ -7930,10 +7946,12 @@ int main(int argc, char** argv)
                 break;
               case 53:  // 5
                 // Coin Right on Williams Flash
+                NoteMachineActivity();
                 pEngine->SendSwitch(4, 1);
                 break;
               case 13:  // Enter
                 // Game Start on Williams Flash
+                NoteMachineActivity();
                 pEngine->SendSwitch(3, 1);
                 break;
             }

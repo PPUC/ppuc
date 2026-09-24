@@ -203,6 +203,7 @@ the next export.
 | previous button | back a slide — or start the show, from the first slide |
 | both together | **hold** this slide until pressed again; `HOLD` appears top right |
 | any other switch | out, and the minute starts again |
+| starting a game | out, and it stays out until the game is over |
 
 Those two buttons are the only input that does not end the show: pressing them
 is somebody reading, not somebody walking up. Both start the show at the first

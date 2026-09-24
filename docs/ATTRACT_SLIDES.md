@@ -227,7 +227,16 @@ Stopping: **any switch at all**, except those two buttons. This deliberately
 differs from the ball search, which ignores flipper buttons and the coin door,
 because those are exactly the switches a curious passer-by touches first.
 
-A game starting stops it too, by way of leaving attract mode.
+A game starting stops it twice over, and deliberately so. Pressing start closes
+a switch, which ends the show before the ROM has decided anything; and once the
+ROM does report a game running, attract mode is over and the show cannot come
+back. Either alone would do, but the first is immediate and the second cannot
+be missed.
+
+Switches injected from the host rather than reported by a board -- the coin and
+start keys on a keyboard -- count as activity too. They never pass through the
+switch loop, so they say so themselves: a key that is being turned into a
+machine switch is somebody at the machine.
 
 ## Steering it
 
