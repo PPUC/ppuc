@@ -174,7 +174,9 @@ private:
 constexpr uint32_t kDefaultSwitchRefreshIdleMs = 15000;
 // Exit status after flashing boards: they are rebooting into the new firmware
 // and ppuc-pinmame has to be started again to configure them.
-constexpr int kExitRestartAfterFirmwareUpdate = 75;
+// The launcher script treats this as "start me again", without reporting it as
+// a failure. Used after flashing boards, and by the tools menu's restart.
+constexpr int kExitRestart = 75;
 // How long the check before configuration keeps asking boards that have just
 // been reset. Short on purpose: freshly hard-reset boards on a real machine did
 // not answer at all before they were configured, however long they were
@@ -2466,11 +2468,29 @@ enum class OverlayScreen
     Menu,
     Monitor,
     Volume,
+    Confirm,
+};
+
+// Menu entries that do something rather than open something. Both of these end
+// the session, so neither happens without being asked twice.
+enum class OverlayAction
+{
+    None,
+    RestartPpuc,
+    PowerOff,
 };
 
 static OverlayScreen g_overlay = OverlayScreen::None;
 static int g_menuSelection = 0;
 static int g_volumeSelection = 0;
+static OverlayAction g_pendingAction = OverlayAction::None;
+// The confirmation starts on "No". A menu that ends the game if ENTER is
+// pressed twice by reflex is a menu nobody should open during a game.
+static bool g_confirmYes = false;
+// Set when the machine should go down rather than the program restart. Acted
+// on after everything else has been shut down properly.
+static bool g_powerOffRequested = false;
+static bool g_restartRequested = false;
 
 // Runtime levels, in percent, seeded from ppuc.ini and never written back.
 // This is a knob for a person standing at the machine with a ball in the
@@ -2494,12 +2514,17 @@ struct OverlayMenuItem
     const char* label;
     const char* hint;
     OverlayScreen opens;
+    OverlayAction action;
 };
 
 // Adding a tool is adding a line here and a case in RenderOverlay.
 static const OverlayMenuItem kOverlayMenu[] = {
-    {"Switch and coil monitor", "Live state of every switch and coil", OverlayScreen::Monitor},
-    {"Volume", "Adjust levels for this session only", OverlayScreen::Volume},
+    {"Switch and coil monitor", "Live state of every switch and coil", OverlayScreen::Monitor,
+     OverlayAction::None},
+    {"Volume", "Adjust levels for this session only", OverlayScreen::Volume, OverlayAction::None},
+    {"Restart PPUC", "Stop the game and start it again", OverlayScreen::Confirm, OverlayAction::RestartPpuc},
+    {"Power off", "Shut the machine down before switching it off", OverlayScreen::Confirm,
+     OverlayAction::PowerOff},
 };
 static constexpr int kOverlayMenuCount = static_cast<int>(sizeof(kOverlayMenu) / sizeof(kOverlayMenu[0]));
 
@@ -2897,6 +2922,76 @@ static void CloseOverlay()
                                                                                   : RenderCommand::RENDER_ATTRACT);
 }
 
+static const char* PendingActionLabel()
+{
+    switch (g_pendingAction)
+    {
+        case OverlayAction::RestartPpuc:
+            return "Restart PPUC?";
+        case OverlayAction::PowerOff:
+            return "Power off the machine?";
+        default:
+            return "Are you sure?";
+    }
+}
+
+static void RenderOverlayConfirm(int w, int h)
+{
+    const SDL_Color white{235, 235, 235, 255};
+    const SDL_Color dim{140, 140, 150, 255};
+    const SDL_Color amber{255, 200, 70, 255};
+
+    const SDL_FRect panel = DrawOverlayPanel(w, h, 2, "ARE YOU SURE?");
+
+    DrawFirmwareText(PendingActionLabel(), pFirmwareFontSmall, w / 2, static_cast<int>(panel.y) + 96, white);
+    DrawFirmwareText(g_pendingAction == OverlayAction::PowerOff
+                         ? "The game ends and the machine shuts down."
+                         : "The game ends and PPUC starts again.",
+                     pFirmwareFontSmall, w / 2, static_cast<int>(panel.y) + 136, dim);
+
+    // No on the left, and selected to begin with: the harmless answer is the
+    // one a stray ENTER gives.
+    const int y = static_cast<int>(panel.y) + kOverlayPanelTop + 2 * kOverlayRowHeight - 10;
+    const char* options[2] = {"No", "Yes"};
+    for (int i = 0; i < 2; ++i)
+    {
+        const bool selected = (i == 1) == g_confirmYes;
+        const int x = w / 2 + (i == 0 ? -160 : 40);
+        if (selected)
+        {
+            SDL_SetRenderDrawColor(g_uiRenderer, 58, 62, 80, 255);
+            const SDL_FRect box{static_cast<float>(x) - 16.0f, static_cast<float>(y) - 6.0f, 136.0f, 44.0f};
+            SDL_RenderFillRect(g_uiRenderer, &box);
+        }
+        DrawFirmwareTextLeft(options[i], pFirmwareFontSmall, x, y, selected ? (i == 1 ? amber : white) : dim);
+    }
+
+    DrawFirmwareText("left/right chooses    ENTER confirms    ESC goes back", pFirmwareFontSmall, w / 2,
+                     static_cast<int>(panel.y + panel.h) - 46, dim);
+}
+
+// Both of these end the session. The restart leans on the launcher script,
+// which starts ppuc-pinmame again when it exits with kExitRestart and does not
+// treat it as a failure; the power off is done once everything has been shut
+// down in order, not from inside a menu keystroke.
+static void PerformPendingAction()
+{
+    switch (g_pendingAction)
+    {
+        case OverlayAction::RestartPpuc:
+            printf("PPUC: restart requested from the tools menu\n");
+            g_restartRequested = true;
+            break;
+        case OverlayAction::PowerOff:
+            printf("PPUC: power off requested from the tools menu\n");
+            g_powerOffRequested = true;
+            break;
+        default:
+            return;
+    }
+    running = false;
+}
+
 // True when the key was the overlay's business, so the game bindings below it
 // never see a keystroke meant for a menu.
 static bool HandleOverlayKey(SDL_Keycode key)
@@ -2944,12 +3039,21 @@ static bool HandleOverlayKey(SDL_Keycode key)
                 const int count = static_cast<int>(g_coilMonitorEntries.size());
                 g_coilSelection = (g_coilSelection + delta + count) % count;
             }
+            else if (g_overlay == OverlayScreen::Confirm)
+            {
+                g_confirmYes = !g_confirmYes;
+            }
             return true;
         }
 
         case SDLK_LEFT:
         case SDLK_RIGHT:
         {
+            if (g_overlay == OverlayScreen::Confirm)
+            {
+                g_confirmYes = key == SDLK_RIGHT;
+                return true;
+            }
             if (g_overlay == OverlayScreen::Monitor && !g_coilMonitorEntries.empty())
             {
                 // A column at a time. The list is laid out in columns, so left
@@ -2976,11 +3080,21 @@ static bool HandleOverlayKey(SDL_Keycode key)
         case SDLK_KP_ENTER:
             if (g_overlay == OverlayScreen::Menu)
             {
+                g_pendingAction = kOverlayMenu[g_menuSelection].action;
+                g_confirmYes = false;
                 g_overlay = kOverlayMenu[g_menuSelection].opens;
             }
             else if (g_overlay == OverlayScreen::Monitor)
             {
                 FireSelectedCoil();
+            }
+            else if (g_overlay == OverlayScreen::Confirm)
+            {
+                if (g_confirmYes)
+                {
+                    PerformPendingAction();
+                }
+                g_overlay = OverlayScreen::Menu;
             }
             return true;
 
@@ -3025,6 +3139,10 @@ static void DrawOverlayInto(SDL_Renderer* renderer, int w, int h, bool clearFirs
     else if (g_overlay == OverlayScreen::Volume)
     {
         RenderOverlayVolume(w, h);
+    }
+    else if (g_overlay == OverlayScreen::Confirm)
+    {
+        RenderOverlayConfirm(w, h);
     }
 }
 
@@ -6139,7 +6257,7 @@ int main(int argc, char** argv)
       // Not an error and not a clean finish either: "run me again". A
       // supervisor tells it apart from a failure by this code, so it can
       // restart without reporting a crash. 75 is EX_TEMPFAIL from sysexits.h.
-      return kExitRestartAfterFirmwareUpdate;
+      return kExitRestart;
     }
     printf("Unable to open serial communication to PPUC boards on %s.\n", opt_serial ? opt_serial : "(null)");
     return 1;
@@ -6155,7 +6273,7 @@ int main(int argc, char** argv)
                             opt_allow_firmware_downgrade, opt_allow_unvalidated_firmware_update))
     {
       pPpuc->Disconnect();
-      return kExitRestartAfterFirmwareUpdate;
+      return kExitRestart;
     }
   }
 
@@ -6882,6 +7000,29 @@ int main(int argc, char** argv)
   if (quitSDL)
   {
     SDL_QuitSubSystem(SDL_INIT_AUDIO | SDL_INIT_VIDEO);
+  }
+
+  // Last of all, once the boards, the engine and the display have been shut
+  // down in order. Powering off from inside the keystroke would have cut the
+  // machine off mid-teardown, with a ball possibly still held by a coil.
+  if (g_powerOffRequested)
+  {
+    printf("PPUC: powering off\n");
+    fflush(stdout);
+    sync();
+    if (std::system("poweroff") != 0)
+    {
+      // Busybox on the image provides poweroff; a desktop may not, and a
+      // machine that stays on is a far better outcome than a silent failure.
+      fprintf(stderr, "PPUC: poweroff failed; shut the machine down by hand\n");
+    }
+    return 0;
+  }
+
+  if (g_restartRequested)
+  {
+    printf("PPUC: exiting for a restart\n");
+    return kExitRestart;
   }
 
   return 0;
