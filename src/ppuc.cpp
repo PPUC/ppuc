@@ -2373,7 +2373,6 @@ static void DrawMonitorSection(const char* title, const std::vector<MonitorEntry
     const SDL_Color white{235, 235, 235, 255};
     const SDL_Color dim{120, 120, 130, 255};
     const SDL_Color green{70, 210, 100, 255};
-    const SDL_Color red{225, 70, 70, 255};
     const SDL_Color amber{255, 200, 70, 255};
 
     SDL_SetRenderDrawColor(pTransliteRenderer, background.r, background.g, background.b, 255);
@@ -2439,7 +2438,11 @@ static void DrawMonitorSection(const char* title, const std::vector<MonitorEntry
         // can be spotted from across the room.
         // Beside the word it describes rather than at the start of the row,
         // so the block and the text are read as one thing.
-        const SDL_Color blockColour = isActive ? green : (recent ? amber : (coils ? dim : red));
+        // Grey for inactive, never red. Red on every open switch made a
+        // healthy machine look like a wall of faults, and a wall of faults
+        // hides the one thing being looked for; grey lets the green of a
+        // closed switch be the only thing that carries.
+        const SDL_Color blockColour = isActive ? green : (recent ? amber : dim);
         SDL_SetRenderDrawColor(pTransliteRenderer, blockColour.r, blockColour.g, blockColour.b, 255);
         const SDL_FRect box{static_cast<float>(rx + contentWidth - 128), static_cast<float>(ry) + 6.0f, 16.0f,
                             16.0f};
@@ -2477,7 +2480,7 @@ static void DrawMonitorSection(const char* title, const std::vector<MonitorEntry
         else
         {
             DrawFirmwareTextLeft(isActive ? "closed" : "open", pFirmwareFontSmall, rx + contentWidth - 100, ry,
-                                 isActive ? green : red);
+                                 isActive ? green : dim);
         }
     }
 }
@@ -2545,7 +2548,8 @@ static void RenderSwitchMonitor()
     DrawMonitorSection("SWITCHES", g_switchMonitorEntries, false, 0, top, switchW, sectionH, switchBackground);
     DrawMonitorSection("COILS", g_coilMonitorEntries, true, switchW, top, coilW, sectionH, coilBackground);
 
-    DrawFirmwareText("green = closed / on    red = open    amber = changed in the last 2 s    coils show count and age",
+    DrawFirmwareText("green = closed / on    grey = open / idle    amber = changed in the last 2 s    coils show "
+                     "how often and how long ago",
                      pFirmwareFontSmall, w / 2, h - 36, dim);
 
     SDL_RenderPresent(pTransliteRenderer);
