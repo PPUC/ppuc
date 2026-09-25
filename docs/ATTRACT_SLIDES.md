@@ -250,7 +250,17 @@ that will not go away when a player walks up, is invisible on a bench.
 Starting: attract mode, and no switch has changed for `SlidesIdleMs`. Or one of
 the two navigation buttons, which brings the show up immediately.
 
-Stopping: **any switch at all**, except those two buttons. This deliberately
+Stopping: **a button** -- a flipper button, a coin slot, start, the coin door
+-- except the two navigation buttons.
+
+Only buttons, and that is a correction rather than a preference. A machine in
+attract moves its own ball: the search fires the release, the jets and the
+kickers, and the ball rolls over whatever it rolls over. Treating that as
+somebody walking up meant the show started late, at a different time every
+time, and gave up after two or three slides with nobody near the machine. A
+person arrives at a button.
+
+The old rule was **any switch at all**, except those two buttons. This deliberately
 differs from the ball search, which ignores flipper buttons and the coin door,
 because those are exactly the switches a curious passer-by touches first.
 

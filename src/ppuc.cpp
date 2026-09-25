@@ -453,6 +453,10 @@ bool opt_attract_slides = true;
 // asks about it goes through SlidesVisible(), so the common case -- a game with
 // no slides -- costs one null check per pass.
 static std::unique_ptr<AttractSlides::Show> g_attractSlides;
+// The switches a person can press: flipper buttons, start, coin, the coin
+// door. Filled from the configuration's own `button` flag, the same definition
+// the ball search uses.
+static std::set<int> g_buttonSwitchNumbers;
 uint32_t opt_attract_slides_idle_ms = 60000;
 uint32_t opt_attract_slide_duration_ms = 8000;
 // The two buttons that page through the slides, usually the flipper buttons.
@@ -2702,8 +2706,6 @@ static void DrawMonitorSection(const char* title, const std::vector<MonitorEntry
     }
 
     char line[192];
-    snprintf(line, sizeof(line), "%s -- %zu, %zu %s", title, entries.size(), active, coils ? "on" : "closed");
-    DrawFirmwareTextLeft(line, pFirmwareFontSmall, x + 20, y + 10, white);
 
     if (entries.empty())
     {
@@ -2728,8 +2730,30 @@ static void DrawMonitorSection(const char* title, const std::vector<MonitorEntry
     const int columns =
         std::max(1, std::min(maxColumns, static_cast<int>((entries.size() + static_cast<size_t>(maxRows) - 1) /
                                                           static_cast<size_t>(maxRows))));
-    const int rows = std::max(
-        1, static_cast<int>((entries.size() + static_cast<size_t>(columns) - 1) / static_cast<size_t>(columns)));
+    // Rows are what fits, not what the list needs. Seventy-eight lamps in two
+    // columns is thirty-nine rows in a panel that holds fifteen, and the ones
+    // past the bottom were drawn over the legend and off the screen. What does
+    // not fit is on another page.
+    const int rows = std::max(1, std::min(maxRows, static_cast<int>((entries.size() + static_cast<size_t>(columns) - 1) /
+                                                                    static_cast<size_t>(columns))));
+    const size_t capacity = static_cast<size_t>(rows) * static_cast<size_t>(columns);
+    // The page the cursor is on, so walking the list scrolls it. Without a
+    // cursor -- the switch side -- it is the first page.
+    const size_t first = (selected >= 0 && capacity > 0)
+                             ? (static_cast<size_t>(selected) / capacity) * capacity
+                             : 0;
+    const size_t last = std::min(entries.size(), first + capacity);
+
+    if (entries.size() > capacity)
+    {
+        snprintf(line, sizeof(line), "%s -- %zu, %zu %s   (%zu-%zu)", title, entries.size(), active,
+                 coils ? "on" : "closed", first + 1, last);
+    }
+    else
+    {
+        snprintf(line, sizeof(line), "%s -- %zu, %zu %s", title, entries.size(), active, coils ? "on" : "closed");
+    }
+    DrawFirmwareTextLeft(line, pFirmwareFontSmall, x + 20, y + 10, white);
 
     // A section with one column spreads into whatever width it was given
     // rather than leaving it blank: coil names are the long ones -- "5-Bank
@@ -2748,15 +2772,12 @@ static void DrawMonitorSection(const char* title, const std::vector<MonitorEntry
         g_monitorCoilRows = rows;
     }
 
-    for (size_t i = 0; i < entries.size(); ++i)
+    for (size_t i = first; i < last; ++i)
     {
+        const size_t slot = i - first;
         const MonitorEntry& entry = entries[i];
-        const int col = static_cast<int>(i) / rows;
-        const int row = static_cast<int>(i) % rows;
-        if (col >= columns)
-        {
-            break;  // More than fits; the section is as tall as it is.
-        }
+        const int col = static_cast<int>(slot) / rows;
+        const int row = static_cast<int>(slot) % rows;
         const int rx = x + 16 + col * columnWidth;
         const int ry = top + row * rowH;
 
@@ -2856,7 +2877,9 @@ static void DrawSwitchMonitorInto(int w, int h)
     // fifty switches and twenty coils wants two columns and one, and an even
     // split would waste half the screen on the smaller list.
     const int top = 100;
-    const int bottom = h - 46;
+    // Room for the legend underneath. At h-46 the last row of the table and
+    // the legend were drawn on top of one another.
+    const int bottom = h - 78;
     const int sectionH = bottom - top;
     const int kColumnWidth = 620;
     const int usableRows = std::max(1, (sectionH - 64) / 32);
@@ -2906,7 +2929,7 @@ static void DrawSwitchMonitorInto(int w, int h)
     int legendX = (w - legendWidth) / 2;
     for (const LegendPart& part : legend)
     {
-        DrawFirmwareTextLeft(part.text, pFirmwareFontSmall, legendX, h - 36, part.colour);
+        DrawFirmwareTextLeft(part.text, pFirmwareFontSmall, legendX, h - 44, part.colour);
         legendX += MeasureTextWidth(part.text, pFirmwareFontSmall);
     }
 
@@ -3021,6 +3044,13 @@ static void CloseServiceTest()
         g_pauseEngine(false);
         g_serviceTest.enginePaused = false;
     }
+    // Back to whatever the game is doing: playing if a game is running, silent
+    // if the machine is in attract.
+    if (pAudioOutput != nullptr)
+    {
+        pAudioOutput->SetMusicEnabled(ball_search_game_running.load(std::memory_order_acquire));
+    }
+
     g_serviceTest.steps.clear();
     g_serviceTest.rows.clear();
     printf("PPUC: service test closed\n");
@@ -3071,6 +3101,16 @@ static bool OpenServiceTest(TestKind kind)
             // reason.
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
+    }
+
+    // Music off for the duration.
+    //
+    // It ducks under the game's own sound, and a frozen ROM makes no sound at
+    // all -- so opening a test let the music up to full and it jumped, loudly,
+    // at exactly the moment somebody leaned into the cabinet to watch a coil.
+    if (pAudioOutput != nullptr)
+    {
+        pAudioOutput->SetMusicEnabled(false);
     }
 
     printf("PPUC: %s open, %zu device(s), ROM %s\n", TestDefinitionFor(kind).label, g_serviceTest.steps.size(),
@@ -3183,7 +3223,9 @@ static void DrawServiceTestInto(int w, int h)
     }
 
     const int top = 100;
-    const int bottom = h - 46;
+    // Room for the legend underneath. At h-46 the last row of the table and
+    // the legend were drawn on top of one another.
+    const int bottom = h - 78;
     const SDL_Color panel{18, 18, 22, 255};
 
     if (g_serviceTest.kind == TestKind::Switches)
@@ -3200,7 +3242,7 @@ static void DrawServiceTestInto(int w, int h)
                              ? "ESC leaves.  Press a switch on the machine to see it here."
                              : (g_serviceTest.walking ? "A stops the walk.  ESC leaves."
                                                       : "Cursor keys choose.  ENTER fires.  A walks them all.  ESC leaves.");
-    DrawFirmwareText(legend, pFirmwareFontSmall, w / 2, h - 36, dim);
+    DrawFirmwareText(legend, pFirmwareFontSmall, w / 2, h - 44, dim);
 }
 
 
@@ -3321,12 +3363,50 @@ static void RenderOverlayVolume(int w, int h)
 // translite belongs to the game and is simply asked to draw itself again.
 // Fires the selected coil once. Separate from the key handler so the intent is
 // stated in one place: this is a person at the machine asking for one pulse.
+// High power, raised by the monitor for as long as it is open.
+//
+// A coil command that arrives with the game-on solenoid down is discarded, not
+// deferred -- so in attract, pressing ENTER on a coil did nothing at all, and
+// the coils that are never driven by the ROM (a shaker, flipper fingers) looked
+// broken because nothing else ever fires them either. During a game the power
+// is already up and this stays out of the way.
+static bool g_monitorRaisedGameOn = false;
+static uint64_t g_monitorPowerReadyMs = 0;
+
+static void MonitorReleaseGameOn()
+{
+    if (g_monitorRaisedGameOn && pPpuc != nullptr)
+    {
+        pPpuc->SetSolenoidState(pPpuc->GetGameOnSolenoid(), 0);
+        g_monitorRaisedGameOn = false;
+    }
+    g_monitorPowerReadyMs = 0;
+}
+
 static void FireSelectedCoil()
 {
     if (g_coilMonitorEntries.empty() || pPpuc == nullptr)
     {
         return;
     }
+
+    if (!ball_search_game_running.load(std::memory_order_acquire) && !g_monitorRaisedGameOn)
+    {
+        pPpuc->SetSolenoidState(pPpuc->GetGameOnSolenoid(), 1);
+        g_monitorRaisedGameOn = true;
+        // The power has to reach the boards in an earlier frame than the coil
+        // command, so the first press arms it and the next one fires. Saying so
+        // is better than a press that silently does nothing.
+        g_monitorPowerReadyMs = SDL_GetTicks() + 150;
+        printf("PPUC: monitor raised high power; press again to fire\n");
+        return;
+    }
+    if (g_monitorPowerReadyMs != 0 && SDL_GetTicks() < g_monitorPowerReadyMs)
+    {
+        return;
+    }
+    g_monitorPowerReadyMs = 0;
+
     const int index = std::clamp(g_coilSelection, 0, static_cast<int>(g_coilMonitorEntries.size()) - 1);
     const MonitorEntry& entry = g_coilMonitorEntries[index];
     printf("PPUC: monitor firing coil %d (%s)\n", entry.number, entry.description.c_str());
@@ -3337,6 +3417,7 @@ static void FireSelectedCoil()
 
 static void CloseOverlay()
 {
+    MonitorReleaseGameOn();
     g_overlay = OverlayScreen::None;
     // Drawn into the backglass frame: there is no window to give back, and the
     // next frame the media host presents simply has no overlay in it.
@@ -3545,12 +3626,12 @@ static bool HandleOverlayKey(SDL_Keycode key)
                 CloseServiceTest();
                 g_overlay = OverlayScreen::Tests;
             }
-            else if (g_overlay == OverlayScreen::Tests)
-            {
-                g_overlay = OverlayScreen::Menu;
-            }
             else
             {
+                if (g_overlay == OverlayScreen::Monitor)
+                {
+                    MonitorReleaseGameOn();
+                }
                 g_overlay = OverlayScreen::Menu;
             }
             return true;
@@ -3817,7 +3898,27 @@ static SDL_Texture* SlideTexture(SDL_Renderer* renderer, const AttractSlides::Sl
     }
 
     ReleaseSlideTexture();
-    SDL_Texture* texture = IMG_LoadTexture(renderer, slide.imagePath.c_str());
+
+    // Loaded through a surface and converted, rather than IMG_LoadTexture.
+    //
+    // A photograph has no alpha channel, and what a texture ends up holding in
+    // those bits is up to the backend: on one it is 255, on another it is
+    // whatever was in memory. The panel is drawn with blending off so the
+    // picture replaces what is under it, alpha included -- so a texture that
+    // says "alpha 0" punches a hole through the slide and the backglass shows
+    // through exactly where the photograph should be. Converting to RGBA32
+    // fills the alpha in, on every backend.
+    SDL_Texture* texture = nullptr;
+    if (SDL_Surface* loaded = IMG_Load(slide.imagePath.c_str()))
+    {
+        SDL_Surface* opaque = SDL_ConvertSurface(loaded, SDL_PIXELFORMAT_RGBA32);
+        SDL_DestroySurface(loaded);
+        if (opaque)
+        {
+            texture = SDL_CreateTextureFromSurface(renderer, opaque);
+            SDL_DestroySurface(opaque);
+        }
+    }
     if (!texture)
     {
         // Said once per load rather than per frame, and the slide still shows
@@ -4141,15 +4242,24 @@ static void DrawSlideMarkers(SDL_Renderer* renderer, const AttractSlides::Slide&
             PointerOffset(marker.pointer, &offsetX, &offsetY);
         }
 
-        const float gap =
-            (marker.number > 0 ? art.badgeSize / 2.0f : 0.0f) + 6.0f + g_markerArrowSize * 0.175f * pulse;
+        // The pulse changes the arrow's size, not its place.
+        //
+        // Moving it along its line looked like breathing on a short arrow and
+        // like a slide on a long one -- it walked into the badge it was
+        // pointing at, and out of the lane somebody had drawn it down. The tip
+        // now stays where it was put, a fixed distance clear of the badge, and
+        // the arrow grows and shrinks about that point: it stays inside the
+        // boundary it was given.
+        const float gap = (marker.number > 0 ? art.badgeSize / 2.0f : 0.0f) + 6.0f;
         const float tipX = x + offsetX * gap;
         const float tipY = y + offsetY * gap;
+        const float scale = 0.82f + 0.18f * pulse;
 
         if (arrow)
         {
             SDL_SetTextureAlphaMod(arrow, alpha);
-            const SDL_FRect dst{tipX - arrowSize / 2.0f, tipY - arrowSize / 2.0f, arrowSize, arrowSize};
+            const float drawn = arrowSize * scale;
+            const SDL_FRect dst{tipX - drawn / 2.0f, tipY - drawn / 2.0f, drawn, drawn};
             // Rotated about the texture's own centre, which is where the tip
             // was drawn, so the tip stays exactly on the point whatever the
             // angle.
@@ -8012,6 +8122,16 @@ int main(int argc, char** argv)
   g_interceptorOutputs.sendSwitch = [&pEngine](int number, uint8_t state) { pEngine->SendSwitch(number, state); };
   // What lets a service test freeze the game and give it back afterwards.
   g_pauseEngine = [&pEngine](bool paused) { return pEngine && pEngine->SetPaused(paused); };
+  if (pPpuc != nullptr)
+  {
+    for (const auto& ppucSwitch : pPpuc->GetSwitches())
+    {
+      if (ppucSwitch.button)
+      {
+        g_buttonSwitchNumbers.insert(ppucSwitch.number);
+      }
+    }
+  }
 
   // One definition of "that was a button, not the playfield", shared by the
   // ball search and by any rule that needs to know a player plunged rather
@@ -8157,10 +8277,17 @@ int main(int argc, char** argv)
         // Before any suppression: the screen answers what the machine is
         // doing, not what the engine was told about it.
         NoteSwitchMonitorState(switchState->number, newSwitchState);
-        // The slideshow. The two navigation buttons steer it; every other
-        // switch takes it down, deliberately including the flipper buttons and
-        // the coin door that the ball search ignores, because those are the
-        // first things somebody walking up touches.
+        // The slideshow. The two navigation buttons steer it; the other
+        // buttons take it down.
+        //
+        // Only buttons. A machine in attract moves its own ball -- the ball
+        // search fires the release, the jets and the kickers, and the ball
+        // rolls over whatever it rolls over -- and treating that as somebody
+        // walking up meant the show started late, at a different time every
+        // time, and gave up after two or three slides. Nobody was touching the
+        // machine; the machine was touching itself. A person arrives at a
+        // flipper button, a coin slot or the start button, and those are
+        // exactly the switches the configuration marks as buttons.
         if (g_attractSlides)
         {
           bool steered = false;
@@ -8185,7 +8312,7 @@ int main(int argc, char** argv)
               steered = true;
             }
           }
-          if (!steered)
+          if (!steered && g_buttonSwitchNumbers.count(switchState->number) != 0)
           {
             g_attractSlides->NoteActivity(SDL_GetTicks());
           }
