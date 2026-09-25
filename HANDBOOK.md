@@ -248,7 +248,16 @@ for its position in the loop, and an optional duration.
 appear on the machine, which is also how you keep a set of slides for a show and
 put them away afterwards without moving any files.
 
-To point at something in the photograph, fill in the markers field:
+To point at something in the photograph, **draw on it**. The slide form shows
+the slide's own photograph above the markers field: drag along a shot, from
+where the ball starts to where it ends, or click to mark a spot. The field
+underneath fills in as you draw, and the usual Save button saves it.
+
+The photograph has to be uploaded and the slide saved once before there is
+anything to draw on; until then the form says so.
+
+The field is still just text, so a marker can be typed instead, and anything
+typed is picked up by the drawing the moment you click out of the box:
 
 ```yaml
 - x: 0.28
