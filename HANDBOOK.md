@@ -267,9 +267,15 @@ a fault in its own right.
 ### Writing slides
 
 In the config tool, on the game's **All Slides** tab. It lists every slide of
-the game in the order they play, published or not, with *Add Slide* on the same
-page and the usual bulk operations — so a set of slides can be published or put
-away together without opening each one.
+the game in the order they play, published or not. Tick several and use
+*Publish* or *Unpublish* to put a set of slides on the machine, or away, without
+opening each one — that is how a set of slides for a show is kept ready and
+retired afterwards.
+
+*Add Slide* and *Reorder Slides* are on the same page. Reordering is drag and
+drop: pull the rows into the order the slides should play and save. The order
+is the slide's weight, which is also the number its exported filename starts
+with, so dragging a row renames a file in the game folder.
 
 Each slide has a title, a line or two of text, an optional photograph, a weight
 for its position in the loop, and an optional duration.
