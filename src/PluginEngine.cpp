@@ -769,16 +769,25 @@ void PluginEngine::SendSwitch(int number, uint8_t state)
     return;
   }
   const int sw = (number < 241) ? number : 240 - number;
-  auto it = m_switchesByNumber.find(sw);
-  if (it == m_switchesByNumber.end())
-  {
-    return;
-  }
   const uint8_t value = state == 0 ? 0 : 1;
   // The ledger records what the engine was told, not what the machine is
   // doing. A switch the rules deliberately keep from the ROM stays kept from
   // it: the audit repeats this, and never contradicts a decision made above.
+  //
+  // Written before the accessor is looked up, and deliberately so. The boards
+  // report their switches as soon as the bus is up, which is before the plugin
+  // has announced its mappings; a state dropped here would never be reported
+  // again, because libppuc only reports changes. Remembering it means the audit
+  // applies it the moment the mappings arrive -- and the audit runs at once
+  // after a mappings change, so nothing waits a second for it.
   m_sentSwitchValues[sw] = value;
+  auto it = m_switchesByNumber.find(sw);
+  if (it == m_switchesByNumber.end())
+  {
+    m_unsentSwitches.insert(sw);
+    return;
+  }
+  m_unsentSwitches.erase(sw);
   it->second.Set(it->second.context, &value);
 }
 
@@ -793,7 +802,8 @@ void PluginEngine::AuditSwitches()
       continue;
     }
 
-    if (it->second.Get != nullptr)
+    const bool neverSent = m_unsentSwitches.erase(number) != 0;
+    if (!neverSent && it->second.Get != nullptr)
     {
       // Compared before writing, so the ordinary case costs a read and
       // nothing else. Nothing is re-sent that the engine already agrees

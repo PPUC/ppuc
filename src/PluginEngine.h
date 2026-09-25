@@ -6,6 +6,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "GameEngine.h"
@@ -144,6 +145,11 @@ class PluginEngine final : public GameEngine
   // switch bitmap even when nothing has changed. This is the same idea one
   // level up.
   std::unordered_map<int, uint8_t> m_sentSwitchValues;
+  // Switches the ledger holds that the engine has never been told, because
+  // there was no accessor for them yet. The audit delivers these quietly: the
+  // engine is not disagreeing with us, it simply has not heard us, and counting
+  // that as a correction would bury the divergences worth reading about.
+  std::unordered_set<int> m_unsentSwitches;
   uint64_t m_nextSwitchAuditMs = 0;
   uint32_t m_switchCorrections = 0;
   void AuditSwitches();

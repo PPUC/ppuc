@@ -8514,36 +8514,20 @@ int main(int argc, char** argv)
         loggedIdentity = true;
       }
 
-      // Runs in both loop phases, before the readiness gate: the engine has its
-      // own startup work (identity, tracking-map load) that must proceed while
-      // the host is still waiting for it to come up.
-      pEngine->Update();
-      // The DMD is sampled in here, which means a plugin's GetRenderFrame is
-      // called from this loop -- the first place to look when it stalls.
-      stallWatch.Phase("engine");
-
-      if (!pEngine->IsReady())
-      {
-        if (pLuaRulesEngine)
-        {
-          pLuaRulesEngine->Update();
-          if (pLuaRulesEngine->HasFatalError())
-          {
-            printf("Lua rules error: %s\n", pLuaRulesEngine->GetFatalError().c_str());
-            running = false;
-          }
-        }
-        g_interceptorOutputs.Service(pPpuc);
-        if (pMediaPluginHost != nullptr)
-        {
-          if (pPluginBus) pPluginBus->Process();
-          if (pPluginBus) pPluginBus->Process();
-        pMediaPluginHost->Process();
-        }
-        stallWatch.Phase("starting");
-        continue;
-      }
-
+      // Drained before the readiness gate, and that is the whole point.
+      //
+      // The boards report their switches as soon as the bus is up; the ROM
+      // takes seconds to boot. Held behind the gate, the whole backlog used to
+      // arrive in one iteration *after* the ROM had already started from an
+      // all-open matrix -- so every switch that was simply closed at power-on
+      // reached it as a fresh edge. A drop target left down became a target
+      // hit, with the award lit for real, and the machine only agreed with
+      // itself again once the first game reset the bank. That is why the first
+      // game after a restart looked confused and the second one did not.
+      //
+      // On a real machine a switch is closed from the instant power comes up.
+      // Forwarding it straight away is what reproduces that: the state is the
+      // ROM's starting position, not something the player did.
       PPUCSwitchState* switchState;
       while ((switchState = pPpuc->GetNextSwitchState()) != nullptr)
       {
@@ -8644,6 +8628,36 @@ int main(int argc, char** argv)
                               ball_search_game_running.load(std::memory_order_acquire),
                               opt_ball_search_delay_ms, opt_ball_search_round_delay_ms);
       stallWatch.Phase("switches");
+
+      // Runs in both loop phases, before the readiness gate: the engine has its
+      // own startup work (identity, tracking-map load) that must proceed while
+      // the host is still waiting for it to come up.
+      pEngine->Update();
+      // The DMD is sampled in here, which means a plugin's GetRenderFrame is
+      // called from this loop -- the first place to look when it stalls.
+      stallWatch.Phase("engine");
+
+      if (!pEngine->IsReady())
+      {
+        if (pLuaRulesEngine)
+        {
+          pLuaRulesEngine->Update();
+          if (pLuaRulesEngine->HasFatalError())
+          {
+            printf("Lua rules error: %s\n", pLuaRulesEngine->GetFatalError().c_str());
+            running = false;
+          }
+        }
+        g_interceptorOutputs.Service(pPpuc);
+        if (pMediaPluginHost != nullptr)
+        {
+          if (pPluginBus) pPluginBus->Process();
+          if (pPluginBus) pPluginBus->Process();
+          pMediaPluginHost->Process();
+        }
+        stallWatch.Phase("starting");
+        continue;
+      }
 
       pEngine->PollChangedLamps(lampChanges);
       for (const GameEngineOutputChange& change : lampChanges)

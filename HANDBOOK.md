@@ -447,6 +447,15 @@ machine with a B2S or PUP pack, check you did not also configure a translite.
 than in the file — the file is only what the machine started with, and somebody
 may have turned something down during the last show.
 
+**The first game after a restart behaves oddly.** Fixed — but worth knowing what
+it was. The boards report their switches as soon as the bus is up, seconds before
+the ROM has finished booting, and those reports used to be held until it had.
+The whole backlog then arrived at once, after the ROM had already started from an
+all-open switch matrix, so every switch that happened to be closed at power-on
+looked like a fresh hit: a drop target left down scored itself, with the award
+lit for real. The machine only agreed with itself again once the first game reset
+the bank, which is why the second game was always fine.
+
 **The slideshow never appears.** It needs attract mode, a `slides/` directory
 with at least one *published* slide, and a full minute of nothing happening —
 and the ball search running is not "nothing happening". Press a flipper button
