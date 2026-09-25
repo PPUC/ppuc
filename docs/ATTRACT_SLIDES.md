@@ -54,9 +54,20 @@ slides:
     durationMs: 8000
 ```
 
-Filenames carry their order the way rule files do — `%04d-` from the slide's
-weight, then a slug of its title — so the folder reads in the order the slides
-play, and a slide can be identified in a log by name.
+A photograph is written **once**, however many slides use it, and named after
+the file rather than after a slide. Ten of Flash's slides point at the same
+playfield photograph — which is the whole reason markers are coordinates, one
+picture re-marked — and exporting it once per slide would have thrown that away
+again: ten copies of the same 800KB in the folder, in the archive, and over the
+wire. Drupal already knows it is one file, so the export says so too.
+
+Naming a shared picture after one of its slides would read as a mistake in the
+folder even though it is not, so `playfield.jpg` stays `playfield.jpg`. Two
+files that happen to share a name get a numeric suffix rather than overwriting
+one another.
+
+Rule files still carry their order in their names. Slides do not need it: the
+order is in `slides.yaml`, and the pictures are not one per slide.
 
 ## In the config tool
 
