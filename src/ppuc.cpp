@@ -6279,6 +6279,12 @@ struct PpucEngineHost final : GameEngineHost
 
   void OnCurrentBallChanged(uint8_t ball) override
   {
+    // Logged always, not under --debug. A few lines a game, and they are the
+    // answer to the hardest question a rule can ask: rules keyed on the ball or
+    // the player are the ones that fail silently, because a handler whose
+    // conditions are all false looks exactly like a handler that is never
+    // called. Nothing else in the log distinguishes the two.
+    printf("Ball: %u\n", static_cast<unsigned>(ball));
     if (pLuaRulesEngine)
     {
       pLuaRulesEngine->SetCurrentBall(ball);
@@ -6301,6 +6307,7 @@ struct PpucEngineHost final : GameEngineHost
 
   void OnCurrentPlayerChanged(uint8_t player) override
   {
+    printf("Player: %u\n", static_cast<unsigned>(player));
     if (pLuaRulesEngine)
     {
       pLuaRulesEngine->SetCurrentPlayer(player);

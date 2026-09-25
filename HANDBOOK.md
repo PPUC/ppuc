@@ -447,6 +447,22 @@ machine with a B2S or PUP pack, check you did not also configure a translite.
 than in the file — the file is only what the machine started with, and somebody
 may have turned something down during the last show.
 
+**A rule on the ball number never runs.** `onBallChanged` and `onPlayerChanged`
+do not come from the machine — they are decoded out of the ROM's own memory
+using the community NVRAM map for that ROM. A game nobody has mapped has no
+ball number, so those handlers never fire, per-ball tilt warnings do not reset
+and ball save does not arm. The startup log says which it is:
+
+```
+Ball and player tracking: maps/williams/system6/flash_l1.map.json
+Ball and player tracking unavailable for xyz_l1: no nvram map found for ROM xyz_l1
+```
+
+**A rule on a coil never runs.** `onCoilChanged` fires for coils the *ROM*
+drives. A shaker, a motor, the flipper power coils and anything else that exists
+only in `io-boards.yaml` is never driven by a 1978 ROM, so nothing ever changes
+for a rule to hear. Drive those from a rule, or from a switch.
+
 **The first game after a restart behaves oddly.** Fixed — but worth knowing what
 it was. The boards report their switches as soon as the bus is up, seconds before
 the ROM has finished booting, and those reports used to be held until it had.

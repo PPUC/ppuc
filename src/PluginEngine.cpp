@@ -1055,13 +1055,28 @@ void PluginEngine::PollTrackedState()
   {
     m_triedLoadingTracking = true;
     std::string trackingError;
-    // A ROM nobody has mapped is a normal outcome, not a failure.
-    if (!TryLoadPinmameTrackingConfig(m_identity.name.c_str(), m_identity.hardwareGen,
-                                      m_options.pinmamePath.empty() ? nullptr : m_options.pinmamePath.c_str(),
-                                      &m_tracking, &trackingError) &&
-        m_options.debug)
+    // A ROM nobody has mapped is a normal outcome, not a failure -- but it is
+    // reported either way, and not only under --debug.
+    //
+    // Ball and player numbers are what onBallChanged, onPlayerChanged, the
+    // per-ball reset of tilt warnings and ball-save arming are all built on. A
+    // ROM with no map has none of them, and used to say so only to somebody who
+    // had already guessed to turn debugging on: from the outside a rule that
+    // never fires looks like a broken rule rather than a game the map does not
+    // cover. One line at startup is the difference between a mystery and a fact.
+    const bool tracking = TryLoadPinmameTrackingConfig(
+        m_identity.name.c_str(), m_identity.hardwareGen,
+        m_options.pinmamePath.empty() ? nullptr : m_options.pinmamePath.c_str(), &m_tracking, &trackingError);
+    if (tracking)
     {
-      std::printf("PluginEngine: no NVRAM map for %s: %s\n", m_identity.name.c_str(), trackingError.c_str());
+      std::printf("Ball and player tracking: %s\n", m_tracking.mapPath.c_str());
+    }
+    else
+    {
+      std::printf(
+          "Ball and player tracking unavailable for %s: %s\n"
+          "  onBallChanged and onPlayerChanged will not fire, and per-ball tilt warnings and ball save are off.\n",
+          m_identity.name.c_str(), trackingError.c_str());
     }
   }
   if (!m_tracking.loaded)
@@ -1091,20 +1106,68 @@ void PluginEngine::PollTrackedState()
   };
 
   uint8_t ball = 0;
-  if (TryDecodeTrackedPinmameValue(m_tracking.currentBall, read, &ball) && (!m_hasLastBall || ball != m_lastBall))
+  if (TryDecodeTrackedPinmameValue(m_tracking.currentBall, read, &ball))
   {
-    m_hasLastBall = true;
-    m_lastBall = ball;
-    m_pHost->OnCurrentBallChanged(ball);
+    m_undecodableBall = false;
+    if (!m_hasLastBall || ball != m_lastBall)
+    {
+      m_hasLastBall = true;
+      m_lastBall = ball;
+      m_pHost->OnCurrentBallChanged(ball);
+    }
   }
+  else
+  {
+    ReportUndecodableTrackedField("ball", m_tracking.currentBall, read, m_undecodableBall);
+  }
+
   uint8_t player = 0;
-  if (TryDecodeTrackedPinmameValue(m_tracking.currentPlayer, read, &player) &&
-      (!m_hasLastPlayer || player != m_lastPlayer))
+  if (TryDecodeTrackedPinmameValue(m_tracking.currentPlayer, read, &player))
   {
-    m_hasLastPlayer = true;
-    m_lastPlayer = player;
-    m_pHost->OnCurrentPlayerChanged(player);
+    m_undecodablePlayer = false;
+    if (!m_hasLastPlayer || player != m_lastPlayer)
+    {
+      m_hasLastPlayer = true;
+      m_lastPlayer = player;
+      m_pHost->OnCurrentPlayerChanged(player);
+    }
   }
+  else
+  {
+    ReportUndecodableTrackedField("player", m_tracking.currentPlayer, read, m_undecodablePlayer);
+  }
+}
+
+// A mapped field the ROM's memory does not answer for.
+//
+// The decoder refuses a byte whose nibbles are not valid BCD, which is the right
+// answer -- 0xFF is not ball 255 -- but refusing silently means currentBall()
+// simply stays 0, and a rule keyed on it never fires with nothing anywhere
+// saying why. Uninitialised RAM reads 0xFF, so this is what a ROM that did not
+// start cleanly looks like from the outside.
+//
+// Reported once per spell, not once per poll: the poll runs several times a
+// second and a stuck field would otherwise fill the log.
+void PluginEngine::ReportUndecodableTrackedField(const char* what, const PinmameTrackedField& field,
+                                                 const PinmameByteReader& read, bool& alreadyReported)
+{
+  if (alreadyReported || !field.available)
+  {
+    return;
+  }
+  alreadyReported = true;
+
+  uint8_t raw = 0;
+  if (!read(field.address, &raw))
+  {
+    std::printf("Tracking: cannot read the %s at 0x%02X; PinMAME did not answer the memory read.\n", what,
+                static_cast<unsigned>(field.address));
+    return;
+  }
+  std::printf(
+      "Tracking: the %s at 0x%02X reads 0x%02X, which does not decode; currentBall()/currentPlayer() stay 0 and rules\n"
+      "  keyed on them cannot fire. Uninitialised or disturbed ROM memory reads like this.\n",
+      what, static_cast<unsigned>(field.address), static_cast<unsigned>(raw));
 }
 
 void PluginEngine::Update()

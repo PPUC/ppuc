@@ -45,9 +45,12 @@ static std::filesystem::path GetExecutableDirectory()
     return std::filesystem::current_path();
   }
 
-  std::filesystem::path path(basePath);
-  SDL_free(const_cast<char*>(basePath));
-  return path;
+  // Not freed. SDL2 handed back a string the caller owned; SDL3 returns one SDL
+  // caches and keeps, so freeing it hands SDL's own pointer to the allocator and
+  // leaves every later caller holding freed memory. Three other places in this
+  // codebase call SDL_GetBasePath and none of them free it -- this one was the
+  // odd one out.
+  return std::filesystem::path(basePath);
 }
 
 static std::filesystem::path GetPinmameBaseDirectory(const char* pinmamePath)

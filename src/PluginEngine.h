@@ -111,6 +111,8 @@ class PluginEngine final : public GameEngine
   void PollThreadMain();
   void SampleOutputs();
   void PollTrackedState();
+  void ReportUndecodableTrackedField(const char* what, const PinmameTrackedField& field, const PinmameByteReader& read,
+                                     bool& alreadyReported);
 
   PluginBus& m_bus;
   Options m_options;
@@ -191,6 +193,11 @@ class PluginEngine final : public GameEngine
   uint8_t m_lastPlayer = 0;
   bool m_hasLastBall = false;
   bool m_hasLastPlayer = false;
+  // Whether the "this field does not decode" line has already been printed for
+  // the current spell. Cleared as soon as the field decodes again, so a ROM that
+  // recovers says so the next time it stops.
+  bool m_undecodableBall = false;
+  bool m_undecodablePlayer = false;
 
   struct Impl;
   std::unique_ptr<Impl> m_impl;
