@@ -260,8 +260,13 @@ To point at something in the photograph, fill in the markers field:
 `x` and `y` run from 0 to 1 across the *picture*, not the screen, so a marking
 survives being scaled to whatever panel the machine has. `number` draws a badge
 on the point — leave it out for a plain arrow. `pointer` is the side the arrow
-comes in from: `left`, `right`, `above` or `below`, so it never covers what it
-points at.
+comes in from, so it never covers what it points at: `left`, `right`, `above`,
+`below`, or one of the four diagonals `above-left`, `above-right`,
+`below-left`, `below-right`.
+
+Use a diagonal to show the line of a shot rather than just the spot. An arrow
+from `below-left` is a ball off the left flipper; one from `above` is a ball
+draining into an outlane.
 
 The markers pulse one after another, because *"the left standup (1), then the
 eject hole (2)"* only works if the eye is led from one to the next.

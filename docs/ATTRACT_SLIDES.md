@@ -296,8 +296,19 @@ A marker is `x,y` in the range 0 to 1 across the *picture*, not the screen, so
 the marking survives being scaled to whatever panel the machine has and stays
 on target on a letterboxed portrait photograph. Optionally a number, which
 draws a badge on the point, and a side for the arrow to come in from --
-`left`, `right`, `above` or `below` -- so the arrow never covers what it
+`left`, `right`, `above`, `below`, or one of the four diagonals `above-left`,
+`above-right`, `below-left`, `below-right` -- so the arrow never covers what it
 points at.
+
+The diagonals are not decoration. An arrow coming in from the lower left is the
+line a ball takes off the left flipper, and one coming straight down is a ball
+draining into an outlane. Four directions can only say "this thing here";
+eight can say how you get to it. One arrow is drawn and rotated at blit time,
+so an angle costs nothing and there is one arrow texture per slide rather than
+one per marker.
+
+A pointer the exporter does not recognise is dropped rather than written out,
+and the machine falls back to an arrow from the left.
 
 The markers pulse one after another rather than together. The numbers are there
 to be read in order, and "the left standup (1), then the eject hole (2)" only
