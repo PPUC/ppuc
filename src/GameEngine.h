@@ -177,6 +177,14 @@ class GameEngine
   // IsReady() turns true.
   virtual void Update() = 0;
 
+  // Freezes the game where it stands, and lets it go again.
+  //
+  // For the service tests: with the ROM stopped, a coil can be fired or a lamp
+  // lit without the game fighting for the same board, and the ball that was in
+  // play is still in play when it is let go. An engine that cannot do it
+  // answers false and the caller does without.
+  virtual bool SetPaused(bool /*paused*/) { return false; }
+
   // PULL, once per host tick. PinMAME exposes lamps and GI only as "what
   // changed since you last asked", so a pull keeps that call inside the host's
   // existing cadence instead of inventing a second one; and lamps are not

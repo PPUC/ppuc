@@ -66,6 +66,7 @@ class PluginEngine final : public GameEngine
   bool IsReady() const override;
   bool TryGetIdentity(Identity* pIdentity) const override;
   void Update() override;
+  bool SetPaused(bool paused) override;
   void PollChangedLamps(std::vector<GameEngineOutputChange>& changes) override;
   void PollChangedGis(std::vector<GameEngineOutputChange>& changes) override;
   void SendSwitch(int number, uint8_t state) override;

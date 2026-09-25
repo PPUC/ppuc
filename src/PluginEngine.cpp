@@ -716,6 +716,33 @@ void PluginEngine::SampleSegments()
 // coming on over and over, without ever going off: rules that act when a lamp
 // lights fired repeatedly, and the same false changes reached the media host
 // and the boards.
+bool PluginEngine::SetPaused(bool paused)
+{
+  if (!m_started || !m_controller.IsValid())
+  {
+    return false;
+  }
+  // VPinMAME.Controller exposes Pause as a read/write property, which reaches
+  // PinmamePause underneath: the emulation stops where it is rather than being
+  // starved of input, so the ball in play is still in play afterwards.
+  ScriptVariant arg{};
+  arg.vBool = paused ? 1 : 0;
+  if (!m_controller.Call("Pause", {"bool"}, &arg))
+  {
+    return false;
+  }
+
+  // Read it back. A property that took the call but did not take the value
+  // would leave the tests firing coils into a running game, which is the one
+  // outcome worth being sure about.
+  ScriptVariant state{};
+  if (m_controller.Call("Pause", {}, nullptr, &state))
+  {
+    return (state.vBool != 0) == paused;
+  }
+  return true;
+}
+
 void PluginEngine::PollChangedLamps(std::vector<GameEngineOutputChange>& changes)
 {
   changes.clear();

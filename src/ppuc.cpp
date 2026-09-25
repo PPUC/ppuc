@@ -2012,6 +2012,8 @@ enum class OverlayScreen
     Monitor,
     Volume,
     Confirm,
+    Tests,
+    Test,
 };
 
 static OverlayScreen g_overlay = OverlayScreen::None;
@@ -2588,6 +2590,43 @@ static void RenderFirmwareScreen(double progress)
 }
 
 
+// The service tests, on the backbox screen.
+//
+// The bench tests have always existed, but only as start-up modes with a
+// console: useful at a desk with a laptop wired to the playfield, useless at a
+// machine in a cabinet with a game running. These are the same tests reached
+// from the tools menu, drawn on the screen the machine already has, with the
+// ROM frozen for the duration so the game can be picked up again afterwards.
+enum class TestKind
+{
+    Switches,
+    Coils,
+    Lamps,
+    Gi,
+    Flashers,
+};
+
+struct TestDefinition
+{
+    TestKind kind;
+    const char* label;
+    const char* hint;
+    // Coils and flashers throw a ball; lamps and GI cannot. Only the first
+    // kind asks before opening while a game is in progress.
+    bool throwsBall;
+};
+
+static const TestDefinition kServiceTests[] = {
+    {TestKind::Switches, "Switch test", "Every switch, live, as you press them", false},
+    {TestKind::Coils, "Coil test", "Fire one coil, or walk them all", true},
+    {TestKind::Lamps, "Lamp test", "Light one lamp, or walk them all", false},
+    {TestKind::Gi, "GI test", "General illumination strings", false},
+    {TestKind::Flashers, "Flasher test", "Fire one flasher, or walk them all", true},
+};
+static constexpr int kServiceTestCount = static_cast<int>(sizeof(kServiceTests) / sizeof(kServiceTests[0]));
+static int g_testsSelection = 0;
+static int g_pendingTestIndex = -1;
+
 // Menu entries that do something rather than open something. Both of these end
 // the session, so neither happens without being asked twice.
 enum class OverlayAction
@@ -2595,6 +2634,9 @@ enum class OverlayAction
     None,
     RestartPpuc,
     PowerOff,
+    // Opening a coil or flasher test while a ball is in play. The confirmation
+    // is the same one the two destructive entries use.
+    OpenTest,
 };
 
 static int g_menuSelection = 0;
@@ -2628,6 +2670,7 @@ static const OverlayMenuItem kOverlayMenu[] = {
     {"Switch and coil monitor", "Live state of every switch and coil", OverlayScreen::Monitor,
      OverlayAction::None},
     {"Volume", "Adjust levels for this session only", OverlayScreen::Volume, OverlayAction::None},
+    {"Tests", "Switches, coils, lamps, GI and flashers", OverlayScreen::Tests, OverlayAction::None},
     {"Restart PPUC", "Stop the game and start it again", OverlayScreen::Confirm, OverlayAction::RestartPpuc},
     {"Power off", "Shut the machine down before switching it off", OverlayScreen::Confirm,
      OverlayAction::PowerOff},
@@ -2869,6 +2912,298 @@ static void DrawSwitchMonitorInto(int w, int h)
 
 }
 
+// The test that is open, and what it is driving.
+//
+// One screen serves all five: what differs is which devices it lists and
+// whether firing one pulses it or holds it on. A coil test that looked
+// different from a lamp test would be two things to learn instead of one.
+struct ServiceTest
+{
+    TestKind kind = TestKind::Coils;
+    std::vector<BenchOutputStep> steps;
+    std::vector<MonitorEntry> rows;
+    int selection = 0;
+    bool walking = false;
+    size_t walkIndex = 0;
+    bool walkOutputOn = false;
+    uint64_t walkNextMs = 0;
+    bool enginePaused = false;
+    bool gameOnRaised = false;
+};
+static ServiceTest g_serviceTest;
+
+// Set once the engine exists. Returns false when this engine cannot be frozen,
+// which is not fatal -- the test still runs, and the screen says so rather than
+// letting somebody believe the game is safe.
+static std::function<bool(bool)> g_pauseEngine;
+
+static const TestDefinition& TestDefinitionFor(TestKind kind)
+{
+    for (const TestDefinition& definition : kServiceTests)
+    {
+        if (definition.kind == kind)
+        {
+            return definition;
+        }
+    }
+    return kServiceTests[0];
+}
+
+static BenchTestMode BenchModeFor(TestKind kind)
+{
+    switch (kind)
+    {
+        case TestKind::Coils:
+            return BenchTestMode::COILS;
+        case TestKind::Lamps:
+            return BenchTestMode::LAMPS;
+        case TestKind::Gi:
+            return BenchTestMode::GI;
+        case TestKind::Flashers:
+            return BenchTestMode::FLASHERS;
+        case TestKind::Switches:
+            break;
+    }
+    return BenchTestMode::SWITCHES;
+}
+
+// A coil fires and is done; a lamp stays lit until it is turned off. Pressing
+// ENTER should do the thing the device does.
+static bool TestOutputIsMomentary(TestKind kind)
+{
+    return kind == TestKind::Coils || kind == TestKind::Flashers;
+}
+
+static void SetTestOutput(size_t index, bool on)
+{
+    if (pPpuc == nullptr || index >= g_serviceTest.steps.size())
+    {
+        return;
+    }
+    ApplyBenchOutput(pPpuc, g_serviceTest.steps[index], on);
+    if (index < g_serviceTest.rows.size())
+    {
+        MonitorEntry& row = g_serviceTest.rows[index];
+        row.state = on ? 1 : 0;
+        row.lastChangeMs = SDL_GetTicks();
+        if (on)
+        {
+            row.lastActivationMs = row.lastChangeMs;
+            row.activations++;
+        }
+    }
+}
+
+static void AllTestOutputsOff()
+{
+    for (size_t i = 0; i < g_serviceTest.steps.size(); ++i)
+    {
+        if (g_serviceTest.rows.size() > i && g_serviceTest.rows[i].state == 0)
+        {
+            continue;
+        }
+        SetTestOutput(i, false);
+    }
+}
+
+static void CloseServiceTest()
+{
+    AllTestOutputsOff();
+    g_serviceTest.walking = false;
+
+    if (g_serviceTest.gameOnRaised && pPpuc != nullptr)
+    {
+        pPpuc->SetSolenoidState(pPpuc->GetGameOnSolenoid(), 0);
+        g_serviceTest.gameOnRaised = false;
+    }
+    if (g_serviceTest.enginePaused && g_pauseEngine)
+    {
+        g_pauseEngine(false);
+        g_serviceTest.enginePaused = false;
+    }
+    g_serviceTest.steps.clear();
+    g_serviceTest.rows.clear();
+    printf("PPUC: service test closed\n");
+}
+
+static bool OpenServiceTest(TestKind kind)
+{
+    if (pPpuc == nullptr)
+    {
+        return false;
+    }
+
+    g_serviceTest = ServiceTest{};
+    g_serviceTest.kind = kind;
+
+    // Frozen first, before a single output is touched: a half-built test with
+    // the game still driving the same boards is the one state worth avoiding.
+    if (g_pauseEngine)
+    {
+        g_serviceTest.enginePaused = g_pauseEngine(true);
+    }
+
+    if (kind != TestKind::Switches)
+    {
+        BenchTestRunner runner = CreateBenchTestRunner(pPpuc, BenchModeFor(kind), 0);
+        g_serviceTest.steps = runner.steps;
+        g_serviceTest.rows.reserve(runner.steps.size());
+        for (const BenchOutputStep& step : runner.steps)
+        {
+            MonitorEntry row;
+            row.number = step.number;
+            row.board = step.board;
+            row.port = step.port;
+            row.description = step.description;
+            g_serviceTest.rows.push_back(row);
+        }
+
+        // Coils and flashers need high power. During a game it is already up,
+        // and raising it again would be harmless but lowering it afterwards
+        // would not -- so remember whether this was ours to raise.
+        if (TestOutputIsMomentary(kind) && !ball_search_game_running.load(std::memory_order_acquire))
+        {
+            pPpuc->SetSolenoidState(pPpuc->GetGameOnSolenoid(), 1);
+            g_serviceTest.gameOnRaised = true;
+            // A coil command that arrives before the power does is discarded,
+            // not deferred, so the first fire would be the one that goes
+            // missing. The bench test has always waited here for the same
+            // reason.
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+    }
+
+    printf("PPUC: %s open, %zu device(s), ROM %s\n", TestDefinitionFor(kind).label, g_serviceTest.steps.size(),
+           g_serviceTest.enginePaused ? "paused" : "NOT paused");
+    return true;
+}
+
+// The automatic walk: on for the step's own duration, off for its gap, next.
+static void ServiceTestWalk(uint64_t nowMs)
+{
+    if (!g_serviceTest.walking || g_serviceTest.steps.empty() || nowMs < g_serviceTest.walkNextMs)
+    {
+        return;
+    }
+
+    if (g_serviceTest.walkOutputOn)
+    {
+        SetTestOutput(g_serviceTest.walkIndex, false);
+        g_serviceTest.walkOutputOn = false;
+        g_serviceTest.walkNextMs = nowMs + static_cast<uint64_t>(
+                                               std::max(1, g_serviceTest.steps[g_serviceTest.walkIndex].offDurationMs));
+        g_serviceTest.walkIndex = (g_serviceTest.walkIndex + 1) % g_serviceTest.steps.size();
+        return;
+    }
+
+    g_serviceTest.selection = static_cast<int>(g_serviceTest.walkIndex);
+    SetTestOutput(g_serviceTest.walkIndex, true);
+    g_serviceTest.walkOutputOn = true;
+    g_serviceTest.walkNextMs =
+        nowMs + static_cast<uint64_t>(std::max(1, g_serviceTest.steps[g_serviceTest.walkIndex].onDurationMs));
+}
+
+static void ToggleServiceTestWalk()
+{
+    if (g_serviceTest.steps.empty())
+    {
+        return;
+    }
+    g_serviceTest.walking = !g_serviceTest.walking;
+    if (g_serviceTest.walking)
+    {
+        AllTestOutputsOff();
+        g_serviceTest.walkIndex = static_cast<size_t>(std::max(0, g_serviceTest.selection));
+        g_serviceTest.walkOutputOn = false;
+        g_serviceTest.walkNextMs = SDL_GetTicks();
+    }
+    else
+    {
+        AllTestOutputsOff();
+    }
+}
+
+// ENTER on the selected device: a pulse for the things that fire, a hold for
+// the things that light.
+static void FireSelectedTestOutput()
+{
+    if (g_serviceTest.steps.empty())
+    {
+        return;
+    }
+    g_serviceTest.walking = false;
+    const size_t index = static_cast<size_t>(
+        std::clamp(g_serviceTest.selection, 0, static_cast<int>(g_serviceTest.steps.size()) - 1));
+
+    if (TestOutputIsMomentary(g_serviceTest.kind))
+    {
+        const BenchOutputStep& step = g_serviceTest.steps[index];
+        printf("PPUC: test firing %s (%d)\n", step.description.c_str(), step.number);
+        g_interceptorOutputs.PulseCoil(pPpuc, step.number, static_cast<uint32_t>(std::max(1, step.onDurationMs)));
+        MonitorEntry& row = g_serviceTest.rows[index];
+        row.lastActivationMs = SDL_GetTicks();
+        row.lastChangeMs = row.lastActivationMs;
+        row.activations++;
+        return;
+    }
+
+    SetTestOutput(index, g_serviceTest.rows[index].state == 0);
+}
+
+static void DrawServiceTestInto(int w, int h)
+{
+    EnsureMonitorTables();
+
+    const SDL_Color white{235, 235, 235, 255};
+    const SDL_Color dim{120, 120, 130, 255};
+    const SDL_Color amber{255, 200, 70, 255};
+    const SDL_Color green{70, 210, 100, 255};
+
+    SDL_SetRenderDrawColor(g_uiRenderer, 0, 0, 0, 255);
+    SDL_RenderClear(g_uiRenderer);
+
+    const TestDefinition& definition = TestDefinitionFor(g_serviceTest.kind);
+    char line[192];
+    snprintf(line, sizeof(line), "%s", definition.label);
+    for (char* c = line; *c; ++c)
+    {
+        *c = static_cast<char>(toupper(static_cast<unsigned char>(*c)));
+    }
+    DrawFirmwareText(line, pFirmwareFontLarge, w / 2, 8, white);
+
+    if (g_serviceTest.enginePaused)
+    {
+        DrawFirmwareText("the game is frozen and will carry on where it left off", pFirmwareFontSmall, w / 2, 62,
+                         green);
+    }
+    else
+    {
+        DrawFirmwareText("the game is NOT frozen -- it is still running behind this screen", pFirmwareFontSmall,
+                         w / 2, 62, amber);
+    }
+
+    const int top = 100;
+    const int bottom = h - 46;
+    const SDL_Color panel{18, 18, 22, 255};
+
+    if (g_serviceTest.kind == TestKind::Switches)
+    {
+        DrawMonitorSection("Switches", g_switchMonitorEntries, false, 24, top, w - 48, bottom - top, panel);
+    }
+    else
+    {
+        DrawMonitorSection(definition.label, g_serviceTest.rows, true, 24, top, w - 48, bottom - top, panel,
+                           g_serviceTest.selection);
+    }
+
+    const char* legend = g_serviceTest.kind == TestKind::Switches
+                             ? "ESC leaves.  Press a switch on the machine to see it here."
+                             : (g_serviceTest.walking ? "A stops the walk.  ESC leaves."
+                                                      : "Cursor keys choose.  ENTER fires.  A walks them all.  ESC leaves.");
+    DrawFirmwareText(legend, pFirmwareFontSmall, w / 2, h - 36, dim);
+}
+
+
 // Panel geometry, shared by every tool so they line up with each other.
 static constexpr int kOverlayPanelTop = 104;     // heading, down to the first row
 static constexpr int kOverlayRowHeight = 52;
@@ -3030,6 +3365,58 @@ static void CloseOverlay()
         true);
 }
 
+// The list of tests, drawn like the main menu it came from.
+static void RenderOverlayTests(int w, int h)
+{
+    const SDL_Color white{235, 235, 235, 255};
+    const SDL_Color dim{140, 140, 150, 255};
+    const SDL_Color amber{255, 200, 70, 255};
+
+    const SDL_FRect panel = DrawOverlayPanel(w, h, kServiceTestCount, "TESTS");
+
+    for (int i = 0; i < kServiceTestCount; ++i)
+    {
+        const bool selected = i == g_testsSelection;
+        const int y = static_cast<int>(panel.y) + kOverlayPanelTop + i * kOverlayRowHeight;
+        if (selected)
+        {
+            SDL_SetRenderDrawColor(g_uiRenderer, 44, 48, 62, 255);
+            const SDL_FRect row{panel.x + 16.0f, static_cast<float>(y) - 6.0f, panel.w - 32.0f, 44.0f};
+            SDL_RenderFillRect(g_uiRenderer, &row);
+        }
+        DrawFirmwareTextLeft(selected ? ">" : " ", pFirmwareFontSmall, static_cast<int>(panel.x) + 32, y,
+                             selected ? amber : dim);
+        DrawFirmwareTextLeft(kServiceTests[i].label, pFirmwareFontSmall, static_cast<int>(panel.x) + 64, y,
+                             selected ? white : dim);
+    }
+
+    const int helpY = static_cast<int>(panel.y) + kOverlayPanelTop + kServiceTestCount * kOverlayRowHeight + 12;
+    DrawFirmwareText(kServiceTests[g_testsSelection].hint, pFirmwareFontSmall, w / 2, helpY, dim);
+    DrawFirmwareText("the game freezes while a test is open", pFirmwareFontSmall, w / 2, helpY + 40, dim);
+}
+
+// Opens a test, asking first when it can throw a ball and one is in play.
+static void RequestServiceTest(int index)
+{
+    if (index < 0 || index >= kServiceTestCount)
+    {
+        return;
+    }
+    const bool gameRunning = ball_search_game_running.load(std::memory_order_acquire);
+    if (kServiceTests[index].throwsBall && gameRunning)
+    {
+        g_pendingTestIndex = index;
+        g_pendingAction = OverlayAction::OpenTest;
+        g_confirmYes = false;
+        g_overlay = OverlayScreen::Confirm;
+        return;
+    }
+    if (OpenServiceTest(kServiceTests[index].kind))
+    {
+        g_overlay = OverlayScreen::Test;
+    }
+}
+
 static const char* PendingActionLabel()
 {
     switch (g_pendingAction)
@@ -3038,6 +3425,8 @@ static const char* PendingActionLabel()
             return "Restart PPUC?";
         case OverlayAction::PowerOff:
             return "Power off the machine?";
+        case OverlayAction::OpenTest:
+            return "A game is in progress. Open this test?";
         default:
             return "Are you sure?";
     }
@@ -3052,10 +3441,19 @@ static void RenderOverlayConfirm(int w, int h)
     const SDL_FRect panel = DrawOverlayPanel(w, h, 2, "ARE YOU SURE?");
 
     DrawFirmwareText(PendingActionLabel(), pFirmwareFontSmall, w / 2, static_cast<int>(panel.y) + 96, white);
-    DrawFirmwareText(g_pendingAction == OverlayAction::PowerOff
-                         ? "The game ends and the machine shuts down."
-                         : "The game ends and PPUC starts again.",
-                     pFirmwareFontSmall, w / 2, static_cast<int>(panel.y) + 136, dim);
+    const char* consequence = "The game ends and PPUC starts again.";
+    if (g_pendingAction == OverlayAction::PowerOff)
+    {
+        consequence = "The game ends and the machine shuts down.";
+    }
+    else if (g_pendingAction == OverlayAction::OpenTest)
+    {
+        // The one confirmation that is not destructive, and it should not read
+        // as if it were: nothing is lost, but a coil is about to fire with a
+        // ball somewhere on the playfield.
+        consequence = "The game freezes and coils fire. It resumes when you leave.";
+    }
+    DrawFirmwareText(consequence, pFirmwareFontSmall, w / 2, static_cast<int>(panel.y) + 136, dim);
 
     // No on the left, and selected to begin with: the harmless answer is the
     // one a stray ENTER gives.
@@ -3094,6 +3492,22 @@ static void PerformPendingAction()
             printf("PPUC: power off requested from the tools menu\n");
             g_powerOffRequested = true;
             break;
+        case OverlayAction::OpenTest:
+        {
+            // The one confirmation that does not end the session.
+            const int index = g_pendingTestIndex;
+            g_pendingTestIndex = -1;
+            g_pendingAction = OverlayAction::None;
+            if (index >= 0 && index < kServiceTestCount && OpenServiceTest(kServiceTests[index].kind))
+            {
+                g_overlay = OverlayScreen::Test;
+            }
+            else
+            {
+                g_overlay = OverlayScreen::Tests;
+            }
+            return;
+        }
         default:
             return;
     }
@@ -3124,6 +3538,17 @@ static bool HandleOverlayKey(SDL_Keycode key)
             {
                 CloseOverlay();
             }
+            else if (g_overlay == OverlayScreen::Test)
+            {
+                // Everything off and the game let go before the screen changes,
+                // so leaving a test can never leave a coil held.
+                CloseServiceTest();
+                g_overlay = OverlayScreen::Tests;
+            }
+            else if (g_overlay == OverlayScreen::Tests)
+            {
+                g_overlay = OverlayScreen::Menu;
+            }
             else
             {
                 g_overlay = OverlayScreen::Menu;
@@ -3147,6 +3572,15 @@ static bool HandleOverlayKey(SDL_Keycode key)
                 const int count = static_cast<int>(g_coilMonitorEntries.size());
                 g_coilSelection = (g_coilSelection + delta + count) % count;
             }
+            else if (g_overlay == OverlayScreen::Tests)
+            {
+                g_testsSelection = (g_testsSelection + delta + kServiceTestCount) % kServiceTestCount;
+            }
+            else if (g_overlay == OverlayScreen::Test && !g_serviceTest.rows.empty())
+            {
+                const int count = static_cast<int>(g_serviceTest.rows.size());
+                g_serviceTest.selection = (g_serviceTest.selection + delta + count) % count;
+            }
             else if (g_overlay == OverlayScreen::Confirm)
             {
                 g_confirmYes = !g_confirmYes;
@@ -3160,6 +3594,14 @@ static bool HandleOverlayKey(SDL_Keycode key)
             if (g_overlay == OverlayScreen::Confirm)
             {
                 g_confirmYes = key == SDLK_RIGHT;
+                return true;
+            }
+            if (g_overlay == OverlayScreen::Test && !g_serviceTest.rows.empty())
+            {
+                const int count = static_cast<int>(g_serviceTest.rows.size());
+                const int step = std::max(1, g_monitorCoilRows);
+                const int delta = key == SDLK_LEFT ? -step : step;
+                g_serviceTest.selection = std::clamp(g_serviceTest.selection + delta, 0, count - 1);
                 return true;
             }
             if (g_overlay == OverlayScreen::Monitor && !g_coilMonitorEntries.empty())
@@ -3196,13 +3638,40 @@ static bool HandleOverlayKey(SDL_Keycode key)
             {
                 FireSelectedCoil();
             }
+            else if (g_overlay == OverlayScreen::Tests)
+            {
+                RequestServiceTest(g_testsSelection);
+            }
+            else if (g_overlay == OverlayScreen::Test)
+            {
+                FireSelectedTestOutput();
+            }
             else if (g_overlay == OverlayScreen::Confirm)
             {
                 if (g_confirmYes)
                 {
                     PerformPendingAction();
                 }
-                g_overlay = OverlayScreen::Menu;
+                else if (g_pendingAction == OverlayAction::OpenTest)
+                {
+                    // Said no to a test: back to the list it was chosen from,
+                    // not out to the menu.
+                    g_pendingTestIndex = -1;
+                    g_pendingAction = OverlayAction::None;
+                    g_overlay = OverlayScreen::Tests;
+                    return true;
+                }
+                if (g_overlay == OverlayScreen::Confirm)
+                {
+                    g_overlay = OverlayScreen::Menu;
+                }
+            }
+            return true;
+
+        case SDLK_A:
+            if (g_overlay == OverlayScreen::Test)
+            {
+                ToggleServiceTestWalk();
             }
             return true;
 
@@ -3234,6 +3703,12 @@ static void DrawOverlayInto(SDL_Renderer* renderer, int w, int h, bool clearFirs
         return;
     }
 
+    if (g_overlay == OverlayScreen::Test)
+    {
+        DrawServiceTestInto(w, h);
+        return;
+    }
+
     if (clearFirst)
     {
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
@@ -3247,6 +3722,10 @@ static void DrawOverlayInto(SDL_Renderer* renderer, int w, int h, bool clearFirs
     else if (g_overlay == OverlayScreen::Volume)
     {
         RenderOverlayVolume(w, h);
+    }
+    else if (g_overlay == OverlayScreen::Tests)
+    {
+        RenderOverlayTests(w, h);
     }
     else if (g_overlay == OverlayScreen::Confirm)
     {
@@ -7531,6 +8010,8 @@ int main(int argc, char** argv)
 
   // Rules-injected switches go to whichever engine is running.
   g_interceptorOutputs.sendSwitch = [&pEngine](int number, uint8_t state) { pEngine->SendSwitch(number, state); };
+  // What lets a service test freeze the game and give it back afterwards.
+  g_pauseEngine = [&pEngine](bool paused) { return pEngine && pEngine->SetPaused(paused); };
 
   // One definition of "that was a button, not the playfield", shared by the
   // ball search and by any rule that needs to know a player plunged rather
@@ -7933,6 +8414,11 @@ int main(int argc, char** argv)
                                true);
         }
         slidesWereShowing = showing;
+      }
+
+      if (g_overlay == OverlayScreen::Test)
+      {
+        ServiceTestWalk(SDL_GetTicks());
       }
 
       // The slides carry the only animation on these screens, and a pulse

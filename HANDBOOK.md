@@ -131,7 +131,7 @@ Q is not ESC on purpose. A key that closes a menu in one place and kills the
 machine mid-game in another is the kind of difference nobody remembers with a
 ball in play.
 
-The menu has four entries:
+The menu has five entries:
 
 ### Switch and coil monitor
 
@@ -155,6 +155,36 @@ You can also start PPUC with `--switch-monitor` to bring it up at boot. On a
 machine with a B2S or a PUP pack, that flag turns them off for the session: on
 a screen with no compositor, two things claiming the panel means one of them
 flickers, so the monitor takes it outright.
+
+### Tests
+
+The switch, coil, lamp, GI and flasher tests, on the backbox screen instead of
+a console. These have always existed as start-up modes — useful at a desk with
+a laptop wired to the playfield, useless at a machine in a cabinet — and this
+is the same set reached from the menu.
+
+**The game freezes while a test is open**, and carries on where it left off
+when you leave. A ball sitting on the playfield is still in play afterwards;
+PinMAME is stopped, not starved. The screen says so in green. If it says the
+game is *not* frozen, in amber, the engine could not be stopped — the test
+still works, but the game is running behind it.
+
+| | |
+|---|---|
+| **cursor keys** | choose a device |
+| **ENTER** | fire it — a pulse for coils and flashers, on and off for lamps and GI |
+| **A** | walk through every device in turn; A again stops |
+| **ESC** | leave, which turns everything off and lets the game go |
+
+The switch test needs no cursor: press switches on the machine and watch them
+change.
+
+Coil and flasher tests ask *"A game is in progress"* before opening if a ball
+is in play, since they can throw one. The other three open straight away.
+
+High power is raised for the coil and flasher tests when no game is running,
+and lowered again on the way out — but only if the test raised it, so leaving a
+test during a game never cuts power to the game.
 
 ### Volume
 
