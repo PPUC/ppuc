@@ -3371,24 +3371,19 @@ static void FillCircle(SDL_Renderer* renderer, float cx, float cy, float radius)
     }
 }
 
-// An arrow pointing at (tipX, tipY) from `from`, `length` long.
+// The arrow, drawn once pointing right with its tip at (tipX, tipY).
+//
+// One shape, rotated at blit time, rather than a case per direction. That is
+// what makes the diagonals free: an arrow coming in from the lower left is the
+// same arrow turned 315 degrees.
 //
 // Built from spans rather than SDL_RenderGeometry so it needs no vertex colours
 // or texture state, and so the head and the shaft scale together from one
 // number.
-static void DrawArrow(SDL_Renderer* renderer, float tipX, float tipY, AttractSlides::Marker::Pointer from,
-                      float length)
+static void DrawArrow(SDL_Renderer* renderer, float tipX, float tipY, float length)
 {
     const float head = length * 0.42f;
     const float halfShaft = std::max(2.0f, length * 0.07f);
-
-    const bool horizontal =
-        from == AttractSlides::Marker::Pointer::Left || from == AttractSlides::Marker::Pointer::Right;
-    // +1 when the arrow comes from the low side and so points towards higher
-    // coordinates.
-    const float dir = (from == AttractSlides::Marker::Pointer::Left || from == AttractSlides::Marker::Pointer::Above)
-                          ? 1.0f
-                          : -1.0f;
 
     // The head: spans that narrow towards the tip.
     const int steps = static_cast<int>(head);
@@ -3396,37 +3391,50 @@ static void DrawArrow(SDL_Renderer* renderer, float tipX, float tipY, AttractSli
     {
         const float t = static_cast<float>(i) / static_cast<float>(std::max(1, steps));
         const float halfWidth = (1.0f - t) * head * 0.6f;
-        const float offset = head * (1.0f - t) * dir;
-        if (horizontal)
-        {
-            const SDL_FRect span{tipX - offset, tipY - halfWidth, 1.0f, halfWidth * 2.0f};
-            SDL_RenderFillRect(renderer, &span);
-        }
-        else
-        {
-            const SDL_FRect span{tipX - halfWidth, tipY - offset, halfWidth * 2.0f, 1.0f};
-            SDL_RenderFillRect(renderer, &span);
-        }
+        const SDL_FRect span{tipX - head * (1.0f - t), tipY - halfWidth, 1.0f, halfWidth * 2.0f};
+        SDL_RenderFillRect(renderer, &span);
     }
 
-    // The shaft, behind the head.
     const float shaftLength = length - head;
-    if (shaftLength <= 0.0f)
+    if (shaftLength > 0.0f)
     {
-        return;
-    }
-    if (horizontal)
-    {
-        const float x = dir > 0.0f ? tipX - length : tipX + head;
-        const SDL_FRect shaft{x, tipY - halfShaft, shaftLength, halfShaft * 2.0f};
+        const SDL_FRect shaft{tipX - length, tipY - halfShaft, shaftLength, halfShaft * 2.0f};
         SDL_RenderFillRect(renderer, &shaft);
     }
-    else
+}
+
+// How far to turn that arrow, clockwise, for each side it can come in from.
+static float PointerRotation(AttractSlides::Marker::Pointer pointer)
+{
+    switch (pointer)
     {
-        const float y = dir > 0.0f ? tipY - length : tipY + head;
-        const SDL_FRect shaft{tipX - halfShaft, y, halfShaft * 2.0f, shaftLength};
-        SDL_RenderFillRect(renderer, &shaft);
+        case AttractSlides::Marker::Pointer::Left:
+            return 0.0f;
+        case AttractSlides::Marker::Pointer::AboveLeft:
+            return 45.0f;
+        case AttractSlides::Marker::Pointer::Above:
+            return 90.0f;
+        case AttractSlides::Marker::Pointer::AboveRight:
+            return 135.0f;
+        case AttractSlides::Marker::Pointer::Right:
+            return 180.0f;
+        case AttractSlides::Marker::Pointer::BelowRight:
+            return 225.0f;
+        case AttractSlides::Marker::Pointer::Below:
+            return 270.0f;
+        case AttractSlides::Marker::Pointer::BelowLeft:
+            return 315.0f;
     }
+    return 0.0f;
+}
+
+// A unit vector from the marker towards the side the arrow comes in from, so
+// the tip can be held clear of what it is pointing at.
+static void PointerOffset(AttractSlides::Marker::Pointer pointer, float* dx, float* dy)
+{
+    const float radians = (PointerRotation(pointer) + 180.0f) * 3.14159265f / 180.0f;
+    *dx = std::cos(radians);
+    *dy = std::sin(radians);
 }
 
 // Where each marker's pulse sits in the cycle.
@@ -3460,21 +3468,28 @@ static float MarkerPulse(size_t index, size_t count, uint64_t elapsedMs)
 // for free.
 struct MarkerArt
 {
-    SDL_Texture* arrow = nullptr;
     SDL_Texture* badge = nullptr;
-    float arrowSize = 0.0f;
     float badgeSize = 0.0f;
 };
 static std::vector<MarkerArt> g_markerArt;
+// One arrow for the whole slide. Every marker's arrow is the same shape at the
+// same size; only the angle differs, and rotation happens at blit time.
+static SDL_Texture* g_markerArrow = nullptr;
+static float g_markerArrowSize = 0.0f;
 
 static void ReleaseMarkerArt()
 {
     for (MarkerArt& art : g_markerArt)
     {
-        if (art.arrow) SDL_DestroyTexture(art.arrow);
         if (art.badge) SDL_DestroyTexture(art.badge);
     }
     g_markerArt.clear();
+    if (g_markerArrow)
+    {
+        SDL_DestroyTexture(g_markerArrow);
+        g_markerArrow = nullptr;
+    }
+    g_markerArrowSize = 0.0f;
 }
 
 // Both shapes are drawn into the middle of a square texture, so blitting one is
@@ -3502,60 +3517,64 @@ static void BuildMarkerArt(SDL_Renderer* renderer, const AttractSlides::Slide& s
     SDL_Texture* previousTarget = SDL_GetRenderTarget(renderer);
     g_markerArt.resize(slide.markers.size());
 
+    // The arrow, pointing right, tip at the centre of its own square so that
+    // rotating about that centre leaves the tip exactly where it was put.
+    g_markerArrowSize = arrowLength * 2.0f + 8.0f;
+    g_markerArrow = MakeMarkerTexture(renderer, g_markerArrowSize);
+    if (g_markerArrow)
+    {
+        const float centre = g_markerArrowSize / 2.0f;
+        SDL_SetRenderTarget(renderer, g_markerArrow);
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+        SDL_RenderClear(renderer);
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+        // Black first, one pixel out, so the arrow is visible over a pale
+        // playfield as well as a dark one.
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 180);
+        DrawArrow(renderer, centre + 2.0f, centre + 2.0f, arrowLength);
+        SDL_SetRenderDrawColor(renderer, 255, 196, 0, 255);
+        DrawArrow(renderer, centre, centre, arrowLength);
+    }
+
     for (size_t i = 0; i < slide.markers.size(); ++i)
     {
         const AttractSlides::Marker& marker = slide.markers[i];
         MarkerArt& art = g_markerArt[i];
-
-        art.arrowSize = arrowLength * 2.0f + 8.0f;
-        art.arrow = MakeMarkerTexture(renderer, art.arrowSize);
-        if (art.arrow)
+        if (marker.number <= 0)
         {
-            const float centre = art.arrowSize / 2.0f;
-            SDL_SetRenderTarget(renderer, art.arrow);
-            SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
-            SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
-            SDL_RenderClear(renderer);
-            SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-            // Black first, one pixel out, so the arrow is visible over a pale
-            // playfield as well as a dark one.
-            SDL_SetRenderDrawColor(renderer, 0, 0, 0, 180);
-            DrawArrow(renderer, centre + 2.0f, centre + 2.0f, marker.pointer, arrowLength);
-            SDL_SetRenderDrawColor(renderer, 255, 196, 0, 255);
-            DrawArrow(renderer, centre, centre, marker.pointer, arrowLength);
+            continue;
         }
 
-        if (marker.number > 0)
+        art.badgeSize = badgeRadius * 2.0f + 8.0f;
+        art.badge = MakeMarkerTexture(renderer, art.badgeSize);
+        if (art.badge == nullptr)
         {
-            art.badgeSize = badgeRadius * 2.0f + 8.0f;
-            art.badge = MakeMarkerTexture(renderer, art.badgeSize);
-            if (art.badge)
-            {
-                const float centre = art.badgeSize / 2.0f;
-                SDL_SetRenderTarget(renderer, art.badge);
-                SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
-                SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
-                SDL_RenderClear(renderer);
-                SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-                SDL_SetRenderDrawColor(renderer, 0, 0, 0, 200);
-                FillCircle(renderer, centre + 2.0f, centre + 2.0f, badgeRadius);
-                SDL_SetRenderDrawColor(renderer, 255, 196, 0, 255);
-                FillCircle(renderer, centre, centre, badgeRadius);
+            continue;
+        }
+        const float centre = art.badgeSize / 2.0f;
+        SDL_SetRenderTarget(renderer, art.badge);
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+        SDL_RenderClear(renderer);
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 200);
+        FillCircle(renderer, centre + 2.0f, centre + 2.0f, badgeRadius);
+        SDL_SetRenderDrawColor(renderer, 255, 196, 0, 255);
+        FillCircle(renderer, centre, centre, badgeRadius);
 
-                char label[8];
-                snprintf(label, sizeof(label), "%d", marker.number);
-                // Centred on the badge, measured rather than guessed: "10" is
-                // twice as wide as "1".
-                const int textWidth = MeasureTextWidth(label, pFirmwareFontSmall);
-                int textHeight = 0;
+        char label[8];
+        snprintf(label, sizeof(label), "%d", marker.number);
+        // Centred on the badge, measured rather than guessed: "10" is twice as
+        // wide as "1".
+        const int textWidth = MeasureTextWidth(label, pFirmwareFontSmall);
+        int textHeight = 0;
 #ifdef PPUC_HAS_SDL3_TTF
-                textHeight = pFirmwareFontSmall ? TTF_GetFontHeight(pFirmwareFontSmall) : 0;
+        textHeight = pFirmwareFontSmall ? TTF_GetFontHeight(pFirmwareFontSmall) : 0;
 #endif
-                const SDL_Color black{0, 0, 0, 255};
-                DrawFirmwareTextLeft(label, pFirmwareFontSmall, static_cast<int>(centre) - textWidth / 2,
-                                     static_cast<int>(centre) - textHeight / 2, black);
-            }
-        }
+        const SDL_Color black{0, 0, 0, 255};
+        DrawFirmwareTextLeft(label, pFirmwareFontSmall, static_cast<int>(centre) - textWidth / 2,
+                             static_cast<int>(centre) - textHeight / 2, black);
     }
 
     SDL_SetRenderTarget(renderer, previousTarget);
@@ -3581,31 +3600,24 @@ static void DrawSlideMarkers(SDL_Renderer* renderer, const AttractSlides::Slide&
         // The arrow keeps its distance from what it points at, and that distance
         // is what pulses: a marker that changed size would look like the target
         // moving.
-        const float gap = (marker.number > 0 ? art.badgeSize / 2.0f : 0.0f) + 6.0f + art.arrowSize * 0.175f * pulse;
-        float tipX = x;
-        float tipY = y;
-        switch (marker.pointer)
-        {
-            case AttractSlides::Marker::Pointer::Left:
-                tipX = x - gap;
-                break;
-            case AttractSlides::Marker::Pointer::Right:
-                tipX = x + gap;
-                break;
-            case AttractSlides::Marker::Pointer::Above:
-                tipY = y - gap;
-                break;
-            case AttractSlides::Marker::Pointer::Below:
-                tipY = y + gap;
-                break;
-        }
+        float offsetX = 0.0f;
+        float offsetY = 0.0f;
+        PointerOffset(marker.pointer, &offsetX, &offsetY);
+        const float gap =
+            (marker.number > 0 ? art.badgeSize / 2.0f : 0.0f) + 6.0f + g_markerArrowSize * 0.175f * pulse;
+        const float tipX = x + offsetX * gap;
+        const float tipY = y + offsetY * gap;
 
-        if (art.arrow)
+        if (g_markerArrow)
         {
-            SDL_SetTextureAlphaMod(art.arrow, alpha);
-            const SDL_FRect dst{tipX - art.arrowSize / 2.0f, tipY - art.arrowSize / 2.0f, art.arrowSize,
-                                art.arrowSize};
-            SDL_RenderTexture(renderer, art.arrow, nullptr, &dst);
+            SDL_SetTextureAlphaMod(g_markerArrow, alpha);
+            const SDL_FRect dst{tipX - g_markerArrowSize / 2.0f, tipY - g_markerArrowSize / 2.0f, g_markerArrowSize,
+                                g_markerArrowSize};
+            // Rotated about the texture's own centre, which is where the tip
+            // was drawn, so the tip stays exactly on the point whatever the
+            // angle.
+            SDL_RenderTextureRotated(renderer, g_markerArrow, nullptr, &dst, PointerRotation(marker.pointer), nullptr,
+                                     SDL_FLIP_NONE);
         }
         if (art.badge)
         {

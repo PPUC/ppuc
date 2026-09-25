@@ -15,6 +15,10 @@ Marker::Pointer PointerFrom(const std::string& value)
   if (value == "right") return Marker::Pointer::Right;
   if (value == "above") return Marker::Pointer::Above;
   if (value == "below") return Marker::Pointer::Below;
+  if (value == "above-left") return Marker::Pointer::AboveLeft;
+  if (value == "above-right") return Marker::Pointer::AboveRight;
+  if (value == "below-left") return Marker::Pointer::BelowLeft;
+  if (value == "below-right") return Marker::Pointer::BelowRight;
   return Marker::Pointer::Left;
 }
 

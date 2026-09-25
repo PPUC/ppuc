@@ -29,12 +29,21 @@ struct Marker
   // 0 when the marker is just a pointer with nothing to count.
   int number = 0;
   // Which side the arrow comes in from, so it never covers what it points at.
+  //
+  // The diagonals are not decoration: an arrow that comes from the lower left
+  // is the line a ball takes off the left flipper, and one that comes straight
+  // down is a ball draining. Four directions could only ever say "this thing
+  // here"; eight can say how you get to it.
   enum class Pointer
   {
     Left,
     Right,
     Above,
-    Below
+    Below,
+    AboveLeft,
+    AboveRight,
+    BelowLeft,
+    BelowRight
   };
   Pointer pointer = Pointer::Left;
 };
