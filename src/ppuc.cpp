@@ -445,6 +445,10 @@ uint8_t opt_volume = 100;
 uint8_t opt_rom_volume = 100;
 uint8_t opt_speech_volume = 100;
 uint8_t opt_music_volume = 100;
+// Offer the playlist to the player at the start of a game, steered by the same
+// two buttons the slideshow uses. Off by default: on a machine with one track
+// there is nothing to choose, and an operator who wants the choice says so.
+bool opt_song_select = false;
 // How loud the music sits under the game's own sound, in percent of its normal
 // level. The music is background by design; how far into the background is a
 // question about the cabinet's speakers, not one answer for every machine.
@@ -475,6 +479,15 @@ uint32_t opt_slide_fade_ms = 350;
 // How solid a slide is over the backglass, in percent. Not fully opaque: a
 // little of the machine showing through says the slideshow belongs to it.
 uint32_t opt_slide_opacity_percent = 88;
+// Which way one of the two navigation buttons goes. Declared out here with the
+// options rather than beside the code that draws, because both the slideshow
+// and the song chooser are steered by it and the panel-less build still has to
+// name the type.
+enum class SlideNav
+{
+  Next,
+  Previous,
+};
 const char* opt_speech_backend = "auto";
 const char* opt_speech_voice = NULL;
 const char* opt_speech_rate_arg = NULL;
@@ -4675,12 +4688,6 @@ static void DrawSlidesInto(SDL_Renderer* renderer, int w, int h)
 // button pressed while the first is still down is the hold, not a step.
 static bool g_slideNavClosed[2] = {false, false};
 
-enum class SlideNav
-{
-    Next,
-    Previous,
-};
-
 // Somebody is using the machine.
 //
 // The switch loop calls this for every switch a board reports, which covers a
@@ -4735,6 +4742,204 @@ static bool HandleSlideNav(SlideNav direction, bool bothHeld)
     return true;
 }
 
+// The song chooser, offered once at the start of a game.
+//
+// The same two buttons as the slideshow, for the same reason: they are the two
+// controls every pinball player already has their fingers on, and a machine that
+// asks a question the player can answer without being told how has asked it
+// well. Left and right walk the playlist, both together accept -- exactly the
+// gesture that pauses the slideshow -- and the chosen track starts the instant
+// it is highlighted, because the only way to pick a song is to hear it.
+//
+// Deliberately not an OverlayScreen. Those are service tools: they take the
+// keyboard, they outrank the slideshow, and they mean somebody is diagnosing a
+// machine. This is the player's, it lives over a running game, and it goes away
+// on its own.
+struct SongPicker
+{
+    bool active = false;
+    size_t index = 0;
+    uint64_t openedMs = 0;
+};
+static SongPicker g_songPicker;
+// The game starting is noticed on the engine's output thread, and everything
+// else here happens on the main loop. Rather than let two threads share the
+// struct, the one that cannot own it leaves a flag and the main loop opens the
+// chooser on its next pass.
+static std::atomic<bool> g_songPickerRequested{false};
+
+// Long enough for the ROM to release a ball and for it to settle in the shooter
+// lane. Those switches close on their own within the first moment of a game, and
+// dismissing on them would mean the chooser flashed up and vanished before
+// anybody could read it.
+static const uint64_t kSongPickerSettleMs = 2000;
+// A chooser drawn over a running game cannot be allowed to stay there. Nothing
+// should reach this -- a plunge dismisses it, and so does the ball search -- but
+// "nothing should" is not a reason to leave a screen with no way out.
+static const uint64_t kSongPickerTimeoutMs = 20000;
+
+static bool SongPickerActive() { return g_songPicker.active; }
+
+static void CloseSongPicker()
+{
+    if (!g_songPicker.active)
+    {
+        return;
+    }
+    g_songPicker.active = false;
+    // Ask for the frame the panel was covering. On a machine with a B2S the
+    // backglass repaints anyway; on a translite nothing else would, and the
+    // chooser would sit on the screen for the rest of the game.
+    QueueTransliteRender(RenderCommand::RENDER_GAME, true);
+}
+
+// Asked for from wherever a game starts; taken up by the main loop.
+static void RequestSongPicker() { g_songPickerRequested.store(true, std::memory_order_release); }
+
+static void OpenSongPicker()
+{
+    g_songPicker.active = false;
+    if (!opt_song_select || !pAudioOutput)
+    {
+        return;
+    }
+    // One track is not a choice, and no tracks is not a playlist.
+    if (pAudioOutput->GetMusicTrackCount() < 2)
+    {
+        return;
+    }
+    g_songPicker.index = pAudioOutput->GetMusicTrackIndex();
+    g_songPicker.openedMs = SDL_GetTicks();
+    g_songPicker.active = true;
+}
+
+// True when the chooser took the input, which is how the caller knows not to
+// treat it as anything else.
+static bool HandleSongPickerNav(SlideNav direction, bool bothHeld)
+{
+    if (!g_songPicker.active || !pAudioOutput)
+    {
+        return false;
+    }
+    // A service tool is open and its keys are its own.
+    if (g_overlay != OverlayScreen::None)
+    {
+        return false;
+    }
+
+    if (bothHeld)
+    {
+        CloseSongPicker();
+        return true;
+    }
+
+    const size_t count = pAudioOutput->GetMusicTrackCount();
+    if (count == 0)
+    {
+        CloseSongPicker();
+        return true;
+    }
+    g_songPicker.index = (direction == SlideNav::Next) ? (g_songPicker.index + 1) % count
+                                                       : (g_songPicker.index + count - 1) % count;
+    // Started here rather than on accept. The player is choosing by ear, so the
+    // highlight and the sound have to be the same thing.
+    pAudioOutput->SelectMusicTrack(g_songPicker.index);
+    return true;
+}
+
+// The playfield answering instead of the player: the ball is moving, so the
+// question is over.
+static void NoteSongPickerSwitch(int number, uint8_t state)
+{
+    if (!g_songPicker.active || state == 0)
+    {
+        return;
+    }
+    if (g_buttonSwitchNumbers.count(number) != 0)
+    {
+        return;
+    }
+    if (SDL_GetTicks() - g_songPicker.openedMs < kSongPickerSettleMs)
+    {
+        return;
+    }
+    CloseSongPicker();
+}
+
+static void ServiceSongPicker()
+{
+    if (g_songPickerRequested.exchange(false, std::memory_order_acq_rel))
+    {
+        OpenSongPicker();
+    }
+    if (g_songPicker.active && SDL_GetTicks() - g_songPicker.openedMs >= kSongPickerTimeoutMs)
+    {
+        CloseSongPicker();
+    }
+    // A game that ended while the chooser was up takes it with it.
+    if (g_songPicker.active && !ball_search_game_running.load(std::memory_order_acquire))
+    {
+        CloseSongPicker();
+    }
+}
+
+static void DrawSongPickerInto(SDL_Renderer* renderer, int w, int h)
+{
+    if (!g_songPicker.active || !pAudioOutput || renderer == nullptr || w <= 0 || h <= 0)
+    {
+        return;
+    }
+
+    const size_t count = pAudioOutput->GetMusicTrackCount();
+    if (count == 0)
+    {
+        return;
+    }
+
+    g_uiRenderer = renderer;
+    EnsureFirmwareFont();
+
+    const SDL_Color white{235, 235, 235, 255};
+    const SDL_Color dim{140, 140, 150, 255};
+    const SDL_Color amber{255, 200, 70, 255};
+
+    // Paged, not scrolled: a fixed window that the selection moves through, the
+    // same arithmetic the switch monitor uses. A playlist can be longer than a
+    // panel and the panel cannot grow off the screen.
+    const size_t maxRows = 8;
+    const size_t rows = std::min(maxRows, count);
+    const size_t first = (g_songPicker.index / rows) * rows;
+    const size_t last = std::min(count, first + rows);
+
+    const SDL_FRect panel = DrawOverlayPanel(w, h, static_cast<int>(rows), "CHOOSE THE MUSIC");
+
+    char line[160];
+    for (size_t i = first; i < last; ++i)
+    {
+        const bool selected = i == g_songPicker.index;
+        const int y = static_cast<int>(panel.y) + kOverlayPanelTop + static_cast<int>(i - first) * kOverlayRowHeight;
+        if (selected)
+        {
+            SDL_SetRenderDrawColor(g_uiRenderer, 44, 48, 62, 255);
+            const SDL_FRect row{panel.x + 16.0f, static_cast<float>(y) - 6.0f, panel.w - 32.0f, 44.0f};
+            SDL_RenderFillRect(g_uiRenderer, &row);
+        }
+        DrawFirmwareTextLeft(selected ? ">" : " ", pFirmwareFontSmall, static_cast<int>(panel.x) + 32, y,
+                             selected ? amber : dim);
+        snprintf(line, sizeof(line), "%s", pAudioOutput->GetMusicTrackName(i).c_str());
+        DrawFirmwareTextLeft(line, pFirmwareFontSmall, static_cast<int>(panel.x) + 64, y, selected ? white : dim);
+    }
+
+    const int helpY = static_cast<int>(panel.y) + kOverlayPanelTop + static_cast<int>(rows) * kOverlayRowHeight + 12;
+    if (count > rows)
+    {
+        snprintf(line, sizeof(line), "%zu-%zu of %zu", first + 1, last, count);
+        DrawFirmwareText(line, pFirmwareFontSmall, w / 2, helpY, dim);
+    }
+    DrawFirmwareText("flipper buttons choose    both together starts the game", pFirmwareFontSmall, w / 2, helpY + 40,
+                     dim);
+}
+
 // What the backbox screen shows when something other than the game wants it.
 //
 // The service tools win outright. Somebody with a keyboard open at the switch
@@ -4746,6 +4951,24 @@ static void DrawServiceScreenInto(SDL_Renderer* renderer, int w, int h, bool cle
     if (g_overlay != OverlayScreen::None)
     {
         DrawOverlayInto(renderer, w, h, clearFirst);
+        return;
+    }
+
+    // The chooser belongs to a running game, so the game translite is what goes
+    // behind it -- and never the slideshow, which is an attract-mode thing and
+    // cannot be up at the same time.
+    if (g_songPicker.active)
+    {
+        if (clearFirst)
+        {
+            SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+            SDL_RenderClear(renderer);
+            if (pTransliteTexture)
+            {
+                SDL_RenderTexture(renderer, pTransliteTexture, nullptr, nullptr);
+            }
+        }
+        DrawSongPickerInto(renderer, w, h);
         return;
     }
 
@@ -4772,7 +4995,7 @@ static bool ServiceScreenWanted()
     {
         return false;
     }
-    return g_overlay != OverlayScreen::None || (g_attractSlides && g_attractSlides->Visible());
+    return g_overlay != OverlayScreen::None || g_songPicker.active || (g_attractSlides && g_attractSlides->Visible());
 }
 
 // The own-window path, for a machine whose backglass nothing else is drawing:
@@ -4849,6 +5072,13 @@ static void RenderOverlay() {}
 static void DrawServiceScreenInto(SDL_Renderer*, int, int, bool) {}
 static bool ServiceScreenWanted() { return false; }
 static void DrawSlidesInto(SDL_Renderer*, int, int) {}
+// The song chooser is a screen, and this path has none to put one in.
+static bool SongPickerActive() { return false; }
+static void RequestSongPicker() {}
+static void CloseSongPicker() {}
+static bool HandleSongPickerNav(SlideNav, bool) { return false; }
+static void NoteSongPickerSwitch(int, uint8_t) {}
+static void ServiceSongPicker() {}
 static void ReleaseSlideTexture() {}
 static bool HandleOverlayKey(SDL_Keycode) { return false; }
 static void CloseFirmwareScreen() {}
@@ -5925,6 +6155,13 @@ struct PpucEngineHost final : GameEngineHost
     if (pAudioOutput != nullptr)
     {
       pAudioOutput->SetMusicEnabled(gameRunning);
+      if (!gameRunning)
+      {
+        // The playlist moves on with the game, so the next player does not get
+        // the same song again. Only here: a service test silences the music too,
+        // and coming back from one has to return to the track that was playing.
+        pAudioOutput->AdvanceMusicTrack();
+      }
     }
 
     if (gameRunning)
@@ -5934,6 +6171,10 @@ struct PpucEngineHost final : GameEngineHost
         printf("Game started\n");
       }
       QueueTransliteRender(RenderCommand::RENDER_GAME);
+      // Asked for here, opened by the main loop: this runs on the engine's
+      // output thread, and the chooser belongs to the thread that draws and
+      // steers it.
+      RequestSongPicker();
     }
     else if (HasTransliteAttractImage())
     {
@@ -6418,6 +6659,8 @@ int main(int argc, char** argv)
           opt_music_volume = ParseVolumePercent(value.c_str());
         else if (key == "MusicDuckPercent")
           opt_music_duck_percent = ParseVolumePercent(value.c_str());
+        else if (key == "SongSelect")
+          opt_song_select = ParseIniBool(value);
       }
       // Slides default to on, so a game folder with a slides directory shows
       // them without a second switch to forget. Slides=false suppresses them.
@@ -8319,35 +8562,41 @@ int main(int argc, char** argv)
         // machine; the machine was touching itself. A person arrives at a
         // flipper button, a coin slot or the start button, and those are
         // exactly the switches the configuration marks as buttons.
-        if (g_attractSlides)
+        //
+        // Who the two buttons belong to depends on what is on the screen: the
+        // song chooser during a game, the slideshow in attract. The two can
+        // never be up at once, so there is no priority to argue about. Either
+        // way the switch still reaches the engine -- the flippers are the
+        // player's even while they are answering a question.
+        bool steered = false;
+        const bool isNext = opt_slide_next_switch != 0 && switchState->number == opt_slide_next_switch;
+        const bool isPrevious = opt_slide_previous_switch != 0 && switchState->number == opt_slide_previous_switch;
+        if (isNext || isPrevious)
         {
-          bool steered = false;
-          const bool isNext = opt_slide_next_switch != 0 && switchState->number == opt_slide_next_switch;
-          const bool isPrevious = opt_slide_previous_switch != 0 && switchState->number == opt_slide_previous_switch;
-          if (isNext || isPrevious)
+          const int index = isNext ? 0 : 1;
+          const bool wasClosed = g_slideNavClosed[index];
+          g_slideNavClosed[index] = newSwitchState != 0;
+          // On the close, not the release: a button that acts when it is let
+          // go feels broken to anybody used to a pinball machine.
+          if (newSwitchState != 0 && !wasClosed)
           {
-            const int index = isNext ? 0 : 1;
-            const bool wasClosed = g_slideNavClosed[index];
-            g_slideNavClosed[index] = newSwitchState != 0;
-            // On the close, not the release: a button that acts when it is let
-            // go feels broken to anybody used to a pinball machine.
-            if (newSwitchState != 0 && !wasClosed)
-            {
-              steered = HandleSlideNav(isNext ? SlideNav::Next : SlideNav::Previous,
-                                       g_slideNavClosed[isNext ? 1 : 0]);
-            }
-            else
-            {
-              // A release, or a repeat of a state we already had. Neither is
-              // activity, or holding a flipper button would end the show.
-              steered = true;
-            }
+            const SlideNav direction = isNext ? SlideNav::Next : SlideNav::Previous;
+            const bool bothHeld = g_slideNavClosed[isNext ? 1 : 0];
+            steered = HandleSongPickerNav(direction, bothHeld) || HandleSlideNav(direction, bothHeld);
           }
-          if (!steered && g_buttonSwitchNumbers.count(switchState->number) != 0)
+          else
           {
-            g_attractSlides->NoteActivity(SDL_GetTicks());
+            // A release, or a repeat of a state we already had. Neither is
+            // activity, or holding a flipper button would end the show.
+            steered = true;
           }
         }
+        if (!steered && g_attractSlides && g_buttonSwitchNumbers.count(switchState->number) != 0)
+        {
+          g_attractSlides->NoteActivity(SDL_GetTicks());
+        }
+        // The playfield answering instead of the player closes the chooser.
+        NoteSongPickerSwitch(switchState->number, newSwitchState);
         NoteBallSearchSwitchUpdate(pPpuc, ballSearchRunner, switchState->number, newSwitchState,
                                    opt_ball_search_delay_ms);
 
@@ -8579,6 +8828,8 @@ int main(int argc, char** argv)
         ServiceTestWalk(SDL_GetTicks());
       }
 
+      ServiceSongPicker();
+
       // The slides carry the only animation on these screens, and a pulse
       // stepped at 10 Hz reads as a stutter rather than a pulse.
       const uint64_t serviceRenderIntervalMs =
@@ -8613,6 +8864,36 @@ int main(int argc, char** argv)
             if (HandleOverlayKey(event.key.key))
             {
               break;
+            }
+            // The song chooser gets the cursor keys first, for the same reason
+            // it gets the buttons first: it is only ever up during a game, and
+            // the slideshow only ever in attract.
+            if (SongPickerActive() && g_overlay == OverlayScreen::None)
+            {
+              bool handled = true;
+              switch (event.key.key)
+              {
+                case SDLK_RIGHT:
+                  HandleSongPickerNav(SlideNav::Next, false);
+                  break;
+                case SDLK_LEFT:
+                  HandleSongPickerNav(SlideNav::Previous, false);
+                  break;
+                case SDLK_UP:
+                case SDLK_DOWN:
+                case SDLK_RETURN:
+                case SDLK_ESCAPE:
+                  // The keyboard's "both buttons": that one, thank you.
+                  CloseSongPicker();
+                  break;
+                default:
+                  handled = false;
+                  break;
+              }
+              if (handled)
+              {
+                break;
+              }
             }
             // The cursor keys stand in for the two buttons, for a machine with
             // a keyboard plugged in and no switches assigned yet. Only while

@@ -31,6 +31,25 @@ class AudioOutput
   bool LoadMusicFilesCsv(const char* csv, std::string* errorMessage);
   void SetMusicTrackGapMs(Uint64 gapMs);
   void SetMusicEnabled(bool enabled);
+
+  // The playlist, for anything that lets a player choose from it.
+  //
+  // SelectMusicTrack starts the track straight away when the music is playing,
+  // because a chooser you cannot hear is not a chooser.
+  size_t GetMusicTrackCount() const;
+  size_t GetMusicTrackIndex() const;
+  std::string GetMusicTrackName(size_t index) const;
+  void SelectMusicTrack(size_t index);
+
+  // Step to the next track without playing it.
+  //
+  // Called when a game ends, and deliberately not from SetMusicEnabled(false):
+  // a service test also silences the music, and coming back from a test must
+  // return to the song that was playing rather than skip it. Only the end of a
+  // game moves the playlist on, which is what stops every game opening with the
+  // same song -- a machine with four tracks used to play the first one, and only
+  // the first one, until somebody restarted it.
+  void AdvanceMusicTrack();
   void QueueGameFrames(const int16_t* samples, size_t frameCount);
   void QueuePluginSamples(uint64_t sourceId, uint64_t streamId, const int16_t* samples, size_t sampleCount,
                           int frequency, int channels);
@@ -183,6 +202,11 @@ class AudioOutput
 #if defined(PPUC_HAS_SDL3_MIXER)
   MIX_Mixer* musicMixer_ = nullptr;
   MIX_Track* musicTrack_ = nullptr;
+  // True only while a track is deliberately being swapped in. SDL_mixer reports
+  // the outgoing track as stopped when that happens, and the stopped callback's
+  // job is to move the playlist on -- which would step past the very track being
+  // started. The callback ignores a stop it caused itself.
+  bool musicRestarting_ = false;
   bool musicTrackStartPending_ = false;
   Uint64 musicTrackStartTickMs_ = 0;
   Uint64 musicTrackGapMs_ = 2000;

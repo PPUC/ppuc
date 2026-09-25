@@ -113,6 +113,33 @@ That is the knob to reach for when the music cannot be heard during a game.
 Turning *Music* up instead makes it loud in every quiet moment as well, which
 is how a service test that silences the ROM ends up hurting somebody's ears.
 
+### The playlist
+
+Music tracks live in `music/` in the game folder and play in filename order,
+with `MusicGapMs` between them. A game that ends steps the playlist on, so the
+next player does not get the same song again — which is what used to happen: a
+machine with four tracks played the first one, and only the first one, until
+somebody restarted it. Coming back from a service test is not a game ending, so
+a test returns to the track that was playing.
+
+Set `SongSelect = true` under `[Audio]` and the player is offered the playlist
+when a game starts. It appears on the backbox screen over the game translite,
+and it is steered by the same two buttons as the slideshow — the ones set with
+`SlideNextSwitch` and `SlidePreviousSwitch`, normally the flipper buttons:
+
+| | |
+|---|---|
+| One button | walk to the next or previous track, which starts playing at once |
+| Both together | that one, thank you — get on with the game |
+| First playfield switch | same thing, so plunging answers it too |
+
+Each track starts the instant it is highlighted, because the only real way to
+choose a song is to hear it. The flippers still work while the chooser is up.
+
+Nothing is offered for a playlist of one, and the chooser cannot appear during
+a ball — only at the start of a game. It gives up on its own after twenty
+seconds in case nobody answers.
+
 The levels in `ppuc.ini` are what the machine starts with. The **Volume** tool
 in the service menu changes them for the session only and never writes them
 back: the game folder is the record of what this machine should sound like, and

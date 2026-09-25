@@ -194,6 +194,63 @@ void AudioOutput::SetMusicEnabled(bool enabled)
 #endif
 }
 
+size_t AudioOutput::GetMusicTrackCount() const
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  return musicTracks_.size();
+}
+
+size_t AudioOutput::GetMusicTrackIndex() const
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  return musicTrackIndex_;
+}
+
+std::string AudioOutput::GetMusicTrackName(size_t index) const
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (index >= musicTracks_.size())
+  {
+    return std::string();
+  }
+  // The filename without its extension. It is what the operator named the file,
+  // which is the only title the machine has: an MP3 tag would be better but
+  // would mean decoding one to draw a menu.
+  const std::string& path = musicTracks_[index].path;
+  size_t begin = path.find_last_of("/\\");
+  begin = (begin == std::string::npos) ? 0 : begin + 1;
+  const size_t dot = path.find_last_of('.');
+  const size_t end = (dot != std::string::npos && dot > begin) ? dot : path.size();
+  return path.substr(begin, end - begin);
+}
+
+void AudioOutput::SelectMusicTrack(size_t index)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (index >= musicTracks_.size() || index == musicTrackIndex_)
+  {
+    return;
+  }
+  musicTrackIndex_ = index;
+#if defined(PPUC_HAS_SDL3_MIXER)
+  if (musicEnabled_ && musicTrack_ != nullptr)
+  {
+    musicRestarting_ = true;
+    MIX_StopTrack(musicTrack_, 0);
+    musicRestarting_ = false;
+    StartCurrentMusicTrackLocked();
+  }
+#endif
+}
+
+void AudioOutput::AdvanceMusicTrack()
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+#if defined(PPUC_HAS_SDL3_MIXER)
+  AdvanceMusicTrackLocked();
+#endif
+}
+
 void AudioOutput::SetMusicTrackGapMs(Uint64 gapMs)
 {
   std::lock_guard<std::mutex> lock(mutex_);
@@ -810,6 +867,11 @@ bool AudioOutput::StartCurrentMusicTrackLocked()
   musicTrackStartPending_ = false;
   musicTrackStartTickMs_ = 0;
 
+  // Swapping the audio under a track that is still playing or paused makes
+  // SDL_mixer announce the old one as stopped, and the stopped callback would
+  // then advance the playlist past the track being started here.
+  musicRestarting_ = true;
+
   for (size_t attempts = 0; attempts < musicTracks_.size(); ++attempts)
   {
     MusicTrack& currentTrack = musicTracks_[musicTrackIndex_];
@@ -817,17 +879,21 @@ bool AudioOutput::StartCurrentMusicTrackLocked()
     {
       if (!MIX_SetTrackAudio(musicTrack_, currentTrack.audio))
       {
+        musicRestarting_ = false;
         return false;
       }
       if (!MIX_PlayTrack(musicTrack_, 0))
       {
+        musicRestarting_ = false;
         return false;
       }
+      musicRestarting_ = false;
       return true;
     }
     AdvanceMusicTrackLocked();
   }
 
+  musicRestarting_ = false;
   return true;
 }
 
@@ -847,7 +913,7 @@ void AudioOutput::AdvanceMusicTrackLocked()
 
 void AudioOutput::HandleMusicTrackStoppedLocked(MIX_Track* track)
 {
-  if (track != musicTrack_ || musicTracks_.empty())
+  if (track != musicTrack_ || musicTracks_.empty() || musicRestarting_)
   {
     return;
   }
