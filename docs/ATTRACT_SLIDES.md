@@ -92,6 +92,22 @@ slide someone was still working on.
 That also gives the seasonal version for free — a set of slides published for a
 show, unpublished afterwards, with no files to move.
 
+## Music credits
+
+Royalty-free music is free on a condition: that it is credited. The machine is
+where the music is heard, so the machine is where the credit belongs, and
+leaving that to whoever remembers to write a slide is how it stops happening.
+
+A music media item carries an `field_attribution` text, and the export turns
+whatever is in it into slides at the end of the loop, two tracks to a slide --
+one wastes the screen, four is a wall of small text nobody reads from across a
+room, which credits nobody.
+
+They are generated rather than stored as slide nodes. There is nothing to edit
+that is not already on the music item, and an editable copy would drift from
+the obligation it exists to meet: a track added without a credit is visible as
+a gap, and a track removed takes its credit with it.
+
 ## In ppuc.ini
 
 ```ini

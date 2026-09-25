@@ -337,6 +337,26 @@ rather than the caption — and a caption longer than a third of the screen is
 clipped rather than allowed to cover the picture. If a slide is being clipped,
 it wants fewer words.
 
+### Music credits
+
+Royalty-free music is free on a condition: that it is credited. Each music item
+in the config tool has an **Attribution** field — put the credit in it exactly
+as the source asks, for example:
+
+```
+Music track: In Flight by Alegend
+Source: https://freetouse.com/music
+Royalty Free Background Music
+```
+
+Those credits become slides automatically, at the end of the attract loop, two
+tracks to a slide. They are not slides you write or can reorder: they are
+generated from the tracks the game actually carries, so a track added without a
+credit shows up as a gap, and a track removed takes its credit with it.
+
+A game with music credits but no slides of its own still gets a slideshow — the
+credits. That is the deal the music came with.
+
 Design notes: [`docs/ATTRACT_SLIDES.md`](docs/ATTRACT_SLIDES.md).
 
 ## 7. Rules
