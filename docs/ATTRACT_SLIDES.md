@@ -253,12 +253,23 @@ the two navigation buttons, which brings the show up immediately.
 Stopping: **a button** -- a flipper button, a coin slot, start, the coin door
 -- except the two navigation buttons.
 
-Only buttons, and that is a correction rather than a preference. A machine in
-attract moves its own ball: the search fires the release, the jets and the
-kickers, and the ball rolls over whatever it rolls over. Treating that as
-somebody walking up meant the show started late, at a different time every
-time, and gave up after two or three slides with nobody near the machine. A
-person arrives at a button.
+Only buttons, and that is a correction rather than a preference. Reading every
+switch as somebody walking up meant the show started late, at a different time
+every time, and gave up after two or three slides with nobody near the machine.
+
+What was changing is worth being precise about, because the obvious answer is
+wrong: the ball search does not run in attract -- it returns as soon as it sees
+no game. A playfield switch that changes with the machine standing still is
+something else. A ball settling. Vibration. Most often a switch with a
+mechanical fault, chattering at intervals nobody chose -- which is exactly what
+"it started at a different time every time" sounds like.
+
+None of those are a person. A person arrives at a button, and the
+configuration already says which switches those are.
+
+If a show still ends early, the switch monitor names the culprit: it prints how
+long each switch has been in the state it is in, so the one that keeps
+resetting the countdown is the one whose age keeps returning to seconds.
 
 The old rule was **any switch at all**, except those two buttons. This deliberately
 differs from the ball search, which ignores flipper buttons and the coin door,
