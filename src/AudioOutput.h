@@ -65,6 +65,12 @@ class AudioOutput
   // from it, which is the whole reason this exists.
   void SetVolumes(float master, float game, float speech, float music);
 
+  // How loud the music sits under the game's own sound, 0..1 of its normal
+  // level. The default is deep -- the music is background -- but how deep is a
+  // matter of taste and of the cabinet's speakers, and it is the one number
+  // that decides whether the music can be heard at all while a ball is in play.
+  void SetMusicDuck(float duck);
+
  public:
   struct MusicTrack
   {
@@ -183,5 +189,14 @@ class AudioOutput
 #endif
   size_t musicTrackIndex_ = 0;
   bool musicEnabled_ = false;
+  // How far the music drops under the game's own sound, as a fraction of its
+  // normal level.
+  //
+  // This started as an absolute gain of 0.08 against a base of 0.28, which is
+  // 0.286 of normal -- so that is the default, and the machine sounds exactly
+  // as it did. Expressed as a fraction because that is the question somebody
+  // at the machine is actually asking: how much quieter should the music be
+  // while a ball is in play.
+  float musicDuck_ = 0.286f;
   float musicGain_ = 0.0f;
 };

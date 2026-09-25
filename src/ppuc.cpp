@@ -445,6 +445,10 @@ uint8_t opt_volume = 100;
 uint8_t opt_rom_volume = 100;
 uint8_t opt_speech_volume = 100;
 uint8_t opt_music_volume = 100;
+// How loud the music sits under the game's own sound, in percent of its normal
+// level. The music is background by design; how far into the background is a
+// question about the cabinet's speakers, not one answer for every machine.
+uint8_t opt_music_duck_percent = 29;
 // How-to-play slides in attract mode. On by default: a game folder that has a
 // slides directory is a machine whose owner wants slides, and a second switch
 // to turn them on would only be a way to have them silently not appear.
@@ -1515,7 +1519,11 @@ static std::vector<BenchOutputStep> BuildCoilTestSteps(PPUC* pPpuc, uint8_t numb
   std::vector<BenchOutputStep> steps;
   for (const auto& coil : pPpuc->GetCoils())
   {
-    if (coil.type != PWM_TYPE_SOLENOID && coil.type != PWM_TYPE_FLASHER)
+    // Shakers and motors belong in a coil test. They were left out, so the one
+    // device an operator most wants to try by hand -- because nothing else
+    // ever fires it -- was the one device the test did not list.
+    if (coil.type != PWM_TYPE_SOLENOID && coil.type != PWM_TYPE_FLASHER && coil.type != PWM_TYPE_SHAKER &&
+        coil.type != PWM_TYPE_MOTOR)
     {
       continue;
     }
@@ -1527,8 +1535,9 @@ static std::vector<BenchOutputStep> BuildCoilTestSteps(PPUC* pPpuc, uint8_t numb
     {
       continue;
     }
+    const int onMs = (coil.type == PWM_TYPE_SHAKER || coil.type == PWM_TYPE_MOTOR) ? 400 : 200;
     steps.push_back(
-        {BenchOutputKind::SOLENOID, coil.board, coil.port, coil.number, 1, coil.type, coil.description, 0, 200, 1000});
+        {BenchOutputKind::SOLENOID, coil.board, coil.port, coil.number, 1, coil.type, coil.description, 0, onMs, 1000});
   }
   return steps;
 }
@@ -2036,7 +2045,10 @@ static bool g_restartRequested = false;
 // shooter lane, not a way to edit the configuration: the game folder is the
 // record of what the machine should sound like, and a service menu that
 // silently rewrote it would lose that.
-static uint8_t g_runtimeVolumes[4] = {100, 100, 100, 100};
+// Master, game, speech, music -- and how far the music ducks under the game,
+// which is the one that decides whether the music can be heard at all while a
+// ball is in play.
+static uint8_t g_runtimeVolumes[5] = {100, 100, 100, 100, 29};
 
 #ifndef PPUC_USE_KMSDMD
 // The screen shown while a board is being flashed.
@@ -2084,6 +2096,9 @@ struct MonitorEntry
     // A pulse is over long before the next repaint, so for a coil the count and
     // the age are what make one visible at all.
     uint32_t activations = 0;
+    // What kind of device this is, when it is a coil: a shaker has to be held
+    // longer than a kicker to do anything.
+    uint8_t type = 0;
 };
 
 // An age a person can read at a glance. Seconds while that is the interesting
@@ -2128,6 +2143,17 @@ static int g_coilSelection = 0;
 static int g_monitorCoilRows = 1;
 static constexpr uint32_t kMonitorCoilPulseMs = 80;
 
+// How long to hold a device that is being tried by hand.
+//
+// Eighty milliseconds throws a kicker and lights a flasher, and does nothing
+// whatsoever to a shaker motor: there is mass to get moving, and it is still
+// deciding whether to start when the pulse is over. The device's own kind is
+// the only thing that decides this.
+static uint32_t TestPulseMsFor(uint8_t coilType)
+{
+    return (coilType == PWM_TYPE_SHAKER || coilType == PWM_TYPE_MOTOR) ? 400 : kMonitorCoilPulseMs;
+}
+
 // Built lazily, because neither list exists until the boards have been
 // configured: libppuc fills them while it sends the mapping frames, not when
 // it parses the YAML. Asking at startup got an empty table and a screen that
@@ -2168,7 +2194,7 @@ static void EnsureMonitorTables()
     std::vector<MonitorEntry> coils;
     for (const PPUCCoil& coil : pPpuc->GetCoils())
     {
-        coils.push_back({coil.number, coil.board, coil.port, coil.description, 0, 0, 0});
+        coils.push_back({coil.number, coil.board, coil.port, coil.description, 0, 0, 0, 0, coil.type});
     }
     BuildMonitorTable(g_coilMonitorEntries, g_coilMonitorIndex, std::move(coils));
 
@@ -2650,7 +2676,8 @@ static OverlayAction g_pendingAction = OverlayAction::None;
 // pressed twice by reflex is a menu nobody should open during a game.
 static bool g_confirmYes = false;
 
-static const char* const kVolumeNames[4] = {"Master", "Game sound", "Speech", "Music"};
+static const char* const kVolumeNames[5] = {"Master", "Game sound", "Speech", "Music", "Music in game"};
+static constexpr int kVolumeCount = 5;
 
 static void ApplyRuntimeVolumes()
 {
@@ -2658,6 +2685,7 @@ static void ApplyRuntimeVolumes()
     {
         pAudioOutput->SetVolumes(g_runtimeVolumes[0] / 100.0f, g_runtimeVolumes[1] / 100.0f,
                                  g_runtimeVolumes[2] / 100.0f, g_runtimeVolumes[3] / 100.0f);
+        pAudioOutput->SetMusicDuck(g_runtimeVolumes[4] / 100.0f);
     }
 }
 
@@ -3315,10 +3343,10 @@ static void RenderOverlayVolume(int w, int h)
     const SDL_Color green{70, 210, 100, 255};
     const SDL_Color amber{255, 200, 70, 255};
 
-    const SDL_FRect panel = DrawOverlayPanel(w, h, 4, "VOLUME");
+    const SDL_FRect panel = DrawOverlayPanel(w, h, kVolumeCount, "VOLUME");
 
     char line[64];
-    for (int i = 0; i < 4; ++i)
+    for (int i = 0; i < kVolumeCount; ++i)
     {
         const bool selected = i == g_volumeSelection;
         const int y = static_cast<int>(panel.y) + kOverlayPanelTop + i * kOverlayRowHeight;
@@ -3412,7 +3440,7 @@ static void FireSelectedCoil()
     printf("PPUC: monitor firing coil %d (%s)\n", entry.number, entry.description.c_str());
     // Through the interceptor, so the pulse behaves exactly like one a rule
     // asks for: the engine's own state for this coil is restored afterwards.
-    g_interceptorOutputs.PulseCoil(pPpuc, entry.number, kMonitorCoilPulseMs);
+    g_interceptorOutputs.PulseCoil(pPpuc, entry.number, TestPulseMsFor(entry.type));
 }
 
 static void CloseOverlay()
@@ -3646,7 +3674,7 @@ static bool HandleOverlayKey(SDL_Keycode key)
             }
             else if (g_overlay == OverlayScreen::Volume)
             {
-                g_volumeSelection = (g_volumeSelection + delta + 4) % 4;
+                g_volumeSelection = (g_volumeSelection + delta + kVolumeCount) % kVolumeCount;
             }
             else if (g_overlay == OverlayScreen::Monitor && !g_coilMonitorEntries.empty())
             {
@@ -6388,6 +6416,8 @@ int main(int argc, char** argv)
           opt_speech_volume = ParseVolumePercent(value.c_str());
         else if (key == "MusicVolume")
           opt_music_volume = ParseVolumePercent(value.c_str());
+        else if (key == "MusicDuckPercent")
+          opt_music_duck_percent = ParseVolumePercent(value.c_str());
       }
       // Slides default to on, so a game folder with a slides directory shows
       // them without a second switch to forget. Slides=false suppresses them.
@@ -7215,6 +7245,7 @@ int main(int argc, char** argv)
   g_runtimeVolumes[1] = opt_rom_volume;
   g_runtimeVolumes[2] = opt_speech_volume;
   g_runtimeVolumes[3] = opt_music_volume;
+  g_runtimeVolumes[4] = opt_music_duck_percent;
 
   // How-to-play slides. Read here rather than with the rest of the game folder
   // because Slides= in ppuc.ini has to be able to turn them off, and because

@@ -106,7 +106,12 @@ whose ROM sound is louder than its callouts can be fixed without touching
 either file.
 
 Music ducks automatically while anything else is playing, and comes back when
-the other source falls quiet.
+the other source falls quiet. How far it ducks is the fifth row in the Volume
+tool, **Music in game** — 29% of its normal level by default.
+
+That is the knob to reach for when the music cannot be heard during a game.
+Turning *Music* up instead makes it loud in every quiet moment as well, which
+is how a service test that silences the ROM ends up hurting somebody's ears.
 
 The levels in `ppuc.ini` are what the machine starts with. The **Volume** tool
 in the service menu changes them for the session only and never writes them
@@ -188,7 +193,7 @@ test during a game never cuts power to the game.
 
 ### Volume
 
-The four levels, for this session. See section 4.
+The four levels and the music duck, for this session. See section 4.
 
 ### Restart PPUC / Power off
 

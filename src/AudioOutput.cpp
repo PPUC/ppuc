@@ -14,7 +14,6 @@
 namespace
 {
 constexpr float kMusicBaseGain = 0.28f;
-constexpr float kMusicDuckGain = 0.08f;
 constexpr float kMusicAttackPerSample = 0.00012f;
 constexpr float kMusicReleasePerSample = 0.00003f;
 
@@ -354,6 +353,12 @@ std::string AudioOutput::DescribeLanes() const
   return out;
 }
 
+void AudioOutput::SetMusicDuck(float duck)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  musicDuck_ = std::clamp(duck, 0.0f, 1.0f);
+}
+
 void AudioOutput::SetVolumes(float master, float game, float speech, float music)
 {
   const auto clamp01 = [](float value) { return std::clamp(value, 0.0f, 1.0f); };
@@ -647,7 +652,8 @@ void AudioOutput::MixMusicLocked(int16_t* mixBuffer, size_t sampleCount, bool du
   }
 #endif
 
-  const float targetGain = musicEnabled_ ? (duckToBackground ? kMusicDuckGain : kMusicBaseGain) : 0.0f;
+  const float duckGain = kMusicBaseGain * musicDuck_;
+  const float targetGain = musicEnabled_ ? (duckToBackground ? duckGain : kMusicBaseGain) : 0.0f;
   const float gainStep = targetGain > musicGain_ ? kMusicAttackPerSample : kMusicReleasePerSample;
 
   for (size_t i = 0; i < sampleCount; ++i)
