@@ -46,6 +46,18 @@ struct Marker
     BelowRight
   };
   Pointer pointer = Pointer::Left;
+
+  // Optionally, where the arrow starts, in the same 0..1 picture coordinates.
+  //
+  // With this the arrow stops being a mark beside the target and becomes the
+  // line the ball takes to reach it: up a lane, over the lights in it, into the
+  // hole at the top. A side can only say "this thing here"; two points say
+  // "from here, to there", which is what a tip is usually trying to say.
+  //
+  // `pointer` is used when there is no start point.
+  bool hasFrom = false;
+  float fromX = 0.0f;
+  float fromY = 0.0f;
 };
 
 struct Slide

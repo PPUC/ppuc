@@ -85,6 +85,19 @@ bool Load(const std::string& gameFolder, std::vector<Slide>* slides, std::string
             continue;
           }
           if (node["number"]) marker.number = node["number"].as<int>(0);
+          if (node["fromX"] && node["fromY"])
+          {
+            const float fx = node["fromX"].as<float>(-1.0f);
+            const float fy = node["fromY"].as<float>(-1.0f);
+            // Held to the same 0..1 as the marker itself: a start point off the
+            // picture would draw an arrow from nowhere.
+            if (fx >= 0.0f && fx <= 1.0f && fy >= 0.0f && fy <= 1.0f)
+            {
+              marker.hasFrom = true;
+              marker.fromX = fx;
+              marker.fromY = fy;
+            }
+          }
           if (node["pointer"]) marker.pointer = PointerFrom(node["pointer"].as<std::string>(""));
           slide.markers.push_back(marker);
         }

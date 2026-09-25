@@ -268,6 +268,21 @@ Use a diagonal to show the line of a shot rather than just the spot. An arrow
 from `below-left` is a ball off the left flipper; one from `above` is a ball
 draining into an outlane.
 
+For a shot that follows something — up a lane, round a loop — give the marker a
+start point instead, and the arrow runs the whole way:
+
+```yaml
+- x: 0.829
+  y: 0.285
+  number: 2
+  fromX: 0.735
+  fromY: 0.395
+```
+
+`fromX` and `fromY` are in the same 0 to 1 picture coordinates. The arrow then
+lies along the line between the two points, so it can run up a lane over the
+lights in it rather than sit beside the target.
+
 The markers pulse one after another, because *"the left standup (1), then the
 eject hole (2)"* only works if the eye is led from one to the next.
 

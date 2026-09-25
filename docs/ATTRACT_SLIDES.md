@@ -310,6 +310,17 @@ one per marker.
 A pointer the exporter does not recognise is dropped rather than written out,
 and the machine falls back to an arrow from the left.
 
+A marker can instead carry `fromX` and `fromY`, a second point in the same
+picture coordinates, and then the arrow runs from there to the marker: as long
+as the path, turned to lie along it. That is how a slide points *up a lane*
+rather than at a spot beside it -- over the lights in the lane, into the hole at
+the top. A direction can only say "this thing here"; two points say "from here,
+to there", which is usually what a tip is trying to say.
+
+The head and the shaft of a path arrow are sized from the marker, not from the
+path. A head scaled off a long path spills over the lane it is meant to run
+down.
+
 The markers pulse one after another rather than together. The numbers are there
 to be read in order, and "the left standup (1), then the eject hole (2)" only
 works if the eye is led from one to the next. Every marker keeps a faint glow

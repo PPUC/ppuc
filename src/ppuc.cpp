@@ -3380,10 +3380,12 @@ static void FillCircle(SDL_Renderer* renderer, float cx, float cy, float radius)
 // Built from spans rather than SDL_RenderGeometry so it needs no vertex colours
 // or texture state, and so the head and the shaft scale together from one
 // number.
-static void DrawArrow(SDL_Renderer* renderer, float tipX, float tipY, float length)
+// `head` and `halfShaft` are given rather than taken from the length, because a
+// path arrow is as long as the path and its head must not grow with it: a head
+// sized off a long path spills over the lane it is meant to run down.
+static void DrawArrow(SDL_Renderer* renderer, float tipX, float tipY, float length, float head, float halfShaft)
 {
-    const float head = length * 0.42f;
-    const float halfShaft = std::max(2.0f, length * 0.07f);
+    head = std::min(head, length);
 
     // The head: spans that narrow towards the tip.
     const int steps = static_cast<int>(head);
@@ -3470,6 +3472,11 @@ struct MarkerArt
 {
     SDL_Texture* badge = nullptr;
     float badgeSize = 0.0f;
+    // Only for a marker that traces a path: its arrow is as long as the path
+    // is, so it cannot share the slide's one short arrow.
+    SDL_Texture* arrow = nullptr;
+    float arrowSize = 0.0f;
+    float angle = 0.0f;
 };
 static std::vector<MarkerArt> g_markerArt;
 // One arrow for the whole slide. Every marker's arrow is the same shape at the
@@ -3482,6 +3489,7 @@ static void ReleaseMarkerArt()
     for (MarkerArt& art : g_markerArt)
     {
         if (art.badge) SDL_DestroyTexture(art.badge);
+        if (art.arrow) SDL_DestroyTexture(art.arrow);
     }
     g_markerArt.clear();
     if (g_markerArrow)
@@ -3505,8 +3513,8 @@ static SDL_Texture* MakeMarkerTexture(SDL_Renderer* renderer, float side)
     return texture;
 }
 
-static void BuildMarkerArt(SDL_Renderer* renderer, const AttractSlides::Slide& slide, float badgeRadius,
-                           float arrowLength)
+static void BuildMarkerArt(SDL_Renderer* renderer, const AttractSlides::Slide& slide, const SDL_FRect& picture,
+                           float badgeRadius, float arrowLength)
 {
     ReleaseMarkerArt();
     if (slide.markers.empty())
@@ -3516,6 +3524,8 @@ static void BuildMarkerArt(SDL_Renderer* renderer, const AttractSlides::Slide& s
 
     SDL_Texture* previousTarget = SDL_GetRenderTarget(renderer);
     g_markerArt.resize(slide.markers.size());
+    // One width for every arrow on the slide, long or short.
+    const float halfShaft = std::max(2.0f, arrowLength * 0.07f);
 
     // The arrow, pointing right, tip at the centre of its own square so that
     // rotating about that centre leaves the tip exactly where it was put.
@@ -3532,15 +3542,46 @@ static void BuildMarkerArt(SDL_Renderer* renderer, const AttractSlides::Slide& s
         // Black first, one pixel out, so the arrow is visible over a pale
         // playfield as well as a dark one.
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 180);
-        DrawArrow(renderer, centre + 2.0f, centre + 2.0f, arrowLength);
+        DrawArrow(renderer, centre + 2.0f, centre + 2.0f, arrowLength, arrowLength * 0.42f, halfShaft);
         SDL_SetRenderDrawColor(renderer, 255, 196, 0, 255);
-        DrawArrow(renderer, centre, centre, arrowLength);
+        DrawArrow(renderer, centre, centre, arrowLength, arrowLength * 0.42f, halfShaft);
     }
 
     for (size_t i = 0; i < slide.markers.size(); ++i)
     {
         const AttractSlides::Marker& marker = slide.markers[i];
         MarkerArt& art = g_markerArt[i];
+
+        if (marker.hasFrom)
+        {
+            // An arrow the length of the path, turned to lie along it. Measured
+            // in the picture's own pixels, so it follows the photograph rather
+            // than the screen.
+            const float dx = (marker.x - marker.fromX) * picture.w;
+            const float dy = (marker.y - marker.fromY) * picture.h;
+            const float distance = std::sqrt(dx * dx + dy * dy);
+            if (distance > 4.0f)
+            {
+                art.angle = std::atan2(dy, dx) * 180.0f / 3.14159265f;
+                art.arrowSize = distance * 2.0f + 8.0f;
+                art.arrow = MakeMarkerTexture(renderer, art.arrowSize);
+                if (art.arrow)
+                {
+                    const float centre = art.arrowSize / 2.0f;
+                    SDL_SetRenderTarget(renderer, art.arrow);
+                    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+                    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+                    SDL_RenderClear(renderer);
+                    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+                    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 180);
+                    // The head is the marker's, not the path's.
+                    DrawArrow(renderer, centre + 2.0f, centre + 2.0f, distance, arrowLength * 0.42f, halfShaft);
+                    SDL_SetRenderDrawColor(renderer, 255, 196, 0, 255);
+                    DrawArrow(renderer, centre, centre, distance, arrowLength * 0.42f, halfShaft);
+                }
+            }
+        }
+
         if (marker.number <= 0)
         {
             continue;
@@ -3600,24 +3641,40 @@ static void DrawSlideMarkers(SDL_Renderer* renderer, const AttractSlides::Slide&
         // The arrow keeps its distance from what it points at, and that distance
         // is what pulses: a marker that changed size would look like the target
         // moving.
+        // A marker that traces a path has its own arrow, as long as the path
+        // and lying along it; everything else gets the slide's short one,
+        // rotated to the side it comes in from.
+        SDL_Texture* arrow = art.arrow ? art.arrow : g_markerArrow;
+        const float arrowSize = art.arrow ? art.arrowSize : g_markerArrowSize;
+        float angle = art.angle;
         float offsetX = 0.0f;
         float offsetY = 0.0f;
-        PointerOffset(marker.pointer, &offsetX, &offsetY);
+        if (art.arrow)
+        {
+            // Back along the path it came down.
+            const float radians = (angle + 180.0f) * 3.14159265f / 180.0f;
+            offsetX = std::cos(radians);
+            offsetY = std::sin(radians);
+        }
+        else
+        {
+            angle = PointerRotation(marker.pointer);
+            PointerOffset(marker.pointer, &offsetX, &offsetY);
+        }
+
         const float gap =
             (marker.number > 0 ? art.badgeSize / 2.0f : 0.0f) + 6.0f + g_markerArrowSize * 0.175f * pulse;
         const float tipX = x + offsetX * gap;
         const float tipY = y + offsetY * gap;
 
-        if (g_markerArrow)
+        if (arrow)
         {
-            SDL_SetTextureAlphaMod(g_markerArrow, alpha);
-            const SDL_FRect dst{tipX - g_markerArrowSize / 2.0f, tipY - g_markerArrowSize / 2.0f, g_markerArrowSize,
-                                g_markerArrowSize};
+            SDL_SetTextureAlphaMod(arrow, alpha);
+            const SDL_FRect dst{tipX - arrowSize / 2.0f, tipY - arrowSize / 2.0f, arrowSize, arrowSize};
             // Rotated about the texture's own centre, which is where the tip
             // was drawn, so the tip stays exactly on the point whatever the
             // angle.
-            SDL_RenderTextureRotated(renderer, g_markerArrow, nullptr, &dst, PointerRotation(marker.pointer), nullptr,
-                                     SDL_FLIP_NONE);
+            SDL_RenderTextureRotated(renderer, arrow, nullptr, &dst, angle, nullptr, SDL_FLIP_NONE);
         }
         if (art.badge)
         {
@@ -3906,7 +3963,8 @@ static void BuildSlideFrame(SDL_Renderer* renderer, const AttractSlides::Slide& 
     // proportion to what it is pointing at.
     const float unit = layout.hasImage ? std::min(layout.image.w, layout.image.h)
                                        : std::min(layout.panel.w, layout.panel.h);
-    BuildMarkerArt(renderer, slide, std::max(14.0f, unit * 0.035f), std::max(30.0f, unit * 0.11f));
+    BuildMarkerArt(renderer, slide, layout.hasImage ? layout.image : layout.panel, std::max(14.0f, unit * 0.035f),
+                   std::max(30.0f, unit * 0.11f));
 }
 
 static void DrawSlidesInto(SDL_Renderer* renderer, int w, int h)
