@@ -39,8 +39,17 @@ trap 'rm -f "${LOG}"' EXIT
 
 # -n drops the RS485 bus so no boards are needed; display and sound are off so
 # this runs headless on a build machine.
+#
+# --rom names the ROM rather than letting the game folder decide. The folder's
+# io-boards.yaml carries `rom: dummy`, a placeholder from whenever it was
+# generated, and ppuc.ini -- which would have overridden it -- is not in the
+# folder. PinMAME was therefore asked for a game called "dummy", said "Game name
+# not found", and the fixture died before it could report anything. This test
+# already pins Time Warp's switch and coil numbers, so pinning its ROM name too
+# costs nothing and stops the test depending on a file that is not there.
 "${BIN}" \
    --game "${GAME}" \
+   --rom tmwrp_l2 \
    -n --no-display --no-sound \
    --plugin-dir "$(dirname "${BIN}")/plugins" \
    --rules "${RULES}" \
