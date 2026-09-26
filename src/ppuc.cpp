@@ -4894,14 +4894,25 @@ static void ServiceSongPicker()
     }
     wasRunning = gameRunning;
 
+    // Offered once per game, and "per game" is counted by the machine actually
+    // stopping rather than by a clock.
+    //
+    // A game-on solenoid reported as rising while a game is already running --
+    // which happens when the plugin republishes its state sources, because the
+    // edge detector's cache is rebuilt and every output that is currently on
+    // looks new -- asked for the chooser again. The time-based guard could not
+    // catch that: the machine had genuinely been in attract minutes earlier, so
+    // the gap test passed and the chooser appeared over a ball in play.
+    static bool offeredThisGame = false;
+    if (!gameRunning)
+    {
+        offeredThisGame = false;
+    }
     if (g_songPickerRequested.exchange(false, std::memory_order_acq_rel))
     {
-        // Only a genuine gap counts as a new game. Flash drops its game-on
-        // solenoid and brings it back inside a game -- a drained ball is enough
-        // -- and every one of those looked like a game starting, so the chooser
-        // appeared over a ball in play.
-        if (nowMs - g_gameOffAtMs >= kMinAttractBeforePicker)
+        if (!offeredThisGame && nowMs - g_gameOffAtMs >= kMinAttractBeforePicker)
         {
+            offeredThisGame = true;
             OpenSongPicker();
         }
     }
