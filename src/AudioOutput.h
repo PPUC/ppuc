@@ -36,6 +36,13 @@ class AudioOutput
   //
   // SelectMusicTrack starts the track straight away when the music is playing,
   // because a chooser you cannot hear is not a chooser.
+  // The title and credit the config tool exported for a track, if it did.
+  // Matched by filename, because that is the only thing the folder and the
+  // sidecar have in common.
+  void SetMusicTrackInfo(const std::string& fileName, const std::string& title, const std::string& attribution);
+  std::string GetMusicTrackTitle(size_t index) const;
+  std::string GetMusicTrackAttribution(size_t index) const;
+
   size_t GetMusicTrackCount() const;
   size_t GetMusicTrackIndex() const;
   std::string GetMusicTrackName(size_t index) const;
@@ -94,6 +101,10 @@ class AudioOutput
   struct MusicTrack
   {
     std::string path;
+    // From music/tracks.yaml, where the config tool writes what it knows. Empty
+    // when there is no entry for this file, and the filename stands in.
+    std::string title;
+    std::string attribution;
 #if defined(PPUC_HAS_SDL3_MIXER)
     MIX_Audio* audio = nullptr;
 #endif

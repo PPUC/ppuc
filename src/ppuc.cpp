@@ -994,6 +994,47 @@ static bool IsOperatingSystemMetadata(const std::filesystem::path& path)
   return !name.empty() && name.front() == '.';
 }
 
+// Titles and credits for the music, as the config tool exported them.
+//
+// The machine otherwise knows a track only by its filename, which is whatever it
+// was called when somebody uploaded it -- "Nebulite_-_Iron_Pulse_(freetouse.com)
+// .mp3" for a track called Iron Pulse. Missing or unreadable is not a failure:
+// the chooser falls back to the filename, which is all it ever showed before.
+static void LoadMusicTrackInfo(const std::filesystem::path& musicDirectory, AudioOutput& audio)
+{
+  const std::filesystem::path infoPath = musicDirectory / "tracks.yaml";
+  std::error_code ec;
+  if (!std::filesystem::is_regular_file(infoPath, ec))
+  {
+    return;
+  }
+
+  try
+  {
+    const YAML::Node root = YAML::LoadFile(infoPath.string());
+    const YAML::Node tracks = root["tracks"];
+    if (!tracks || !tracks.IsSequence())
+    {
+      return;
+    }
+    for (const YAML::Node& track : tracks)
+    {
+      if (!track.IsMap() || !track["file"])
+      {
+        continue;
+      }
+      audio.SetMusicTrackInfo(track["file"].as<std::string>(),
+                              track["title"] ? track["title"].as<std::string>() : std::string(),
+                              track["attribution"] ? track["attribution"].as<std::string>() : std::string());
+    }
+  }
+  catch (const std::exception& ex)
+  {
+    printf("Music titles: %s could not be read (%s); filenames will be shown instead\n", infoPath.string().c_str(),
+           ex.what());
+  }
+}
+
 static std::string CollectMusicFilesCsv(const std::filesystem::path& musicDirectory)
 {
   std::error_code ec;
@@ -4997,6 +5038,14 @@ static void ServiceSongPicker()
     }
 }
 
+// One track at a time, named and credited.
+//
+// A list of filenames was what this showed first, and filenames are what the
+// files happened to be called when somebody uploaded them. The config tool holds
+// a proper title and the credit the track has to carry, and both travel with the
+// music now, so the chooser shows the song rather than a path. One at a time
+// because that is what is being chosen -- the rest of the playlist is a button
+// press away and does not need to be on the screen.
 static void DrawSongPickerInto(SDL_Renderer* renderer, int w, int h)
 {
     if (!g_songPicker.active || !pAudioOutput || renderer == nullptr || w <= 0 || h <= 0)
@@ -5017,40 +5066,55 @@ static void DrawSongPickerInto(SDL_Renderer* renderer, int w, int h)
     const SDL_Color dim{140, 140, 150, 255};
     const SDL_Color amber{255, 200, 70, 255};
 
-    // Paged, not scrolled: a fixed window that the selection moves through, the
-    // same arithmetic the switch monitor uses. A playlist can be longer than a
-    // panel and the panel cannot grow off the screen.
-    const size_t maxRows = 8;
-    const size_t rows = std::min(maxRows, count);
-    const size_t first = (g_songPicker.index / rows) * rows;
-    const size_t last = std::min(count, first + rows);
-
-    const SDL_FRect panel = DrawOverlayPanel(w, h, static_cast<int>(rows), "CHOOSE THE MUSIC");
-
-    char line[160];
-    for (size_t i = first; i < last; ++i)
+    std::string title = pAudioOutput->GetMusicTrackTitle(g_songPicker.index);
+    if (title.empty())
     {
-        const bool selected = i == g_songPicker.index;
-        const int y = static_cast<int>(panel.y) + kOverlayPanelTop + static_cast<int>(i - first) * kOverlayRowHeight;
-        if (selected)
+        title = pAudioOutput->GetMusicTrackName(g_songPicker.index);
+    }
+
+    // The credit, split into the lines it was written as. It is a name and a
+    // URL; it is read once, not scanned.
+    std::vector<std::string> credit;
+    {
+        const std::string text = pAudioOutput->GetMusicTrackAttribution(g_songPicker.index);
+        std::string line;
+        for (const char c : text)
         {
-            SDL_SetRenderDrawColor(g_uiRenderer, 44, 48, 62, 255);
-            const SDL_FRect row{panel.x + 16.0f, static_cast<float>(y) - 6.0f, panel.w - 32.0f, 44.0f};
-            SDL_RenderFillRect(g_uiRenderer, &row);
+            if (c == '\n')
+            {
+                credit.push_back(line);
+                line.clear();
+            }
+            else if (c != '\r')
+            {
+                line.push_back(c);
+            }
         }
-        DrawFirmwareTextLeft(selected ? ">" : " ", pFirmwareFontSmall, static_cast<int>(panel.x) + 32, y,
-                             selected ? amber : dim);
-        snprintf(line, sizeof(line), "%s", pAudioOutput->GetMusicTrackName(i).c_str());
-        DrawFirmwareTextLeft(line, pFirmwareFontSmall, static_cast<int>(panel.x) + 64, y, selected ? white : dim);
+        if (!line.empty())
+        {
+            credit.push_back(line);
+        }
     }
 
-    const int helpY = static_cast<int>(panel.y) + kOverlayPanelTop + static_cast<int>(rows) * kOverlayRowHeight + 12;
-    if (count > rows)
+    // Sized from what is in it, the way a slide is: the title, the credit, and
+    // the line saying which buttons do what.
+    const int rows = 1 + static_cast<int>(credit.size());
+    const SDL_FRect panel = DrawOverlayPanel(w, h, rows, "CHOOSE THE MUSIC");
+
+    int y = static_cast<int>(panel.y) + kOverlayPanelTop;
+    DrawFirmwareText(title.c_str(), pFirmwareFontLarge, w / 2, y, amber);
+    y += kOverlayRowHeight;
+
+    for (const std::string& line : credit)
     {
-        snprintf(line, sizeof(line), "%zu-%zu of %zu", first + 1, last, count);
-        DrawFirmwareText(line, pFirmwareFontSmall, w / 2, helpY, dim);
+        DrawFirmwareText(line.c_str(), pFirmwareFontSmall, w / 2, y + 6, dim);
+        y += kOverlayRowHeight;
     }
-    DrawFirmwareText("flipper buttons choose    both together starts the game", pFirmwareFontSmall, w / 2, helpY + 40,
+
+    char help[96];
+    snprintf(help, sizeof(help), "%zu of %zu", g_songPicker.index + 1, count);
+    DrawFirmwareText(help, pFirmwareFontSmall, w / 2, y + 12, white);
+    DrawFirmwareText("flipper buttons choose    both together starts the game", pFirmwareFontSmall, w / 2, y + 52,
                      dim);
 }
 
@@ -7570,6 +7634,10 @@ int main(int argc, char** argv)
         return 1;
       }
       pAudioOutput->SetMusicEnabled(false);
+      if (HasOptionValue(opt_game_folder))
+      {
+        LoadMusicTrackInfo(std::filesystem::path(opt_game_folder) / "music", *pAudioOutput);
+      }
     }
 
     // Worth saying out loud: the difference between the two only shows when an

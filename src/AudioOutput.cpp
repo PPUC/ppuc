@@ -194,6 +194,43 @@ void AudioOutput::SetMusicEnabled(bool enabled)
 #endif
 }
 
+void AudioOutput::SetMusicTrackInfo(const std::string& fileName, const std::string& title,
+                                    const std::string& attribution)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  for (MusicTrack& track : musicTracks_)
+  {
+    size_t begin = track.path.find_last_of("/\\");
+    begin = (begin == std::string::npos) ? 0 : begin + 1;
+    if (track.path.compare(begin, std::string::npos, fileName) == 0)
+    {
+      track.title = title;
+      track.attribution = attribution;
+      return;
+    }
+  }
+}
+
+std::string AudioOutput::GetMusicTrackTitle(size_t index) const
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (index >= musicTracks_.size())
+  {
+    return std::string();
+  }
+  return musicTracks_[index].title;
+}
+
+std::string AudioOutput::GetMusicTrackAttribution(size_t index) const
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (index >= musicTracks_.size())
+  {
+    return std::string();
+  }
+  return musicTracks_[index].attribution;
+}
+
 size_t AudioOutput::GetMusicTrackCount() const
 {
   std::lock_guard<std::mutex> lock(mutex_);
