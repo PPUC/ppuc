@@ -244,8 +244,21 @@ void PluginEngine::OnStateSrcChanged()
   m_nextSwitchAuditMs = 0;
   // Re-announce every output after a source change: a restarted game must not
   // inherit the previous run's edge state.
+  //
+  // Zeroing the cache was only half of that, and the missing half was visible on
+  // the machine. It re-announces every lamp the ROM has *on*, because on differs
+  // from the zero; a lamp the ROM has off matches the zero and is announced to
+  // nobody. The boards keep their lamps across a restart of ppuc -- they never
+  // lose power -- so a lamp left lit by the previous session stayed lit, with
+  // PinMAME believing it dark. On Flash that showed as Special lit in the
+  // outlanes on the first game after a start: the rules saw the lamp, the ROM
+  // never awarded anything, and it only came right once the ROM happened to
+  // change that lamp for its own reasons.
+  //
+  // So the next sample announces every output whatever it reads.
   m_lastLamp.assign(m_lamps.size(), 0);
   m_lastGi.assign(m_gis.size(), 0);
+  m_announceAllOutputs = true;
 
   m_coilPlan = std::move(plan);
   m_gateOpen.store(true, std::memory_order_seq_cst);
@@ -410,12 +423,15 @@ void PluginEngine::SampleOutputs()
   m_lampChanges.clear();
   m_giChanges.clear();
 
+  const bool announceAll = m_announceAllOutputs;
+  m_announceAllOutputs = false;
+
   uint8_t value = 0;
   for (size_t i = 0; i < m_lamps.size(); ++i)
   {
     m_lamps[i].Get(m_lamps[i].context, &value);
     const uint8_t level = value != 0 ? 1 : 0;
-    if (level != m_lastLamp[i])
+    if (announceAll || level != m_lastLamp[i])
     {
       m_lastLamp[i] = level;
       m_lampChanges.push_back({m_lamps[i].number, level});
@@ -424,7 +440,7 @@ void PluginEngine::SampleOutputs()
   for (size_t i = 0; i < m_gis.size(); ++i)
   {
     m_gis[i].Get(m_gis[i].context, &value);
-    if (value != m_lastGi[i])
+    if (announceAll || value != m_lastGi[i])
     {
       m_lastGi[i] = value;
       m_giChanges.push_back({m_gis[i].number, value});

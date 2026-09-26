@@ -155,6 +155,11 @@ class PluginEngine final : public GameEngine
   uint64_t m_nextSwitchAuditMs = 0;
   uint32_t m_switchCorrections = 0;
   void AuditSwitches();
+  // Set when the output sources change, so the next sample states every lamp and
+  // GI rather than only the ones that differ from a cache that begins as "all
+  // off". The boards hold their outputs across a restart of ppuc, so a lamp the
+  // ROM has off has to be said out loud or it stays as the last session left it.
+  bool m_announceAllOutputs = true;
   std::vector<uint8_t> m_lastLamp;
   std::vector<uint8_t> m_lastGi;
   std::vector<GameEngineOutputChange> m_lampChanges;

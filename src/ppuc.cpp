@@ -3349,13 +3349,26 @@ static constexpr int kOverlayRowHeight = 52;
 static constexpr int kOverlayPanelFooter = 116;  // two lines of help below the rows
 
 // A panel with a heading, centred, sized to hold `rows` lines.
-static SDL_FRect DrawOverlayPanel(int w, int h, int rows, const char* title)
+// minWidth widens the panel for content that does not fit the usual one. The
+// service tools all hold short rows and take the default; a music credit is a
+// sentence and a URL, and ran off both edges of it.
+static SDL_FRect DrawOverlayPanel(int w, int h, int rows, const char* title, float minWidth = 0.0f)
 {
     const SDL_Color white{235, 235, 235, 255};
     // Sized from the parts rather than a round number: heading, one row per
     // item, then two lines of help. Guessing the height once put the help text
     // across the last item.
-    const float panelW = 760.0f;
+    float panelW = 760.0f;
+    if (minWidth > panelW)
+    {
+        panelW = minWidth;
+    }
+    // Never wider than the screen it is drawn on, whatever the text wants.
+    const float maxPanelW = static_cast<float>(w) - 48.0f;
+    if (panelW > maxPanelW)
+    {
+        panelW = maxPanelW;
+    }
     const float panelH = static_cast<float>(kOverlayPanelTop + rows * kOverlayRowHeight + kOverlayPanelFooter);
     const SDL_FRect panel{(static_cast<float>(w) - panelW) / 2.0f, (static_cast<float>(h) - panelH) / 2.0f, panelW,
                           panelH};
@@ -4870,7 +4883,12 @@ struct SongPicker
 {
     bool active = false;
     size_t index = 0;
+    // When it opened, which the settle window is measured from, and when it was
+    // last touched, which the timeout is measured from. They are not the same:
+    // the settle window is about the ball the ROM has just released, and must
+    // not move when somebody presses a button.
     uint64_t openedMs = 0;
+    uint64_t touchedMs = 0;
 };
 static SongPicker g_songPicker;
 // The game starting is noticed on the engine's output thread, and everything
@@ -4884,10 +4902,11 @@ static std::atomic<bool> g_songPickerRequested{false};
 // dismissing on them would mean the chooser flashed up and vanished before
 // anybody could read it.
 static const uint64_t kSongPickerSettleMs = 2000;
-// A chooser drawn over a running game cannot be allowed to stay there. Nothing
-// should reach this -- a plunge dismisses it, and so does the ball search -- but
-// "nothing should" is not a reason to leave a screen with no way out.
-static const uint64_t kSongPickerTimeoutMs = 20000;
+// How long the chooser waits with nobody touching it. Restarted by every press,
+// so it measures inattention rather than the length of the whole choice: walking
+// a fourteen-track playlist took longer than the old fixed timeout allowed, and
+// the chooser vanished mid-decision.
+static const uint64_t kSongPickerTimeoutMs = 8000;
 
 static bool SongPickerActive() { return g_songPicker.active; }
 
@@ -4921,6 +4940,7 @@ static void OpenSongPicker()
     }
     g_songPicker.index = pAudioOutput->GetMusicTrackIndex();
     g_songPicker.openedMs = SDL_GetTicks();
+    g_songPicker.touchedMs = g_songPicker.openedMs;
     g_songPicker.active = true;
 }
 
@@ -4952,6 +4972,7 @@ static bool HandleSongPickerNav(SlideNav direction, bool bothHeld)
     }
     g_songPicker.index = (direction == SlideNav::Next) ? (g_songPicker.index + 1) % count
                                                        : (g_songPicker.index + count - 1) % count;
+    g_songPicker.touchedMs = SDL_GetTicks();
     // Started here rather than on accept. The player is choosing by ear, so the
     // highlight and the sound have to be the same thing.
     pAudioOutput->SelectMusicTrack(g_songPicker.index);
@@ -5027,7 +5048,7 @@ static void ServiceSongPicker()
             OpenSongPicker();
         }
     }
-    if (g_songPicker.active && SDL_GetTicks() - g_songPicker.openedMs >= kSongPickerTimeoutMs)
+    if (g_songPicker.active && SDL_GetTicks() - g_songPicker.touchedMs >= kSongPickerTimeoutMs)
     {
         CloseSongPicker();
     }
@@ -5097,9 +5118,31 @@ static void DrawSongPickerInto(SDL_Renderer* renderer, int w, int h)
     }
 
     // Sized from what is in it, the way a slide is: the title, the credit, and
-    // the line saying which buttons do what.
+    // the line saying which buttons do what. Measured rather than guessed -- a
+    // credit carries a URL, and at 760 the text simply ran off both edges.
+    int widest = 0;
+    int lineW = 0;
+    int lineH = 0;
+    if (pFirmwareFontLarge && TTF_GetStringSize(pFirmwareFontLarge, title.c_str(), 0, &lineW, &lineH))
+    {
+        widest = lineW;
+    }
+    for (const std::string& line : credit)
+    {
+        if (pFirmwareFontSmall && TTF_GetStringSize(pFirmwareFontSmall, line.c_str(), 0, &lineW, &lineH))
+        {
+            widest = std::max(widest, lineW);
+        }
+    }
+    if (pFirmwareFontSmall &&
+        TTF_GetStringSize(pFirmwareFontSmall, "flipper buttons choose    both together starts the game", 0, &lineW,
+                          &lineH))
+    {
+        widest = std::max(widest, lineW);
+    }
+
     const int rows = 1 + static_cast<int>(credit.size());
-    const SDL_FRect panel = DrawOverlayPanel(w, h, rows, "CHOOSE THE MUSIC");
+    const SDL_FRect panel = DrawOverlayPanel(w, h, rows, "CHOOSE THE MUSIC", static_cast<float>(widest) + 64.0f);
 
     int y = static_cast<int>(panel.y) + kOverlayPanelTop;
     DrawFirmwareText(title.c_str(), pFirmwareFontLarge, w / 2, y, amber);
