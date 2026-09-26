@@ -301,6 +301,9 @@ void PluginEngine::PollThreadMain()
   auto deadline = std::chrono::steady_clock::now();
 
   uint32_t localGeneration = 0;
+  // The first pass after the sources are published states every coil rather
+  // than reporting changes against a cache that has just been zeroed.
+  bool syncAll = false;
   std::vector<uint16_t> numbers;
   std::vector<uint8_t> last;
   std::vector<uint8_t> raw;
@@ -330,6 +333,7 @@ void PluginEngine::PollThreadMain()
         }
         last.assign(plan.entries.size(), 0);
         raw.assign(plan.entries.size(), 0);
+        syncAll = true;
       }
       for (size_t i = 0; i < plan.entries.size(); ++i)
       {
@@ -339,6 +343,23 @@ void PluginEngine::PollThreadMain()
       ++fetches;
 
       // --- dispatch phase: outside the gate, PPUC-owned memory only ---
+      if (syncAll)
+      {
+        // States, not changes. No game-running edge either: nothing has
+        // actually changed, and a spurious one is read as a game starting.
+        syncAll = false;
+        for (size_t i = 0; i < numbers.size(); ++i)
+        {
+          const uint8_t value = raw[i] != 0 ? 1 : 0;
+          last[i] = value;
+          if (m_pHost != nullptr)
+          {
+            m_pHost->OnCoilStateSync(numbers[i], value);
+          }
+        }
+        m_trackingResetPending.store(true, std::memory_order_release);
+      }
+
       for (size_t i = 0; i < numbers.size(); ++i)
       {
         const uint8_t value = raw[i] != 0 ? 1 : 0;
@@ -437,7 +458,11 @@ void PluginEngine::SampleOutputs()
       m_lampChanges.push_back({m_lamps[i].number, level});
     }
   }
-  for (size_t i = 0; i < m_gis.size(); ++i)
+  // Skipped entirely where the host cannot use it. Outside WPC, PinMAME's GI is
+  // not the machine's: on a System 4 or 6 game the general illumination is wired
+  // on and the ROM knows nothing about it, and PollChangedGis drops these anyway.
+  const bool giUsable = HasCapability(Capability::ChangedGis);
+  for (size_t i = 0; giUsable && i < m_gis.size(); ++i)
   {
     m_gis[i].Get(m_gis[i].context, &value);
     if (announceAll || value != m_lastGi[i])

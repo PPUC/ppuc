@@ -52,6 +52,20 @@ class GameEngineHost
   // the coil/GI mappings, MediaPluginHost and LuaRulesEngine.
   virtual void OnCoilChanged(uint16_t number, uint8_t state) = 0;
 
+  // The engine stating what a coil is, rather than reporting that it changed.
+  //
+  // Sent once for every coil when the output sources are first published. The
+  // boards keep their outputs across a restart of the host, and the engine only
+  // ever reports differences against a cache that begins as all-off, so a coil
+  // the ROM has off is never mentioned and stays as the last session left it.
+  //
+  // Deliberately not OnCoilChanged: nothing changed, and the rules must not see
+  // it. A machine's rules read a coil going to zero as an event -- on Flash that
+  // is how one of them knows a game ended -- and firing those at startup would
+  // announce a game over into an attract screen. Hosts drive the boards from
+  // this and nothing else.
+  virtual void OnCoilStateSync(uint16_t number, uint8_t state) { (void)number, (void)state; }
+
   // PUSH, and deliberately separate from OnCoilChanged(gameOnSolenoid, ...).
   // The game-on solenoid means two different things that PinMAME conflates:
   // "high power is live on the boards" (a hardware gate) and "a game is in

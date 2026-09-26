@@ -4772,6 +4772,21 @@ static void DrawSlidesInto(SDL_Renderer* renderer, int w, int h)
 static uint64_t g_slideNavClosedAtMs[2] = {0, 0};
 static const uint64_t kSlideNavBothWindowMs = 400;
 
+// A second debounce, on top of the board's, for these two switches only.
+//
+// The boards debounce a flipper button for what a flipper coil needs: react
+// instantly and never miss a press, because a missed one is a missed shot. That
+// is the right setting for flippers and far too loose for a menu, where one
+// press of a bouncing leaf walked two or three songs down the playlist. This is
+// only in the path that steers the slideshow and the chooser -- the flippers
+// themselves are board-local and never come through here at all, so nothing
+// about playing the machine is slowed down by it.
+//
+// Measured from the last close that was acted on, so a bouncing contact is
+// swallowed whole rather than extending the dead time with each bounce.
+static uint64_t g_slideNavAcceptedAtMs[2] = {0, 0};
+static const uint64_t kSlideNavDebounceMs = 250;
+
 // Somebody is using the machine.
 //
 // The switch loop calls this for every switch a board reports, which covers a
@@ -4889,6 +4904,9 @@ struct SongPicker
     // not move when somebody presses a button.
     uint64_t openedMs = 0;
     uint64_t touchedMs = 0;
+    // What the last step moved away from, so that "both together" can put it
+    // back. Equal to index when nothing has been stepped.
+    size_t steppedFrom = 0;
 };
 static SongPicker g_songPicker;
 // The game starting is noticed on the engine's output thread, and everything
@@ -4939,6 +4957,7 @@ static void OpenSongPicker()
         return;
     }
     g_songPicker.index = pAudioOutput->GetMusicTrackIndex();
+    g_songPicker.steppedFrom = g_songPicker.index;
     g_songPicker.openedMs = SDL_GetTicks();
     g_songPicker.touchedMs = g_songPicker.openedMs;
     g_songPicker.active = true;
@@ -4960,6 +4979,16 @@ static bool HandleSongPickerNav(SlideNav direction, bool bothHeld)
 
     if (bothHeld)
     {
+        // The first of the two presses has already stepped -- there is no way to
+        // know a second one is coming without making every single press wait for
+        // it, which would make the whole thing feel slow. So the step is undone
+        // instead: "both together" keeps the song that was playing when the
+        // player reached for both buttons, which is the one they meant.
+        if (g_songPicker.steppedFrom != g_songPicker.index)
+        {
+            g_songPicker.index = g_songPicker.steppedFrom;
+            pAudioOutput->SelectMusicTrack(g_songPicker.index);
+        }
         CloseSongPicker();
         return true;
     }
@@ -4970,6 +4999,7 @@ static bool HandleSongPickerNav(SlideNav direction, bool bothHeld)
         CloseSongPicker();
         return true;
     }
+    g_songPicker.steppedFrom = g_songPicker.index;
     g_songPicker.index = (direction == SlideNav::Next) ? (g_songPicker.index + 1) % count
                                                        : (g_songPicker.index + count - 1) % count;
     g_songPicker.touchedMs = SDL_GetTicks();
@@ -6332,6 +6362,23 @@ void signal_handler_graceful(int sig)
 // GameEngineHost documents, and it is why the interceptor takes a lock.
 struct PpucEngineHost final : GameEngineHost
 {
+  // Drives the boards and nothing else. See GameEngine.h for why the rules and
+  // the media host are not told: this is the engine saying what a coil is, at a
+  // moment when nothing has changed, and a rule reading a coil at zero as an
+  // event would announce a game over into an attract screen.
+  void OnCoilStateSync(uint16_t number, uint8_t state) override
+  {
+    g_interceptorOutputs.ApplyEngineCoil(pPpuc, number, state, true);
+
+    for (const PPUCCoilGiMapping& mapping : pPpuc->GetCoilGiMappings())
+    {
+      if (mapping.coil == number)
+      {
+        pPpuc->SetGIState(mapping.gi, state != 0 ? mapping.onBrightness : mapping.offBrightness);
+      }
+    }
+  }
+
   void OnCoilChanged(uint16_t number, uint8_t state) override
   {
     if (pMediaPluginHost != nullptr)
@@ -8809,12 +8856,23 @@ int main(int argc, char** argv)
           if (newSwitchState != 0)
           {
             const uint64_t nowMs = SDL_GetTicks();
-            const uint64_t otherMs = g_slideNavClosedAtMs[isNext ? 1 : 0];
-            const bool bothHeld = otherMs != 0 && nowMs - otherMs <= kSlideNavBothWindowMs;
-            g_slideNavClosedAtMs[index] = nowMs;
+            const uint64_t acceptedMs = g_slideNavAcceptedAtMs[index];
+            if (acceptedMs != 0 && nowMs - acceptedMs < kSlideNavDebounceMs)
+            {
+              // A bounce of a press already acted on. Still steered: it is these
+              // buttons being used, not somebody walking up to the machine.
+              steered = true;
+            }
+            else
+            {
+              const uint64_t otherMs = g_slideNavClosedAtMs[isNext ? 1 : 0];
+              const bool bothHeld = otherMs != 0 && nowMs - otherMs <= kSlideNavBothWindowMs;
+              g_slideNavClosedAtMs[index] = nowMs;
+              g_slideNavAcceptedAtMs[index] = nowMs;
 
-            const SlideNav direction = isNext ? SlideNav::Next : SlideNav::Previous;
-            steered = HandleSongPickerNav(direction, bothHeld) || HandleSlideNav(direction, bothHeld);
+              const SlideNav direction = isNext ? SlideNav::Next : SlideNav::Previous;
+              steered = HandleSongPickerNav(direction, bothHeld) || HandleSlideNav(direction, bothHeld);
+            }
           }
           else
           {
