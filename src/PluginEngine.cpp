@@ -353,9 +353,12 @@ void PluginEngine::PollThreadMain()
           // Every rule keyed on currentPlayer() was therefore dead from the
           // second game of a session onwards, and only a restart brought it
           // back. Re-announcing at the start of each game costs one poll.
-          if (value != 0)
+          // A game ending is the one moment the ball and the player go to zero,
+          // and this engine reports that like any other change rather than
+          // letting the host write it behind the cache's back.
+          if (value == 0)
           {
-            m_forgetTracked.store(true, std::memory_order_release);
+            m_trackingResetPending.store(true, std::memory_order_release);
           }
           m_pHost->OnGameRunningChanged(value != 0);
         }
@@ -1111,15 +1114,6 @@ void PluginEngine::PollTrackedState()
     return;
   }
 
-  // Set from the poll thread when a game starts; taken here, on the thread that
-  // owns the cache, so the two never touch the same fields.
-  if (m_forgetTracked.exchange(false, std::memory_order_acq_rel))
-  {
-    m_hasLastBall = false;
-    m_hasLastPlayer = false;
-    m_nextTrackedPollMs = 0;
-  }
-
   const uint64_t now = NowMs();
   if (now < m_nextTrackedPollMs)
   {
@@ -1141,16 +1135,41 @@ void PluginEngine::PollTrackedState()
     return msg.read == 1;
   };
 
-  uint8_t ball = 0;
-  if (TryDecodeTrackedPinmameValue(m_tracking.currentBall, read, &ball) && ball <= kMaxPlausibleBall)
+  // A game that has ended has no ball and no player, and this engine says so.
+  //
+  // The host used to force both to 0 on the rules directly, which left two
+  // writers and a cache only one of them could see: it held 1 while the rules
+  // held 0, so the next game's player 1 -- every one-player game -- looked
+  // unchanged and was never reported. Reporting the zeros from here instead
+  // keeps the cache and the rules agreeing, so the next real value always
+  // differs from what is cached and is always announced.
+  //
+  // Deliberately driven by the game-on edge rather than by a "is a game running"
+  // test around the decode. A machine with no game-on solenoid configured -- any
+  // --no-serial run, and every test harness -- would otherwise have no ball and
+  // no player at all.
+  if (m_trackingResetPending.exchange(false, std::memory_order_acq_rel))
   {
-    m_undecodableBall = false;
-    if (!m_hasLastBall || ball != m_lastBall)
+    if (!m_hasLastBall || m_lastBall != 0)
     {
       m_hasLastBall = true;
-      m_lastBall = ball;
-      m_pHost->OnCurrentBallChanged(ball);
+      m_lastBall = 0;
+      m_pHost->OnCurrentBallChanged(0);
     }
+    if (!m_hasLastPlayer || m_lastPlayer != 0)
+    {
+      m_hasLastPlayer = true;
+      m_lastPlayer = 0;
+      m_pHost->OnCurrentPlayerChanged(0);
+    }
+  }
+
+  uint8_t ball = 0;
+  const bool haveBall =
+      TryDecodeTrackedPinmameValue(m_tracking.currentBall, read, &ball) && ball <= kMaxPlausibleBall;
+  if (haveBall)
+  {
+    m_undecodableBall = false;
   }
   else
   {
@@ -1158,19 +1177,27 @@ void PluginEngine::PollTrackedState()
   }
 
   uint8_t player = 0;
-  if (TryDecodeTrackedPinmameValue(m_tracking.currentPlayer, read, &player))
+  const bool havePlayer = TryDecodeTrackedPinmameValue(m_tracking.currentPlayer, read, &player);
+  if (havePlayer)
   {
     m_undecodablePlayer = false;
-    if (!m_hasLastPlayer || player != m_lastPlayer)
-    {
-      m_hasLastPlayer = true;
-      m_lastPlayer = player;
-      m_pHost->OnCurrentPlayerChanged(player);
-    }
   }
   else
   {
     ReportUndecodableTrackedField("player", m_tracking.currentPlayer, read, m_undecodablePlayer);
+  }
+
+  if (haveBall && (!m_hasLastBall || ball != m_lastBall))
+  {
+    m_hasLastBall = true;
+    m_lastBall = ball;
+    m_pHost->OnCurrentBallChanged(ball);
+  }
+  if (havePlayer && (!m_hasLastPlayer || player != m_lastPlayer))
+  {
+    m_hasLastPlayer = true;
+    m_lastPlayer = player;
+    m_pHost->OnCurrentPlayerChanged(player);
   }
 }
 

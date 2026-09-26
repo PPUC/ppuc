@@ -4855,6 +4855,16 @@ static void NoteSongPickerSwitch(int number, uint8_t state)
     {
         return;
     }
+    // The two navigation switches are never "the playfield answering". They are
+    // how the question is answered, and dismissing on them meant the first press
+    // walked one track and closed the chooser on the same edge -- so the playlist
+    // could only ever be stepped forward once. They are excluded by number rather
+    // than through the button flag, because whether a flipper button carries that
+    // flag is up to the game's configuration and this must not depend on it.
+    if (number == opt_slide_next_switch || number == opt_slide_previous_switch)
+    {
+        return;
+    }
     if (g_buttonSwitchNumbers.count(number) != 0)
     {
         return;
@@ -4866,11 +4876,34 @@ static void NoteSongPickerSwitch(int number, uint8_t state)
     CloseSongPicker();
 }
 
+// When the machine was last not playing. Used to tell a game starting from a
+// game-on solenoid that merely flickered.
+static uint64_t g_gameOffAtMs = 0;
+// A real gap between games is at least the time it takes somebody to press start.
+// A solenoid that drops and returns inside a game is far quicker than that.
+static const uint64_t kMinAttractBeforePicker = 3000;
+
 static void ServiceSongPicker()
 {
+    const uint64_t nowMs = SDL_GetTicks();
+    const bool gameRunning = ball_search_game_running.load(std::memory_order_acquire);
+    static bool wasRunning = false;
+    if (!gameRunning && (wasRunning || g_gameOffAtMs == 0))
+    {
+        g_gameOffAtMs = nowMs;
+    }
+    wasRunning = gameRunning;
+
     if (g_songPickerRequested.exchange(false, std::memory_order_acq_rel))
     {
-        OpenSongPicker();
+        // Only a genuine gap counts as a new game. Flash drops its game-on
+        // solenoid and brings it back inside a game -- a drained ball is enough
+        // -- and every one of those looked like a game starting, so the chooser
+        // appeared over a ball in play.
+        if (nowMs - g_gameOffAtMs >= kMinAttractBeforePicker)
+        {
+            OpenSongPicker();
+        }
     }
     if (g_songPicker.active && SDL_GetTicks() - g_songPicker.openedMs >= kSongPickerTimeoutMs)
     {
@@ -6188,11 +6221,12 @@ struct PpucEngineHost final : GameEngineHost
     if (pLuaRulesEngine)
     {
       pLuaRulesEngine->SetAttractMode(!gameRunning);
-      if (!gameRunning)
-      {
-        pLuaRulesEngine->SetCurrentBall(0);
-        pLuaRulesEngine->SetCurrentPlayer(0);
-      }
+      // The ball and the player are not set here. They belong to whichever
+      // engine reports them, and forcing them from this side left two writers
+      // for one pair of values: the engine's cache could not see what this did,
+      // so a game starting with the same player number as the last one looked
+      // unchanged and the rules kept the zeros. PluginEngine reports zeros for
+      // attract itself now, which is the same outcome from one place.
     }
 
     if (g_playfieldAssistEnabled)
