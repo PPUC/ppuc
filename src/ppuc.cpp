@@ -48,6 +48,7 @@
 #include "SDLDMD/SDLDMD.h"
 #endif
 #include "AttractSlides.h"
+#include "BallTroughWatch.h"
 #include "AudioLanes.h"
 #include "AudioOutput.h"
 #include "LuaRulesEngine.h"
@@ -467,6 +468,20 @@ static std::unique_ptr<AttractSlides::Show> g_attractSlides;
 static std::set<int> g_buttonSwitchNumbers;
 uint32_t opt_attract_slides_idle_ms = 60000;
 uint32_t opt_attract_slide_duration_ms = 8000;
+// The switch a ball rests on when it is waiting to be served, and how long it
+// may sit there during a game before the ROM is told about it again.
+//
+// Switch state reaches the ROM as changes, never as a level, so a transition the
+// ROM does not act on is gone: the ball sits in the trough with every layer
+// agreeing the switch is closed and nothing serving it. The cure has always been
+// to lift the ball out and drop it back, which is nothing more than giving the
+// ROM a fresh edge. This does that without the glass coming off.
+//
+// 0 disables it, which is the default: a machine whose trough switch has not been
+// named must not have its switches synthesised.
+int opt_ball_trough_switch = 0;
+uint32_t opt_ball_trough_grace_ms = 5000;
+
 // The two buttons that page through the slides, usually the flipper buttons.
 // 0 means none configured, which leaves the keyboard as the only way to steer.
 int opt_slide_next_switch = 0;
@@ -4757,6 +4772,46 @@ static bool HandleSlideNav(SlideNav direction, bool bothHeld)
     return true;
 }
 
+static BallTroughWatch::State g_troughWatch;
+// Long enough that PinMAME samples the matrix between the two halves, short
+// enough to be invisible. An open and a close in the same instant is not an edge.
+static const uint64_t kTroughRepresentGapMs = 80;
+
+// Give the ROM the edge it missed.
+//
+// The decision is in BallTroughWatch, free of SDL and of the engine, so the
+// cases where this must stay silent can be tested rather than argued about. All
+// that happens here is carrying it out.
+//
+// Sent straight at the engine rather than through the rules, because this is not
+// the machine reporting something -- it is us repeating something the machine
+// already reported and the ROM did not act on.
+static void ServiceBallTroughWatch(GameEngine* pEngine)
+{
+    if (opt_ball_trough_switch == 0 || pEngine == nullptr || !pEngine->IsReady())
+    {
+        return;
+    }
+
+    const uint64_t nowMs = SDL_GetTicks();
+    const bool gameRunning = ball_search_game_running.load(std::memory_order_acquire);
+    switch (BallTroughWatch::Update(g_troughWatch, gameRunning, nowMs, opt_ball_trough_grace_ms,
+                                    kTroughRepresentGapMs))
+    {
+        case BallTroughWatch::Action::SendOpen:
+            printf("Ball trough: switch %d has been closed for %ums during a game; giving the ROM a fresh edge\n",
+                   opt_ball_trough_switch, static_cast<unsigned>(opt_ball_trough_grace_ms));
+            fflush(stdout);
+            pEngine->SendSwitch(opt_ball_trough_switch, 0);
+            break;
+        case BallTroughWatch::Action::SendClose:
+            pEngine->SendSwitch(opt_ball_trough_switch, 1);
+            break;
+        case BallTroughWatch::Action::None:
+            break;
+    }
+}
+
 // The song chooser, offered once at the start of a game.
 //
 // The same two buttons as the slideshow, for the same reason: they are the two
@@ -6849,6 +6904,10 @@ int main(int argc, char** argv)
           opt_ball_search_delay_ms_arg = DuplicateOptionalIniString(value);
         else if (key == "BallSearchRoundDelayMs")
           opt_ball_search_round_delay_ms_arg = DuplicateOptionalIniString(value);
+        else if (key == "BallTroughSwitch")
+          opt_ball_trough_switch = atoi(value.c_str());
+        else if (key == "BallTroughGraceMs")
+          opt_ball_trough_grace_ms = static_cast<uint32_t>(atoi(value.c_str()));
         else if (key == "CoilHoldFrames")
           opt_coil_hold_frames = static_cast<uint8_t>(atoi(value.c_str()));
         else if (key == "CloseCoinDoor")
@@ -8659,6 +8718,12 @@ int main(int argc, char** argv)
         }
         // The playfield answering instead of the player closes the chooser.
         NoteSongPickerSwitch(switchState->number, newSwitchState);
+        // Raw board state, before any rule can suppress it: what is being timed
+        // is a ball physically sitting there.
+        if (opt_ball_trough_switch != 0 && switchState->number == opt_ball_trough_switch)
+        {
+            BallTroughWatch::NoteSwitch(g_troughWatch, newSwitchState != 0, SDL_GetTicks());
+        }
         NoteBallSearchSwitchUpdate(pPpuc, ballSearchRunner, switchState->number, newSwitchState,
                                    opt_ball_search_delay_ms);
 
@@ -8705,6 +8770,7 @@ int main(int argc, char** argv)
       ServiceBallSearchRunner(pPpuc, ballSearchRunner,
                               ball_search_game_running.load(std::memory_order_acquire),
                               opt_ball_search_delay_ms, opt_ball_search_round_delay_ms);
+      ServiceBallTroughWatch(pEngine.get());
       stallWatch.Phase("switches");
 
       // Runs in both loop phases, before the readiness gate: the engine has its
