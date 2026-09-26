@@ -4686,7 +4686,22 @@ static void DrawSlidesInto(SDL_Renderer* renderer, int w, int h)
 //
 // Held state for both, so that "both at once" can be recognised: the second
 // button pressed while the first is still down is the hold, not a step.
-static bool g_slideNavClosed[2] = {false, false};
+// When each of the two navigation buttons was last seen closing, rather than
+// whether it is currently held.
+//
+// Held state needs the release to be reported, and on this machine it is not
+// reliably: the flipper buttons are board-local fast-flip switches, and a close
+// whose release never arrived left the button latched. Further presses of that
+// button then did nothing at all, and a press of the other one was read as both
+// buttons together and took the chooser down -- which is exactly how it behaved
+// on the machine: one step forward and then "select", while the other button
+// stepped several times first.
+//
+// Two closes inside this window are the two-button gesture. Longer than a person
+// managing "both at once", short enough that two deliberate single presses are
+// never mistaken for it.
+static uint64_t g_slideNavClosedAtMs[2] = {0, 0};
+static const uint64_t kSlideNavBothWindowMs = 400;
 
 // Somebody is using the machine.
 //
@@ -8616,20 +8631,25 @@ int main(int argc, char** argv)
         if (isNext || isPrevious)
         {
           const int index = isNext ? 0 : 1;
-          const bool wasClosed = g_slideNavClosed[index];
-          g_slideNavClosed[index] = newSwitchState != 0;
-          // On the close, not the release: a button that acts when it is let
-          // go feels broken to anybody used to a pinball machine.
-          if (newSwitchState != 0 && !wasClosed)
+          // On the close, not the release: a button that acts when it is let go
+          // feels broken to anybody used to a pinball machine. Every close steps,
+          // because libppuc reports changes -- a close it repeats is a close that
+          // really happened -- and nothing here waits for a release it may never
+          // be told about.
+          if (newSwitchState != 0)
           {
+            const uint64_t nowMs = SDL_GetTicks();
+            const uint64_t otherMs = g_slideNavClosedAtMs[isNext ? 1 : 0];
+            const bool bothHeld = otherMs != 0 && nowMs - otherMs <= kSlideNavBothWindowMs;
+            g_slideNavClosedAtMs[index] = nowMs;
+
             const SlideNav direction = isNext ? SlideNav::Next : SlideNav::Previous;
-            const bool bothHeld = g_slideNavClosed[isNext ? 1 : 0];
             steered = HandleSongPickerNav(direction, bothHeld) || HandleSlideNav(direction, bothHeld);
           }
           else
           {
-            // A release, or a repeat of a state we already had. Neither is
-            // activity, or holding a flipper button would end the show.
+            // A release is not activity, or holding a flipper button would end
+            // the show.
             steered = true;
           }
         }
