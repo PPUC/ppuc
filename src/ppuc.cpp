@@ -4784,8 +4784,12 @@ static const uint64_t kSlideNavBothWindowMs = 400;
 //
 // Measured from the last close that was acted on, so a bouncing contact is
 // swallowed whole rather than extending the dead time with each bounce.
+//
+// 100ms: ten steps a second is faster than anybody walks a playlist, and the
+// contact bounce being swallowed is over in a fraction of that. Chosen at the
+// machine -- 250 was enough to stop the double steps and slow enough to feel it.
 static uint64_t g_slideNavAcceptedAtMs[2] = {0, 0};
-static const uint64_t kSlideNavDebounceMs = 250;
+static const uint64_t kSlideNavDebounceMs = 100;
 
 // Somebody is using the machine.
 //
