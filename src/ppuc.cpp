@@ -6285,6 +6285,11 @@ struct PpucEngineHost final : GameEngineHost
     // conditions are all false looks exactly like a handler that is never
     // called. Nothing else in the log distinguishes the two.
     printf("Ball: %u\n", static_cast<unsigned>(ball));
+    // Flushed, because stdout is a file whenever anybody captures this and stdio
+    // then buffers 4 KB at a time. A log that stops mid-session reads as "the
+    // value was never reported again", which is the exact conclusion this line
+    // exists to prevent somebody drawing.
+    fflush(stdout);
     if (pLuaRulesEngine)
     {
       pLuaRulesEngine->SetCurrentBall(ball);
@@ -6308,6 +6313,7 @@ struct PpucEngineHost final : GameEngineHost
   void OnCurrentPlayerChanged(uint8_t player) override
   {
     printf("Player: %u\n", static_cast<unsigned>(player));
+    fflush(stdout);
     if (pLuaRulesEngine)
     {
       pLuaRulesEngine->SetCurrentPlayer(player);

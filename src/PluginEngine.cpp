@@ -31,6 +31,18 @@ uint64_t NowMs()
 }
 
 constexpr int kPlatformWpc = 1;  // PLATFORM_WPC, mirrored to avoid a libppuc include
+
+// A ball number is one decimal digit on every pinball machine ever built, so
+// anything above nine is not one.
+//
+// Outside a game the byte a map points at is not a ball number at all -- the ROM
+// reuses that RAM -- and on Flash it reads 0x70 and 0x30 there, which BCD-decode
+// to a perfectly well-formed 70 and 30. Those were announced as ball changes,
+// they oscillated in attract so they were announced repeatedly, and the ball-save
+// and tilt-warning bookkeeping was being told the machine was on ball 30. The
+// decoder is right to decode them; it is this layer's job to know that a ball
+// number cannot be 30.
+constexpr uint8_t kMaxPlausibleBall = 9;
 constexpr uint64_t kTrackedStatePollIntervalMs = 500;
 
 }  // namespace
@@ -1130,7 +1142,7 @@ void PluginEngine::PollTrackedState()
   };
 
   uint8_t ball = 0;
-  if (TryDecodeTrackedPinmameValue(m_tracking.currentBall, read, &ball))
+  if (TryDecodeTrackedPinmameValue(m_tracking.currentBall, read, &ball) && ball <= kMaxPlausibleBall)
   {
     m_undecodableBall = false;
     if (!m_hasLastBall || ball != m_lastBall)
