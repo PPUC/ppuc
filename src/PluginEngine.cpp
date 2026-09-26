@@ -330,6 +330,21 @@ void PluginEngine::PollThreadMain()
         // already see the new attract state.
         if (m_options.gameOnSolenoid != 0 && numbers[i] == m_options.gameOnSolenoid)
         {
+          // A game starting invalidates what we last told the host about the
+          // ball and the player, whatever the ROM's memory still reads.
+          //
+          // The host forces both to 0 when a game ends -- ball 0 means "no game"
+          // to the rules -- and it does that directly, so this cache never hears
+          // about it. A one-player game then starts again with the ROM reading
+          // player 1, which is what the cache still holds, so nothing is
+          // reported and the rules keep the 0 they were given at game over.
+          // Every rule keyed on currentPlayer() was therefore dead from the
+          // second game of a session onwards, and only a restart brought it
+          // back. Re-announcing at the start of each game costs one poll.
+          if (value != 0)
+          {
+            m_forgetTracked.store(true, std::memory_order_release);
+          }
           m_pHost->OnGameRunningChanged(value != 0);
         }
         if (m_options.debugCoils)
@@ -1082,6 +1097,15 @@ void PluginEngine::PollTrackedState()
   if (!m_tracking.loaded)
   {
     return;
+  }
+
+  // Set from the poll thread when a game starts; taken here, on the thread that
+  // owns the cache, so the two never touch the same fields.
+  if (m_forgetTracked.exchange(false, std::memory_order_acq_rel))
+  {
+    m_hasLastBall = false;
+    m_hasLastPlayer = false;
+    m_nextTrackedPollMs = 0;
   }
 
   const uint64_t now = NowMs();

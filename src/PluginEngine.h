@@ -198,6 +198,10 @@ class PluginEngine final : public GameEngine
   // recovers says so the next time it stops.
   bool m_undecodableBall = false;
   bool m_undecodablePlayer = false;
+  // Raised by the poll thread when a game starts, so the next tracked poll
+  // re-announces the ball and the player instead of comparing against a cache
+  // the host has since overwritten behind our back.
+  std::atomic<bool> m_forgetTracked{false};
 
   struct Impl;
   std::unique_ptr<Impl> m_impl;
