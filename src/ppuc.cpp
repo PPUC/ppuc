@@ -6118,7 +6118,7 @@ static struct cag_option options[] = {
     {.identifier = '^',
      .access_name = "plugin-dir",
      .value_name = "VALUE",
-     .description = "VPX plugin directory (optional, default ../vpinball/plugins)"},
+     .description = "VPX plugin directory (optional, default plugins/ next to the executable)"},
     {.identifier = '&',
      .access_name = "pup-folder",
      .value_name = "VALUE",
@@ -7814,7 +7814,7 @@ int main(int argc, char** argv)
   {
     pPluginBus = std::make_unique<PluginBus>();
     std::string busError;
-    if (!pPluginBus->Initialize(opt_plugin_dir ? opt_plugin_dir : "", &busError))
+    if (!pPluginBus->Initialize(PluginBus::ResolvePluginDir(opt_plugin_dir), &busError))
     {
       fprintf(stderr, "Plugin bus init failed: %s\n", busError.c_str());
       return 1;

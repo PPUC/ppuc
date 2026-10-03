@@ -84,11 +84,52 @@ PluginBus::~PluginBus()
 
 const MsgPluginAPI& PluginBus::Api() const { return m_manager.GetMsgAPI(); }
 
+std::string PluginBus::ResolvePluginDir(const char* configured)
+{
+  if (configured != nullptr && configured[0] != '\0')
+  {
+    return configured;
+  }
+
+  std::vector<std::filesystem::path> candidates;
+  if (const char* basePath = SDL_GetBasePath(); basePath != nullptr && basePath[0] != '\0')
+  {
+    const std::filesystem::path executableDir(basePath);
+    candidates.push_back(executableDir / "plugins");
+    candidates.push_back(executableDir / "ppuc" / "plugins");
+  }
+  candidates.emplace_back("ppuc/plugins");
+  candidates.emplace_back("plugins");
+  candidates.emplace_back("/usr/lib/ppuc/plugins");
+  candidates.emplace_back("../vpinball/plugins");
+
+  for (const auto& candidate : candidates)
+  {
+    if (std::filesystem::exists(candidate))
+    {
+      return candidate.string();
+    }
+  }
+  // None exists. Name the first one, so the error says where they belong.
+  return candidates.front().string();
+}
+
 bool PluginBus::Initialize(const std::string& pluginDir, std::string* errorMessage)
 {
   if (m_initialized)
   {
     return true;
+  }
+
+  // Checked before anything is registered: a bus that fails here is destroyed
+  // without Shutdown() having anything to undo.
+  if (!std::filesystem::exists(pluginDir))
+  {
+    if (errorMessage != nullptr)
+    {
+      *errorMessage = "plugin directory does not exist: " + pluginDir;
+    }
+    return false;
   }
 
   m_hostPlugin =
@@ -106,14 +147,6 @@ bool PluginBus::Initialize(const std::string& pluginDir, std::string* errorMessa
   api.SubscribeMsg(m_hostEndpointId, m_getScriptApiId, OnGetScriptApi, this);
   api.SubscribeMsg(m_hostEndpointId, m_getLoggingApiId, OnGetLoggingApi, this);
 
-  if (!std::filesystem::exists(pluginDir))
-  {
-    if (errorMessage != nullptr)
-    {
-      *errorMessage = "plugin directory does not exist: " + pluginDir;
-    }
-    return false;
-  }
   std::printf("Plugin directory: %s\n", pluginDir.c_str());
   m_manager.ScanPluginFolder(std::make_shared<SDLModuleLoader>(), pluginDir, [](MsgPI::MsgPlugin&) {});
 

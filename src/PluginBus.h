@@ -37,6 +37,11 @@ class PluginBus final
   PluginBus(const PluginBus&) = delete;
   PluginBus& operator=(const PluginBus&) = delete;
 
+  // The directory plugins are loaded from: `configured` when it names one,
+  // otherwise the first that exists of the places build.sh and a package put
+  // them. Resolved once, here, because the bus and MediaPluginHost must agree.
+  static std::string ResolvePluginDir(const char* configured);
+
   // Registers PPUC as a plugin, installs the settings handler and the script
   // API, then scans `pluginDir` for plugins. Returns false and fills
   // `errorMessage` when the directory is missing.

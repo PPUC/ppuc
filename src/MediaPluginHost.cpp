@@ -630,38 +630,7 @@ bool MediaPluginHost::Impl::Initialize(const Options& options,
 
   instance_ = this;
   options_ = options;
-  if (options.pluginDir && options.pluginDir[0] != '\0')
-  {
-    pluginDir_ = options.pluginDir;
-  }
-  else
-  {
-    std::vector<std::filesystem::path> candidates;
-    if (const char* basePath = SDL_GetBasePath();
-        basePath != nullptr && basePath[0] != '\0')
-    {
-      const std::filesystem::path executableDir(basePath);
-      candidates.push_back(executableDir / "plugins");
-      candidates.push_back(executableDir / "ppuc" / "plugins");
-    }
-    candidates.emplace_back("ppuc/plugins");
-    candidates.emplace_back("plugins");
-    candidates.emplace_back("/usr/lib/ppuc/plugins");
-    candidates.emplace_back("../vpinball/plugins");
-
-    for (const auto& candidate : candidates)
-    {
-      if (std::filesystem::exists(candidate))
-      {
-        pluginDir_ = candidate.string();
-        break;
-      }
-    }
-    if (pluginDir_.empty())
-    {
-      pluginDir_ = candidates.back().string();
-    }
-  }
+  pluginDir_ = PluginBus::ResolvePluginDir(options.pluginDir);
   pupFolder_ = options.pupFolder && options.pupFolder[0] != '\0'
                    ? options.pupFolder
                    : (std::getenv("HOME") ? std::getenv("HOME") : "");
