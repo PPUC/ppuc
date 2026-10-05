@@ -93,7 +93,18 @@ SlideFadeMs=350         ; fade between slides
 NoSerial=false          ; run without boards, for testing
 NoSound=false
 Debug=false
+BallTroughSwitch=0      ; 0 is off; see the safety net below
+BallTroughGraceMs=5000  ; how long a solid closure is tolerated first
 ```
+
+**`BallTroughSwitch`** arms the ball-trough safety net, and takes the switch
+number of the trough. Switch state reaches the ROM as changes, never as levels,
+so a ball that comes to rest on the trough switch while the ROM believes it open
+is a game that will not continue — and the only cure was to lift the ball out by
+hand. With this set, a closure that stays solid for `BallTroughGraceMs` while a
+game is in play is sent to the ROM again as an open followed by a close, giving
+it a fresh edge to notice. It does nothing in attract mode, where a ball resting
+in the trough is exactly where it belongs.
 
 Volumes are percentages, 100 meaning unchanged. They are **levels, not
 balance**: turn a loud source down rather than a quiet one up, because a source
@@ -446,6 +457,34 @@ saw it and the ROM did not. PPUC re-checks what it has told the ROM and corrects
 it, so this should heal within a second — if it does not, the switch is being
 suppressed by a rule, or it is mechanically marginal and never closed long
 enough to be reported at all.
+
+When the trough safety net is armed — `BallTroughSwitch` in `ppuc.ini` — it says
+so in the log every time it acts:
+
+```
+Ball trough: switch 48 has been closed for 5000ms during a game; giving the ROM a fresh edge
+```
+
+That line is the difference between two quite different faults. If it is there,
+the machine saw the stuck ball and told the ROM again, and the ROM ignored it.
+If it is not, nothing ever read the switch as closed, and the problem is the
+switch or the ball not reaching it.
+
+**Reading the log.** Logging is off until you ask for it: put an empty file
+named `log.txt` in the `dumps/` directory of the USB stick before booting, and
+everything the machine prints lands there as well as on the screen.
+
+It is **appended** to, so a reboot or a crash does not throw away the log of the
+run that went wrong, and each launch starts with a line naming itself:
+
+```
+===== runtime starting 2026-10-05 17:41:09 (boot +34s) =====
+```
+
+The date is only right if the machine has had a network to set its clock from,
+which is why the uptime is there too. Once the file passes 32 MB it becomes
+`log.1.txt` and a new one starts, so a machine can be left running for days and
+still have both the current and the previous stretch on the stick.
 
 **A coil never fires.** Select it in the monitor and press ENTER. If it fires,
 the wiring and the board are fine and the problem is upstream — the ROM, or a
