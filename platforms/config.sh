@@ -15,7 +15,7 @@ PINMAME_SHA=dd46dac6a268fc095d5989114b583adc94ed8051
 PINMAME_NVRAM_MAPS_SHA=7e63610464453e1902d6de2f90529a0705fdc2a2
 LIBPPUC_SHA=0a86b011d690a4d14a365bcd1d2b58513d265506
 DOCTEST_VERSION=2.4.11
-LIBSDLDMD_SHA=6678b5103cb733f43ce3680a966d23d20789cc8b
+LIBSDLDMD_SHA=0693ddfe20e828d4d7bbcb5b9ff44b39d5a10831
 VPINBALL_SHA=f46ee654b9f76d7481d28fa173043b394de73c2a
 VPINBALL_SDL_IMAGE_SHA="${VPINBALL_SDL_IMAGE_SHA:-${SDL_IMAGE_SHA}}"
 # libaltsound and ffmpeg are not pinned here. Nothing in PPUC links them --
@@ -212,23 +212,36 @@ ppuc_macos_deployment_target() {
 }
 
 # The SDL revision the PPUC application is built against.
+# The one SDL this build links, which is vpinball's.
 #
-# Read from libsdldmd rather than pinned here. It used to be a second constant
-# kept in step by hand, which drifted the moment libsdldmd bumped its SDL: the
-# plugin build would then have fetched a different SDL than the executable links,
-# putting two SDL3 libraries in one process -- the exact thing the reuse path
-# below exists to avoid. Worse, the reuse path's cache key named that stale
-# constant, so a change to libsdldmd's SDL did not invalidate the plugin
-# dependencies and SDL_ttf stayed linked against the previous one.
-ppuc_libsdldmd_sdl_sha() {
-   local config="${PPUC_SOURCE_ROOT}/external/libsdldmd/libsdldmd/platforms/config.sh"
-
-   if [ ! -f "${config}" ]; then
-      echo "Cannot determine the SDL revision: ${config} is missing." >&2
-      echo "libsdldmd must be staged before the VPX media plugins are built." >&2
-      return 1
+# Everything here ends up in a single process: ppuc links SDL, libsdldmd renders
+# the DMD through SDL, and vpinball's media plugins are loaded into the same
+# address space. Two SDL3 libraries in one process do not fail cleanly, so there
+# has to be exactly one, and exactly one place that decides which.
+#
+# vpinball is that place. Its plugins are developed and tested against the SDL
+# it pins, and they are the part of this build nobody here maintains. libsdldmd
+# defaults its own SDL_SHA instead of fixing it, so passing this in overrides it
+# (see libsdldmd's platforms/config.sh); ppuc used to read libsdldmd's constant
+# instead, which made libsdldmd the authority by accident rather than by choice.
+#
+# Printing nothing is meaningful: with the media plugins switched off there is no
+# vpinball in the process, nothing to agree with, and libsdldmd's own default is
+# the right answer. An empty value leaves it alone, because the default is
+# written with :- rather than =.
+ppuc_sdl_sha() {
+   if [ "${PPUC_BUILD_VPINBALL_MEDIA_PLUGINS:-1}" = "0" ]; then
+      echo ""
+      return 0
    fi
-   sed -n 's/^SDL_SHA=\(.*\)$/\1/p' "${config}" | head -1
+
+   # Staging prints progress, and this function's stdout is the revision. Without
+   # the redirect a build that has to fetch vpinball captures "Preparing
+   # vpinball..." into the SHA, which then goes into libsdldmd's cache key and
+   # into SDL_SHA, and libsdldmd tries to download an SDL named after a log line.
+   # A build that already had vpinball staged says nothing and worked by luck.
+   ppuc_stage_vpinball_source >&2 || return 1
+   ppuc_vpinball_pin SDL_SHA
 }
 
 # A dependency revision as pinned by vpinball itself, for the libraries only its
@@ -491,7 +504,7 @@ ppuc_prepare_vpinball_media_dependencies() {
 
    local vpinball_sdl_sha
    local vpinball_sdl_ttf_sha
-   if ! vpinball_sdl_sha="$(ppuc_libsdldmd_sdl_sha)" || [ -z "${vpinball_sdl_sha}" ]; then
+   if ! vpinball_sdl_sha="$(ppuc_vpinball_pin SDL_SHA)" || [ -z "${vpinball_sdl_sha}" ]; then
       return 1
    fi
    if ! vpinball_sdl_ttf_sha="$(ppuc_vpinball_pin SDL_TTF_SHA)"; then

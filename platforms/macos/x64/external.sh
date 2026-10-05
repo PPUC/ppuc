@@ -40,7 +40,12 @@ ppuc_stage_lua_source
 # build libsdldmd, SDL3_image, SDL3_mixer
 #
 
-LIBSDLDMD_EXPECTED_SHA="$(dependency_cache_key "${LIBSDLDMD_SHA}" LIBSDLDMD_SOURCE_DIR)-macos${MACOSX_DEPLOYMENT_TARGET}"
+# Staged before libsdldmd is built, because libsdldmd is built with it:
+# ppuc_sdl_sha reads the SDL revision out of vpinball, which has to be on
+# disk by then. It is in the cache key too, so moving vpinball's SDL
+# rebuilds libsdldmd rather than leaving one built against the old one.
+PPUC_SDL_SHA="$(ppuc_sdl_sha)"
+LIBSDLDMD_EXPECTED_SHA="$(dependency_cache_key "${LIBSDLDMD_SHA}" LIBSDLDMD_SOURCE_DIR)-macos${MACOSX_DEPLOYMENT_TARGET}-sdl${PPUC_SDL_SHA}"
 LIBSDLDMD_FOUND_SHA="$([ -f libsdldmd/cache.txt ] && cat libsdldmd/cache.txt || echo "")"
 
 if [ -n "${LIBSDLDMD_SHA}" ] && [ "${LIBSDLDMD_EXPECTED_SHA}" != "${LIBSDLDMD_FOUND_SHA}" ]; then
@@ -53,7 +58,7 @@ if [ -n "${LIBSDLDMD_SHA}" ] && [ "${LIBSDLDMD_EXPECTED_SHA}" != "${LIBSDLDMD_FO
    prepare_dependency_source libsdldmd "${LIBSDLDMD_SHA}" "https://github.com/PPUC/libsdldmd/archive/${LIBSDLDMD_SHA}.tar.gz" LIBSDLDMD_SOURCE_DIR
    cd libsdldmd
 
-   BUILD_TYPE=${BUILD_TYPE} platforms/macos/x64/external.sh
+   SDL_SHA=${PPUC_SDL_SHA} BUILD_TYPE=${BUILD_TYPE} platforms/macos/x64/external.sh
    cmake \
       -DPLATFORM=macos \
       -DARCH=x64 \
