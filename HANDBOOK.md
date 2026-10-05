@@ -312,6 +312,17 @@ with, so dragging a row renames a file in the game folder.
 Each slide has a title, a line or two of text, an optional photograph, a weight
 for its position in the loop, and an optional duration.
 
+**Several slides can share one photograph**, and that is the cheap way to build
+a how-to-play sequence: one picture of the playfield, a different caption and a
+different set of markers on each slide. The machine notices they are the same
+picture and decodes it once for the whole run.
+
+**Size the photograph for the screen, not for the camera.** The picture is
+decoded on the machine, and a slide panel is at most a backbox screen wide — so
+anything much past 1500 pixels on its long edge is work the Pi does for pixels
+nobody sees. A 24-megapixel photograph straight off a phone is worth scaling
+down before it is uploaded.
+
 **Publishing is the switch.** An unpublished slide is not exported and cannot
 appear on the machine, which is also how you keep a set of slides for a show and
 put them away afterwards without moving any files.

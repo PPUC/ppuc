@@ -3932,13 +3932,14 @@ static void DrawOverlayInto(SDL_Renderer* renderer, int w, int h, bool clearFirs
 // playfield can be re-marked, or the numbering changed, by editing two numbers
 // in the config tool. Nothing is pre-rendered and no new library is linked in.
 
-// One texture at a time. A slideshow shows one photograph for eight seconds,
-// so a cache is a cache of one -- and keeping the renderer it was made for
-// means the same slide survives moving between the media host's backglass and
-// a window opened here, which do not share textures.
+// One texture at a time, held by path. A slideshow shows one photograph for
+// eight seconds, so a cache is a cache of one -- and because consecutive slides
+// often share a picture, holding it by path means a run of them decodes once
+// rather than once each. Keeping the renderer it was made for means the slide
+// survives moving between the media host's backglass and a window opened here,
+// which do not share textures.
 static SDL_Texture* pSlideTexture = nullptr;
 static SDL_Renderer* pSlideTextureRenderer = nullptr;
-static size_t slideTextureIndex = static_cast<size_t>(-1);
 static std::string slideTexturePath;
 
 static void ReleaseMarkerArt();
@@ -3985,7 +3986,6 @@ static void ReleaseSlideTexture()
         pSlideTexture = nullptr;
     }
     pSlideTextureRenderer = nullptr;
-    slideTextureIndex = static_cast<size_t>(-1);
     slideTexturePath.clear();
     // Deliberately does not touch the panel texture. This runs from inside
     // SlideTexture() whenever a photograph has to be loaded, and the panel
@@ -3995,14 +3995,22 @@ static void ReleaseSlideTexture()
     // both gone says so.
 }
 
-static SDL_Texture* SlideTexture(SDL_Renderer* renderer, const AttractSlides::Slide& slide, size_t index)
+static SDL_Texture* SlideTexture(SDL_Renderer* renderer, const AttractSlides::Slide& slide)
 {
     if (slide.imagePath.empty())
     {
         return nullptr;
     }
-    if (pSlideTexture && pSlideTextureRenderer == renderer && slideTextureIndex == index &&
-        slideTexturePath == slide.imagePath)
+    // Keyed on the photograph, not on which slide is showing it.
+    //
+    // Flash's twelve tutorial slides are twelve captions over one picture of the
+    // playfield -- the export writes that picture once and points all twelve at
+    // it. Keyed on the slide's position as well, every step through those twelve
+    // decoded the same 1467x2560 JPEG again, converted it to a 15 MB RGBA
+    // surface and uploaded it, on the thread that also feeds the audio device.
+    // That is the plop in the speakers when a tutorial slide comes up, and why
+    // the slides carrying no picture are silent: they decode nothing.
+    if (pSlideTexture && pSlideTextureRenderer == renderer && slideTexturePath == slide.imagePath)
     {
         return pSlideTexture;
     }
@@ -4035,14 +4043,12 @@ static SDL_Texture* SlideTexture(SDL_Renderer* renderer, const AttractSlides::Sl
         // its words over black. A missing photograph is a slide worth fixing,
         // not a reason to stop the show.
         printf("PPUC: slide image %s: %s\n", slide.imagePath.c_str(), SDL_GetError());
-        slideTextureIndex = index;
         slideTexturePath = slide.imagePath;
         pSlideTextureRenderer = renderer;
         return nullptr;
     }
     pSlideTexture = texture;
     pSlideTextureRenderer = renderer;
-    slideTextureIndex = index;
     slideTexturePath = slide.imagePath;
     return texture;
 }
@@ -4505,7 +4511,7 @@ static SlideLayout LayOutSlide(SDL_Renderer* renderer, const AttractSlides::Slid
 
     float textureW = 0.0f;
     float textureH = 0.0f;
-    SDL_Texture* texture = SlideTexture(renderer, slide, index);
+    SDL_Texture* texture = SlideTexture(renderer, slide);
     if (texture && SDL_GetTextureSize(texture, &textureW, &textureH) && textureW > 0.0f && textureH > 0.0f)
     {
         layout.hasImage = true;
@@ -4626,7 +4632,7 @@ static void BuildSlideFrame(SDL_Renderer* renderer, const AttractSlides::Slide& 
     {
         const SDL_FRect image{layout.image.x - layout.panel.x, layout.image.y - layout.panel.y, layout.image.w,
                               layout.image.h};
-        if (SDL_Texture* photo = SlideTexture(renderer, slide, index))
+        if (SDL_Texture* photo = SlideTexture(renderer, slide))
         {
             // Replaces what is under it, alpha included: a photograph is the
             // one thing on a slide that should be exactly itself.
