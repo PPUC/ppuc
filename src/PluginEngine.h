@@ -71,6 +71,7 @@ class PluginEngine final : public GameEngine
   void PollChangedLamps(std::vector<GameEngineOutputChange>& changes) override;
   void PollChangedGis(std::vector<GameEngineOutputChange>& changes) override;
   void SendSwitch(int number, uint8_t state) override;
+  bool SaveNvram(uint32_t minIdleMs) override;
   bool HasCapability(Capability capability) const override;
 
  private:
@@ -123,6 +124,7 @@ class PluginEngine final : public GameEngine
   uint32_t m_pinmameEndpoint = 0;
   unsigned int m_getMachineStateId = 0;
   unsigned int m_readMemoryId = 0;
+  unsigned int m_saveNvramId = 0;
   unsigned int m_onAudioCmdId = 0;
   bool m_subscribedAudioCmd = false;
 

@@ -862,6 +862,36 @@ void PluginEngine::SendSwitch(int number, uint8_t state)
   it->second.Set(it->second.context, &value);
 }
 
+bool PluginEngine::SaveNvram(uint32_t minIdleMs)
+{
+  if (m_pinmameEndpoint == 0 || m_saveNvramId == 0 || !IsReady())
+  {
+    return false;
+  }
+
+  // Synchronous, like PMPI_READ_MEMORY above: the struct carries the request out
+  // and the answer back. Unlike that one, the plugin does not do the work on this
+  // thread -- it hands it to the emulation thread and waits -- so this call can
+  // block for as long as timeoutMs. That is why it is driven from a timer in the
+  // main loop rather than from anything that has to be prompt.
+  PinMAMESaveNVRAMMsg msg{};
+  msg.version = 1;
+  msg.minIdleMs = minIdleMs;
+  msg.timeoutMs = 0;
+  msg.result = PMPI_NVRAM_NOT_RUNNING;
+  m_bus.Api().SendMsg(m_bus.HostEndpointId(), m_saveNvramId, m_pinmameEndpoint, &msg);
+
+  if (msg.result == PMPI_NVRAM_WRITE_FAILED)
+  {
+    // Worth saying out loud once it happens: a full stick, or a game folder
+    // mounted read-only, means every later save fails the same way and the
+    // machine is quietly back to losing its scores.
+    printf("PPUC: saving NVRAM failed; high scores and audits are not being kept\n");
+  }
+
+  return msg.result == PMPI_NVRAM_SAVED;
+}
+
 void PluginEngine::AuditSwitches()
 {
 
@@ -921,6 +951,7 @@ bool PluginEngine::Start(std::string& error)
 
   m_getMachineStateId = api.GetMsgID(PMPI_NAMESPACE, PMPI_GET_MACHINE_STATE);
   m_readMemoryId = api.GetMsgID(PMPI_NAMESPACE, PMPI_READ_MEMORY);
+  m_saveNvramId = api.GetMsgID(PMPI_NAMESPACE, PMPI_SAVE_NVRAM);
   m_onAudioCmdId = api.GetMsgID(PMPI_NAMESPACE, PMPI_EVT_ON_AUDIO_CMD);
   // Observed, never forwarded. libpinmame broadcasts this itself, so AltSound
   // and anything else on the bus already have it; relaying it through
@@ -1065,7 +1096,7 @@ void PluginEngine::Stop()
     api.UnsubscribeMsg(m_onAudioCmdId, &Impl::OnAudioCmd, m_impl.get());
     m_subscribedAudioCmd = false;
   }
-  for (unsigned int* id : {&m_getMachineStateId, &m_readMemoryId, &m_onAudioCmdId})
+  for (unsigned int* id : {&m_getMachineStateId, &m_readMemoryId, &m_saveNvramId, &m_onAudioCmdId})
   {
     if (*id != 0)
     {

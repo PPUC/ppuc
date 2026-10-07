@@ -4865,6 +4865,42 @@ static const uint64_t kTroughRepresentGapMs = 80;
 // Sent straight at the engine rather than through the rules, because this is not
 // the machine reporting something -- it is us repeating something the machine
 // already reported and the ROM did not act on.
+// Persist NVRAM every so often, and let the engine refuse.
+//
+// MAME writes NVRAM once, when emulation ends. On an appliance that is switched
+// off at the mains -- which is how every one of these machines is switched off --
+// emulation never ends, so the whole session is lost: the high scores somebody
+// just set, the audits, and anything the operator changed in the service menu.
+//
+// Asking on a timer is only reasonable because the engine is told not to write
+// unless the game has left NVRAM alone for a while. During play it never has, so
+// nothing is written; between games it has, so one write happens and the next
+// ninety seconds find nothing changed. The destination is usually a FAT stick,
+// and writing to one of those every few seconds would be both slow and unkind.
+//
+// What is still lost after this is the game in progress, which no amount of
+// saving can keep: the ROM has not recorded its result yet.
+static const uint64_t kNvramSaveIntervalMs = 90000;
+static const uint32_t kNvramSaveIdleMs = 30000;
+static uint64_t g_nextNvramSaveMs = 0;
+
+static void ServiceNvramSave(GameEngine* pEngine)
+{
+  if (pEngine == nullptr)
+  {
+    return;
+  }
+
+  const uint64_t nowMs = SDL_GetTicks();
+  if (nowMs < g_nextNvramSaveMs)
+  {
+    return;
+  }
+  g_nextNvramSaveMs = nowMs + kNvramSaveIntervalMs;
+
+  pEngine->SaveNvram(kNvramSaveIdleMs);
+}
+
 static void ServiceBallTroughWatch(GameEngine* pEngine)
 {
     if (opt_ball_trough_switch == 0 || pEngine == nullptr || !pEngine->IsReady())
@@ -8950,6 +8986,7 @@ int main(int argc, char** argv)
                               ball_search_game_running.load(std::memory_order_acquire),
                               opt_ball_search_delay_ms, opt_ball_search_round_delay_ms);
       ServiceBallTroughWatch(pEngine.get());
+      ServiceNvramSave(pEngine.get());
       stallWatch.Phase("switches");
 
       // Runs in both loop phases, before the readiness gate: the engine has its
@@ -9298,6 +9335,13 @@ int main(int argc, char** argv)
       // Emergency shutdown path:
       // Serum/libdmdutil teardown can race across worker threads when interrupted by signal.
       // Exit the process before Pinmame/DMD teardown runs to avoid use-after-free in external code.
+      //
+      // NVRAM first, because _Exit(0) skips everything that would otherwise have
+      // written it: the engine is never stopped, so MAME's own save after
+      // cpu_run() never runs. Before this, choosing Serum meant choosing to lose
+      // the session's high scores on every clean shutdown as well as on a power
+      // cut. 0 for the idle window: there is no later.
+      pEngine->SaveNvram(0);
       CancelActiveBallSearch(pPpuc, ballSearchRunner);
       pPpuc->StopUpdates();
       if (!opt_no_serial)
