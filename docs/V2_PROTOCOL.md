@@ -508,6 +508,13 @@ Images are named `<board type>-<version>.uf2`, or
 parsed in full is ignored rather than half-understood — a misread board type
 would flash the wrong hardware.
 
+The board type is also what a configuration is checked against. A port in the
+game YAML is a GPIO number, and what a GPIO is depends on the board, so
+`ppuc-pinmame` compares each board's reported type with the `type` its `boards`
+entry gives it (`IO_16_8_1` when absent) before configuring anything, and exits
+with an error on a mismatch. A board that reports no type, or that the
+configuration does not list, is passed over.
+
 Board types are also marked as validated on hardware or not
 (`BoardTypeValidatedOnHardware()`). Only `IO_16_8_1` is today. ppuc reports a
 newer image for the others but refuses to install it, because their pin maps
@@ -623,7 +630,13 @@ identify the field; it is interpreted relative to the section being configured.
 Section topics: `PLATFORM` 102, `LED_STRING` 103, `LED_SEGMENT` 104,
 `LED_EFFECT` 105, `PWM_EFFECT` 106, `LAMPS` 108, `MECHS` 109, `PWM` 112,
 `COIN_DOOR_CLOSED_SWITCH` 113, `GAME_ON_SOLENOID` 114, `SWITCHES` 115,
-`TRIGGER` 116, `SWITCH_MATRIX` 120, `SWITCH_CHAIN` 121.
+`TRIGGER` 116, `SWITCH_MATRIX` 120, `SWITCH_CHAIN` 121, `LAMP_MATRIX` 107.
+
+`LAMP_MATRIX` configures the strobed lamp matrix of an `Out_8x10` the way
+`SWITCH_MATRIX` configures a switch matrix: `NUM_ROWS` once, then a `PORT` /
+`NUMBER` pair per lamp, where the port is the position `column * rows + row`.
+Which topics a board accepts depends on its type; a board refuses a topic or a
+pin it does not have and fast-blinks its LED.
 
 Field topics include `NUMBER` 78, `PORT` 80, `POWER` 87, `TYPE` 89,
 `MIN_PULSE_TIME` 77, `MAX_PULSE_TIME` 84, `HOLD_POWER` 72,

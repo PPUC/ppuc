@@ -813,6 +813,7 @@ if(PPUC_BUILD_TESTS)
       tests/test_plugin_switch_map.cpp
       tests/test_script_object.cpp
       tests/test_segment_digit_decode.cpp
+      tests/test_board_type_check.cpp
       tests/test_uf2_image.cpp
    )
 

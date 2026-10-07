@@ -8,6 +8,7 @@
 #include "PPUC.h"
 
 #include <ctype.h>
+#include <dirent.h>
 #include <inttypes.h>
 #include <stdlib.h>
 
@@ -19,9 +20,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <dirent.h>
-
-#include "Uf2Image.h"
 #include <deque>
 #include <exception>
 #include <filesystem>
@@ -38,9 +36,11 @@
 #include <unordered_set>
 #include <vector>
 
+#include "BoardTypeCheck.h"
 #include "DMDUtil/Config.h"
 #include "DMDUtil/ConsoleDMD.h"
 #include "DMDUtil/DMDUtil.h"
+#include "Uf2Image.h"
 #include "ppuc_version.h"  // <--- HINZUGEFÜGT
 #ifdef PPUC_USE_KMSDMD
 #include "KMSDMD/KMSDMD.h"
@@ -5553,15 +5553,55 @@ static void ReportBoardStats(PPUC* pPpuc, const char* when)
   }
 }
 
+// Compares what each board says it is with what the configuration says it is.
+//
+// A port in the game YAML is a GPIO number, and what a GPIO is depends on the
+// board type, so a configuration written for one type must not be sent to
+// another. Returns how many boards are the wrong type, having said which.
+//
+// A board the configuration does not list, and a board that did not report a
+// type, are passed over: there is nothing to compare, and refusing to start
+// over that would strand a machine that has always worked.
+static size_t CheckBoardTypes(PPUC* pPpuc, const std::vector<PPUCBoardVersion>& versions)
+{
+  size_t mismatches = 0;
+  for (const PPUCBoardVersion& v : versions)
+  {
+    if (!v.responded)
+    {
+      continue;
+    }
+    const uint8_t configured = pPpuc->GetConfiguredBoardType(v.board);
+    if (boardtype::Compare(configured, v.boardType) != boardtype::Verdict::Mismatch)
+    {
+      continue;
+    }
+    ++mismatches;
+    const char* configuredName = ppuc::v2::BoardTypeName(configured);
+    const char* reportedName = ppuc::v2::BoardTypeName(v.boardType);
+    printf(
+        "PPUC: board %u is configured as %s but reports %s, and its pins mean something else. "
+        "Fix the board type in the game configuration or the address on the board.\n",
+        v.board, configuredName ? configuredName : "an unknown board type",
+        reportedName ? reportedName : "an unknown board type");
+  }
+  return mismatches;
+}
+
 // Returns true when a board was flashed and the process must restart.
 // answered, when given, receives how many boards reported a version, so the
 // caller can tell "nothing to update" from "nobody answered".
+// versionsOut, when given, receives what the boards reported, so the caller can
+// check their types without putting a second round of queries on the bus.
 static bool ReportBoardFirmware(PPUC* pPpuc, const char* firmwarePath, bool allowUpdate, bool allowDev,
-                                bool allowDowngrade,
-                                bool allowUnvalidated, uint32_t waitForBoardsMs = 0,
-                                size_t* answered = nullptr)
+                                bool allowDowngrade, bool allowUnvalidated, uint32_t waitForBoardsMs = 0,
+                                size_t* answered = nullptr, std::vector<PPUCBoardVersion>* versionsOut = nullptr)
 {
     const std::vector<PPUCBoardVersion> versions = pPpuc->QueryBoardVersions(waitForBoardsMs);
+    if (versionsOut)
+    {
+      *versionsOut = versions;
+    }
     size_t respondedCount = 0;
     for (const PPUCBoardVersion& v : versions)
     {
@@ -8439,6 +8479,9 @@ int main(int argc, char** argv)
   // hard reset that can be none of them, and then they are checked again once
   // configured - the way it worked before the check was moved.
   size_t boardsAnsweredBeforeConfiguration = 0;
+  // Boards that are not the hardware the configuration gives them. Nothing is
+  // configured while there is one.
+  size_t boardTypeMismatches = 0;
   if (!opt_no_serial)
   {
     // The update screen uses the backbox screen, which is the translite's
@@ -8458,10 +8501,11 @@ int main(int argc, char** argv)
     pPpuc->SetBeforeConfigurationHook(
         [&]() -> bool
         {
+          std::vector<PPUCBoardVersion> versions;
           const bool flashed =
               ReportBoardFirmware(pPpuc, opt_firmware_path, opt_allow_firmware_update, opt_allow_dev_firmware_update,
-                                  opt_allow_firmware_downgrade, opt_allow_unvalidated_firmware_update,
-                                  kBoardBootWaitMs, &boardsAnsweredBeforeConfiguration);
+                                  opt_allow_firmware_downgrade, opt_allow_unvalidated_firmware_update, kBoardBootWaitMs,
+                                  &boardsAnsweredBeforeConfiguration, &versions);
           // Read straight after the version queries, so versionQueriesSeen can
           // be compared across consecutive runs against how many the host
           // actually sent. A board that fails the query is otherwise
@@ -8470,12 +8514,26 @@ int main(int argc, char** argv)
           {
             ReportBoardStats(pPpuc, "after version query");
           }
-          return !flashed;
+          if (flashed)
+          {
+            return false;
+          }
+          // After the update check on purpose: a board with the wrong image
+          // for its hardware cannot be told from one on the wrong address, and
+          // either way it must not be sent this configuration.
+          boardTypeMismatches = CheckBoardTypes(pPpuc, versions);
+          return boardTypeMismatches == 0;
         });
   }
 
   if (!opt_no_serial && !pPpuc->Connect())
   {
+    if (boardTypeMismatches > 0)
+    {
+      // A real error, not "run me again": starting over finds the same boards.
+      pPpuc->Disconnect();
+      return 1;
+    }
     if (pPpuc->WasStoppedBeforeConfiguration())
     {
       // A flashed board is rebooting into its new firmware, so there is
@@ -8498,11 +8556,20 @@ int main(int argc, char** argv)
   if (!opt_no_serial && boardsAnsweredBeforeConfiguration == 0)
   {
     printf("PPUC: checking firmware again now that the boards are configured\n");
+    std::vector<PPUCBoardVersion> versions;
     if (ReportBoardFirmware(pPpuc, opt_firmware_path, opt_allow_firmware_update, opt_allow_dev_firmware_update,
-                            opt_allow_firmware_downgrade, opt_allow_unvalidated_firmware_update))
+                            opt_allow_firmware_downgrade, opt_allow_unvalidated_firmware_update, 0, nullptr, &versions))
     {
       pPpuc->Disconnect();
       return kExitRestart;
+    }
+    // These boards were configured before they said what they are. The
+    // firmware refuses a device on a pin it does not have, but a machine with
+    // a board of the wrong type is not one to start a game on.
+    if (CheckBoardTypes(pPpuc, versions) > 0)
+    {
+      pPpuc->Disconnect();
+      return 1;
     }
   }
 

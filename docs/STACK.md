@@ -201,7 +201,9 @@ generates, per game node:
 | `/node/{n}/zip`, `/node/import-zip` | full project export/import |
 
 `boards/*.php` hold port→GPIO mappings per hardware board (`IO_16_8_1`,
-`Out_8x10`). Dev environment is DDEV; a prebuilt image is published to
+`IO_16x8_matrix`, `Out_8x10`, `Opto_16`). The export names each board's `type`,
+and `libppuc` checks every device against that board's pins using
+`io-boards/src/PPUCBoardTypes.h`, the table the firmware uses too. Dev environment is DDEV; a prebuilt image is published to
 `ghcr.io/ppuc/config-tool`. This repository is outside the `ppuc` build graph.
 
 ### `ppuc_games`
@@ -230,7 +232,7 @@ Precedence: CLI options > `ppuc.ini` > game-folder defaults.
 
 `io-boards.yaml` top-level sections (validated in `libppuc/src/PPUC.cpp`):
 `ppucVersion`, `rom`, `serialPort`, `platform`, `debug`, `boards`,
-`dipSwitches`, `switches`, `switchMatrix`, `switchGroups`, `pwmOutput`,
+`dipSwitches`, `switches`, `switchMatrix`, `lampMatrix`, `switchGroups`, `pwmOutput`,
 `ledStripes`, `coilGiMappings`, `mechs`. Per-device `effects` blocks configure
 board-local effects and their triggers.
 
@@ -434,6 +436,8 @@ cmake --build build
 
 # io-boards firmware
 pio run                       # default env IO_16_8_1
+pio run -e Out_8x10           # or IO_16x8_matrix, Opto_16
+pio test -e native            # host-side tests
 pio run --target upload
 
 # config-tool
@@ -452,7 +456,7 @@ build), `MACOSX_DEPLOYMENT_TARGET`.
   artifacts. macOS x64 and linux aarch64 are currently commented out.
 - `libppuc/.github/workflows/libppuc.yml`, `libsdldmd/.github/workflows/…` —
   library builds.
-- `io-boards/.github/workflows/io-boards.yml` — `pio run` for `IO_16_8_1`,
+- `io-boards/.github/workflows/io-boards.yml` — `pio run` for every board type,
   nightly schedule, enforces that a `vX.Y.Z` git tag matches
   `FIRMWARE_VERSION_*` in `src/PPUC.h`.
 - `config-tool/.github/workflows/docker_image.yml` — publishes the docker image.

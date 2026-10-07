@@ -708,10 +708,19 @@ drive the PIO work above.
 All three carry an RP2040 and an ADM3483, so they join the same v2 bus and
 `config-tool` already knows `Out_8x10`.
 
-**Consequence for 4.6:** `SwitchMatrix8x16.pio` (`columns8x16_pio`) is
-*experimental*, not obsolete. It has no `.cpp` reference today because it is
-forward-looking work toward `IO_16x8_matrix`. It should be kept, and reviewed
-together with the matrix repair rather than deleted.
+**Status:** firmware, host validation and the config-tool board types for all
+three are written and covered by host-side tests; none of the three has run on
+hardware yet, so all stay unvalidated. What to check on a bench is listed under
+"Board Types" in `io-boards/AGENTS.md`. `config-tool` authors a lamp matrix as
+`lamp_matrix` and `lamp_matrix_lamp` content and exports it as `lampMatrix`.
+`ppuc-pinmame` compares each board's reported type with the configured one
+before configuring anything and refuses to start on a mismatch. Still open:
+listing lamp matrix lamps in the game's board overview, and wizard allocation
+onto the two matrix boards.
+
+`SwitchMatrix8x16.pio` (`columns8x16_pio`) is gone. It strobed GPIO 3-10, which
+are inputs on the real board; `SwitchMatrixPIO/StrobedMatrix8x16.pio` replaces
+it. `IO_16_8_1` keeps its own 4-column programs unchanged.
 
 ### 4.9 Genuinely obsolete or stale
 
