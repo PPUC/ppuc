@@ -199,6 +199,24 @@ class GameEngine
   // answers false and the caller does without.
   virtual bool SetPaused(bool /*paused*/) { return false; }
 
+  // Persists whatever the game has recorded -- high scores, audits, operator
+  // settings -- without stopping it.
+  //
+  // PinMAME writes NVRAM once, when emulation ends, so a machine that is simply
+  // switched off at the mains loses the whole session. These machines are
+  // switched off at the mains: that is how an appliance behaves, and no amount
+  // of asking changes it.
+  //
+  // minIdleMs is the host's policy and the engine's escape hatch: do not write
+  // unless the game's NVRAM has been unchanged for that long. The host can
+  // therefore ask on a plain timer and get no writes at all during play, which
+  // matters when the destination is a FAT stick. 0 means write now, which is
+  // what a host asks for on its way out.
+  //
+  // Returns true only when something was written. An engine that cannot do this
+  // answers false and the caller does without, exactly as with SetPaused.
+  virtual bool SaveNvram(uint32_t /*minIdleMs*/) { return false; }
+
   // PULL, once per host tick. PinMAME exposes lamps and GI only as "what
   // changed since you last asked", so a pull keeps that call inside the host's
   // existing cadence instead of inventing a second one; and lamps are not
