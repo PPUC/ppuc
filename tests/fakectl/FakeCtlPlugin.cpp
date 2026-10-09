@@ -11,6 +11,7 @@
 // observation to the file named by PPUC_FAKECTL_LOG (stdout if unset), so a
 // test can assert on it.
 
+#include <cstdarg>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
