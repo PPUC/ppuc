@@ -24,6 +24,7 @@ The stack is six independent repositories:
 | `libppuc`     | `github.com/PPUC/libppuc`             | C++ / CMake shared lib | 0.3.0 | Host-side machine config + RS485 v2 transport |
 | `io-boards`   | `github.com/PPUC/io-boards`           | C++ / PlatformIO (RP2040) | 0.2.0 | IO board firmware; owns the wire protocol |
 | `libsdldmd`   | `github.com/PPUC/libsdldmd`           | C++ / CMake shared lib | 0.1.0 | SDL3 DMD/translite rendering on top of libdmdutil |
+| `libvpxhost`  | `github.com/PPUC/libvpxhost`          | C++20 / CMake static lib | 0.1.0 | VPX plugin bus, shared with the ColorizingDMD editor |
 | `config-tool` | `github.com/PPUC/config-tool`         | PHP / Drupal 11 / DDEV | – | Web frontend that authors game configuration + Lua rules |
 | `ppuc_games`  | `github.com/mkalkbrenner/ppuc_games`  | data | – | Example/production game folders and config-tool exports |
 
@@ -179,6 +180,16 @@ with `pio run`.
 SDL3 renderer implementing `DMDUtil::RGB24DMD`: windowed/fullscreen DMD,
 translite/backglass images, scaling modes including `xbrz`, rotation, multi
 screen placement. Used by both `ppuc-pinmame` and `ppuc-backbox`.
+
+### `libvpxhost`
+
+The VPX plugin bus: `vpxhost::PluginBus` around vpinball's `MsgPluginManager`,
+plugin discovery and loading, settings overrides (every SDK setting type), the
+script class registry and the logging API. Shared with the ColorizingDMD
+editor, so it holds nothing application-specific (no SDL; `ppuc` keeps its
+plugin folder lookup in `src/PluginDir.cpp`). Only its source is staged
+(`ppuc_stage_libvpxhost_source`); `ppuc`'s CMake builds it as a static
+subproject against the same plugin SDK as everything else.
 
 ### `config-tool`
 
@@ -357,7 +368,8 @@ artifacts and `external.sh` wipes them.
 Every dependency is pinned by SHA or tag in a `platforms/config.sh` per repo:
 
 - `ppuc/platforms/config.sh`: `PINMAME_SHA`, `VPINBALL_SHA` (+ its SDL/SDL_ttf/
-  libaltsound/ffmpeg SHAs), `LIBPPUC_SHA`, `LIBSDLDMD_SHA`, `SDL_IMAGE_SHA`,
+  libaltsound/ffmpeg SHAs), `LIBPPUC_SHA`, `LIBSDLDMD_SHA`, `LIBVPXHOST_SHA`,
+  `SDL_IMAGE_SHA`,
   `SDL_MIXER_SHA`, `FLITE_SHA`, `ESPEAK_NG_SHA`, `LUA_VERSION`,
   `PINMAME_NVRAM_MAPS_SHA`
 - `libppuc/platforms/config.sh`: `IO_BOARDS_SHA`, `LIBSERIALPORT_SHA`,

@@ -8,7 +8,11 @@
 
 #include "AudioOutput.h"
 
+namespace vpxhost
+{
 class PluginBus;
+}
+using PluginBus = vpxhost::PluginBus;
 
 struct SDL_Renderer;
 struct SDL_Texture;

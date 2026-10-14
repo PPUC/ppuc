@@ -16,6 +16,7 @@ PINMAME_NVRAM_MAPS_SHA=7e63610464453e1902d6de2f90529a0705fdc2a2
 LIBPPUC_SHA=1be983e26655f3539dbcff41b431c9be253b6cf7
 DOCTEST_VERSION=2.4.11
 LIBSDLDMD_SHA=0693ddfe20e828d4d7bbcb5b9ff44b39d5a10831
+LIBVPXHOST_SHA=8236ca462a841b7a1e69d80116b327f7555a2f50
 VPINBALL_SHA=5330759c6d5d26eebbec4f275884d97c93dc03c4
 VPINBALL_SDL_IMAGE_SHA="${VPINBALL_SDL_IMAGE_SHA:-${SDL_IMAGE_SHA}}"
 # libaltsound and ffmpeg are not pinned here. Nothing in PPUC links them --
@@ -47,6 +48,7 @@ SOURCE_DIR_CACHE_BUSTER="${SOURCE_DIR_CACHE_BUSTER:-$(date +%s)}"
 PPUC_SOURCE_DIR_VARS=(
    LIBPPUC_SOURCE_DIR
    LIBSDLDMD_SOURCE_DIR
+   LIBVPXHOST_SOURCE_DIR
    VPINBALL_SOURCE_DIR
    IO_BOARDS_SOURCE_DIR
    LIBDMDUTIL_SOURCE_DIR
@@ -1008,6 +1010,30 @@ ppuc_reset_stale_cmake_cache() {
       echo "  configured for: ${cached}"
       echo "  building:       ${source_real}"
       rm -rf "${build_dir}"
+   fi
+}
+
+ppuc_stage_libvpxhost_source() {
+   # libvpxhost is the VPX plugin bus, shared with the ColorizingDMD editor.
+   # Only its source is staged: CMakeLists.txt builds it as a subproject,
+   # against the same vpinball plugin SDK as the rest of PPUC.
+   local cache_dir="${PPUC_SOURCE_ROOT}/external/libvpxhost"
+   local expected
+   local found
+
+   expected="$(dependency_cache_key "${LIBVPXHOST_SHA}" LIBVPXHOST_SOURCE_DIR)"
+   found="$([ -f "${cache_dir}/cache.txt" ] && cat "${cache_dir}/cache.txt" || echo "")"
+
+   if [ "${expected}" != "${found}" ] || [ ! -f "${cache_dir}/libvpxhost/CMakeLists.txt" ]; then
+      echo "Preparing libvpxhost. Expected: ${expected}, Found: ${found}"
+
+      rm -rf "${cache_dir}"
+      mkdir -p "${cache_dir}"
+      (
+         cd "${cache_dir}"
+         prepare_dependency_source libvpxhost "${LIBVPXHOST_SHA}" "https://github.com/PPUC/libvpxhost/archive/${LIBVPXHOST_SHA}.tar.gz" LIBVPXHOST_SOURCE_DIR
+         echo "${expected}" > cache.txt
+      )
    fi
 }
 

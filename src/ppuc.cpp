@@ -53,7 +53,8 @@
 #include "AudioOutput.h"
 #include "LuaRulesEngine.h"
 #include "MediaPluginHost.h"
-#include "PluginBus.h"
+#include "PluginDir.h"
+#include "vpxhost/PluginBus.h"
 #include "GameEngine.h"
 #include "PinmameNvramMapLoader.h"
 #include "PluginEngine.h"
@@ -7894,9 +7895,9 @@ int main(int argc, char** argv)
   const bool needPluginBus = opt_pup || opt_altsound || opt_b2s || !useScriptEngine;
   if (needPluginBus)
   {
-    pPluginBus = std::make_unique<PluginBus>();
+    pPluginBus = std::make_unique<PluginBus>(vpxhost::HostInfo{"PPUC", "PPUC", "PPUC plugin host"});
     std::string busError;
-    if (!pPluginBus->Initialize(PluginBus::ResolvePluginDir(opt_plugin_dir), &busError))
+    if (!pPluginBus->Initialize(ResolvePluginDir(opt_plugin_dir), &busError))
     {
       fprintf(stderr, "Plugin bus init failed: %s\n", busError.c_str());
       return 1;

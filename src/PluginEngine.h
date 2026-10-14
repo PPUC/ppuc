@@ -13,7 +13,11 @@
 #include "PinmameNvramTracking.h"
 #include "ScriptObject.h"
 
+namespace vpxhost
+{
 class PluginBus;
+}
+using PluginBus = vpxhost::PluginBus;
 
 // The PinMAME-backed game engine, driven as a plugin on the message bus.
 //

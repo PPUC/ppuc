@@ -514,7 +514,7 @@ LIBDMDUTIL_SOURCE_DIR=/path/to/libdmdutil platforms/macos/arm64/build.sh
 ```
 
 The available variables are `LIBPPUC_SOURCE_DIR`, `LIBSDLDMD_SOURCE_DIR`,
-`VPINBALL_SOURCE_DIR`, `IO_BOARDS_SOURCE_DIR`, `LIBDMDUTIL_SOURCE_DIR`,
+`LIBVPXHOST_SOURCE_DIR`, `VPINBALL_SOURCE_DIR`, `IO_BOARDS_SOURCE_DIR`, `LIBDMDUTIL_SOURCE_DIR`,
 `LIBZEDMD_SOURCE_DIR`, `LIBSERUM_SOURCE_DIR`, `LIBVNI_SOURCE_DIR` and
 `LIBFRAMEUTIL_SOURCE_DIR`. Anything not named comes from the SHA pinned in
 `platforms/config.sh`, so a normal build stays reproducible and a local build

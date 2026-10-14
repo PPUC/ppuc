@@ -1,6 +1,7 @@
 #include "MediaPluginHost.h"
 
-#include "PluginBus.h"
+#include "PluginDir.h"
+#include "vpxhost/PluginBus.h"
 #include "ScriptObject.h"
 
 #include <algorithm>
@@ -630,7 +631,7 @@ bool MediaPluginHost::Impl::Initialize(const Options& options,
 
   instance_ = this;
   options_ = options;
-  pluginDir_ = PluginBus::ResolvePluginDir(options.pluginDir);
+  pluginDir_ = ResolvePluginDir(options.pluginDir);
   pupFolder_ = options.pupFolder && options.pupFolder[0] != '\0'
                    ? options.pupFolder
                    : (std::getenv("HOME") ? std::getenv("HOME") : "");

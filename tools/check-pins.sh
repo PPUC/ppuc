@@ -103,6 +103,7 @@ repo_slug() {
       ppuc)          echo "PPUC/ppuc" ;;
       libppuc)       echo "PPUC/libppuc" ;;
       libsdldmd)     echo "PPUC/libsdldmd" ;;
+      libvpxhost)    echo "PPUC/libvpxhost" ;;
       io-boards)     echo "PPUC/io-boards" ;;
       libdmdutil)    echo "PPUC/libdmdutil" ;;
       vpinball)      echo "PPUC/vpinball" ;;
@@ -124,8 +125,8 @@ repo_slug() {
 # never pass, which is how a check stops being read.
 expects_default_branch() {
    case "$1" in
-      ppuc|libppuc|io-boards|libsdldmd) echo "yes" ;;
-      *)                                echo "no" ;;
+      ppuc|libppuc|io-boards|libsdldmd|libvpxhost) echo "yes" ;;
+      *)                                           echo "no" ;;
    esac
 }
 
@@ -394,6 +395,7 @@ echo "ppuc ${C_DIM}(${PPUC_BRANCH} @ ${PPUC_HEAD}, this repo)${C_OFF}"
 
 LIBPPUC_SHA="$(read_pin "${PPUC_CONFIG}" LIBPPUC_SHA)"
 LIBSDLDMD_SHA="$(read_pin "${PPUC_CONFIG}" LIBSDLDMD_SHA)"
+LIBVPXHOST_SHA="$(read_pin "${PPUC_CONFIG}" LIBVPXHOST_SHA)"
 VPINBALL_SHA="$(read_pin "${PPUC_CONFIG}" VPINBALL_SHA)"
 PINMAME_SHA="$(read_pin "${PPUC_CONFIG}" PINMAME_SHA)"
 
@@ -406,6 +408,8 @@ else
    echo "    ${C_RED}could not read libppuc platforms/config.sh at ${LIBPPUC_SHA:0:8}${C_OFF}"
    RESOLVE_FAILED=1
 fi
+
+report "  " "libvpxhost" "${LIBVPXHOST_SHA}"
 
 report "  " "libsdldmd" "${LIBSDLDMD_SHA}"
 if LIBSDLDMD_CFG="$(fetch_config libsdldmd "${LIBSDLDMD_SHA}")"; then
