@@ -9327,10 +9327,15 @@ int main(int argc, char** argv)
         {
           const uint8_t giNo = static_cast<uint8_t>(change.number);
           const uint8_t giState = static_cast<uint8_t>(change.value);
+          // PinMAME numbers the GI strings from 0, the game config and the
+          // boards from 1. Passed through unchanged, the first string was
+          // dropped by libppuc and every other one lit its neighbour, so on
+          // WPC the fifth string never lit at all.
+          const int giString = giNo + 1;
 
           if (opt_debug || opt_debug_lamps)
           {
-            printf("GI updated: #%d, %d\n", giNo, giState);
+            printf("GI updated: #%d, %d\n", giString, giState);
           }
 
           if (pMediaPluginHost != nullptr)
@@ -9338,7 +9343,7 @@ int main(int argc, char** argv)
             pMediaPluginHost->QueueEvent('G', giNo, giState);
           }
 
-          pPpuc->SetGIState(giNo, giState);
+          pPpuc->SetGIState(giString, giState);
         }
       }
 
