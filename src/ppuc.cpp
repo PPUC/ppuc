@@ -49,6 +49,8 @@
 #endif
 #include "AttractSlides.h"
 #include "BallTroughWatch.h"
+#include "LedStringWalk.h"
+#include "LedStringWalkYaml.h"
 #include "AudioLanes.h"
 #include "AudioOutput.h"
 #include "LuaRulesEngine.h"
@@ -1173,14 +1175,18 @@ enum class BenchTestMode
   COILS,
   LAMPS,
   GI,
-  FLASHERS
+  FLASHERS,
+  LED_STRINGS
 };
 
 enum class BenchOutputKind
 {
   SOLENOID,
   LAMP,
-  GI
+  GI,
+  // A position on an LED string that nothing is assigned to. The walk still
+  // spends a step on it, so the count along the string stays in step.
+  NONE
 };
 
 struct BenchOutputStep
@@ -1195,7 +1201,14 @@ struct BenchOutputStep
   uint32_t color;
   int onDurationMs;
   int offDurationMs;
+  // LED string test only: the position on the string, and the full line the
+  // console prints for it. `description` stays short for the service screen.
+  int ledNumber = -1;
+  std::string ledDetail;
 };
+
+// The game's `ledStripes`, read once at startup for the LED string test.
+static std::vector<LedStringWalk::String> g_ledStrings;
 
 struct BenchTestRunner
 {
@@ -1514,6 +1527,12 @@ static void UpdateSwitchFeedbackGi(PPUC* pPpuc, BenchTestRunner& runner)
 
 static void PrintBenchStepDetails(const BenchOutputStep& step)
 {
+  if (step.ledNumber >= 0)
+  {
+    printf("%s\n", step.ledDetail.c_str());
+    fflush(stdout);
+    return;
+  }
   printf("\nBoard: %d\nPort: %d\nNumber: %d\nDescription: %s\n", step.board, step.port, step.number,
          step.description.c_str());
   if (step.kind == BenchOutputKind::LAMP)
@@ -1580,6 +1599,8 @@ static void ApplyBenchOutput(PPUC* pPpuc, const BenchOutputStep& step, bool on)
       break;
     case BenchOutputKind::GI:
       pPpuc->SetGIState(step.number, on ? step.value : 0);
+      break;
+    case BenchOutputKind::NONE:
       break;
   }
 }
@@ -1715,6 +1736,141 @@ static std::vector<BenchOutputStep> BuildGiTestSteps(PPUC* pPpuc, uint8_t number
     steps.push_back({BenchOutputKind::GI, 0, 0, i, 8, 0, "GI String", 0, 5000, 1000});
   }
   return steps;
+}
+
+static std::string DescribeLedString(const LedStringWalk::Position& position)
+{
+  char buffer[256];
+  snprintf(buffer, sizeof(buffer), "board=%d port=%d \"%s\"", position.board, position.port,
+           position.stringDescription.c_str());
+  return buffer;
+}
+
+static std::string DescribeLedAssignment(const LedStringWalk::Assignment& assignment)
+{
+  char buffer[256];
+  snprintf(buffer, sizeof(buffer), "%s #%d %s", LedStringWalk::KindName(assignment.kind), assignment.number,
+           assignment.description.c_str());
+  return buffer;
+}
+
+// One step per position on every string of a present board, in wire order. An
+// unassigned position gets a step that drives nothing, so a dark LED there is
+// what the operator is told to expect, and their count does not drift.
+static std::vector<BenchOutputStep> BuildLedStringTestSteps(PPUC* pPpuc)
+{
+  std::vector<LedStringWalk::String> present;
+  for (const LedStringWalk::String& string : g_ledStrings)
+  {
+    if (!pPpuc->IsBoardVirtualized(static_cast<uint8_t>(string.board)))
+    {
+      present.push_back(string);
+    }
+  }
+
+  std::vector<BenchOutputStep> steps;
+  for (const LedStringWalk::Position& position : LedStringWalk::Walk(present))
+  {
+    BenchOutputStep step{BenchOutputKind::NONE,
+                         static_cast<uint8_t>(position.board),
+                         static_cast<uint8_t>(position.port),
+                         0,
+                         0,
+                         0,
+                         "",
+                         0,
+                         1000,
+                         250};
+    step.ledNumber = position.ledNumber;
+
+    char line[512];
+    if (!position.assigned)
+    {
+      snprintf(line, sizeof(line), "LED %d: not assigned", position.ledNumber);
+      step.description = line;
+      snprintf(line, sizeof(line), "%s  LED %d of 0-%d: not assigned to anything -- stays dark",
+               DescribeLedString(position).c_str(), position.ledNumber, position.amount - 1);
+      step.ledDetail = line;
+      steps.push_back(std::move(step));
+      continue;
+    }
+
+    const LedStringWalk::Assignment& assignment = position.assignment;
+    step.number = static_cast<uint8_t>(assignment.number);
+    step.color = assignment.color;
+    switch (assignment.kind)
+    {
+      case LedStringWalk::Kind::Lamp:
+        step.kind = BenchOutputKind::LAMP;
+        step.type = LED_TYPE_LAMP;
+        step.value = 1;
+        break;
+      case LedStringWalk::Kind::Flasher:
+        // A pulse, as in the flasher test: the same number may also drive a
+        // real flasher on another board. Same rhythm as a lamp step overall.
+        step.kind = BenchOutputKind::SOLENOID;
+        step.type = LED_TYPE_FLASHER;
+        step.value = 1;
+        step.onDurationMs = 250;
+        step.offDurationMs = 1000;
+        break;
+      case LedStringWalk::Kind::Gi:
+        step.kind = BenchOutputKind::GI;
+        step.type = LED_TYPE_GI;
+        step.value = 8;
+        break;
+    }
+
+    snprintf(line, sizeof(line), "LED %d: %s", position.ledNumber, DescribeLedAssignment(assignment).c_str());
+    step.description = line;
+
+    std::string shared;
+    for (const LedStringWalk::LedRef& other : position.sharedWith)
+    {
+      shared += shared.empty() ? "" : ", ";
+      if (other.board != position.board || other.port != position.port)
+      {
+        shared += "board " + std::to_string(other.board) + " port " + std::to_string(other.port) + " ";
+      }
+      shared += "LED " + std::to_string(other.ledNumber);
+    }
+    snprintf(line, sizeof(line), "%s  LED %d of 0-%d: %s  color=%06X%s%s", DescribeLedString(position).c_str(),
+             position.ledNumber, position.amount - 1, DescribeLedAssignment(assignment).c_str(), assignment.color,
+             shared.empty() ? "" : "  -- also lights ", shared.c_str());
+    step.ledDetail = line;
+    steps.push_back(std::move(step));
+  }
+  return steps;
+}
+
+static void PrintLedStringTestHeader(PPUC* pPpuc)
+{
+  printf("LED String Test\n");
+  printf("===============\n");
+  printf("Every LED of every string, in the order they sit on the wire, from LED 0:\n");
+  for (const LedStringWalk::String& string : g_ledStrings)
+  {
+    int assigned = 0;
+    for (const LedStringWalk::Assignment& assignment : string.assignments)
+    {
+      assigned += assignment.ledNumber >= 0 && assignment.ledNumber < string.amount ? 1 : 0;
+    }
+    PrintMaybeStruckLine(pPpuc->IsBoardVirtualized(static_cast<uint8_t>(string.board)),
+                         "  board=%d port=%d \"%s\"  %d LEDs, %d assignment(s)", string.board, string.port,
+                         string.description.c_str(), string.amount, assigned);
+  }
+
+  const std::vector<LedStringWalk::Position> outside = LedStringWalk::OutOfRange(g_ledStrings);
+  if (!outside.empty())
+  {
+    printf("\nAssigned outside their string -- the board only drives `amount` LEDs, so these never light:\n");
+    for (const LedStringWalk::Position& position : outside)
+    {
+      printf("  %s  LED %d of 0-%d: %s\n", DescribeLedString(position).c_str(), position.ledNumber, position.amount - 1,
+             DescribeLedAssignment(position.assignment).c_str());
+    }
+  }
+  printf("\n");
 }
 
 static void PrintSwitchTestHeader(PPUC* pPpuc)
@@ -1856,6 +2012,12 @@ static BenchTestRunner CreateBenchTestRunner(PPUC* pPpuc, BenchTestMode mode, ui
     case BenchTestMode::FLASHERS:
       PrintFlasherTestHeader(pPpuc, number);
       runner.steps = BuildFlasherTestSteps(pPpuc, number);
+      break;
+    case BenchTestMode::LED_STRINGS:
+      PrintLedStringTestHeader(pPpuc);
+      pPpuc->SetGIState(/* string */ 1, 0);
+      runner.restoreGiOnExit = pPpuc->GetPlatform() != PLATFORM_WPC;
+      runner.steps = BuildLedStringTestSteps(pPpuc);
       break;
   }
 
@@ -2704,6 +2866,7 @@ enum class TestKind
     Lamps,
     Gi,
     Flashers,
+    LedStrings,
 };
 
 struct TestDefinition
@@ -2722,6 +2885,7 @@ static const TestDefinition kServiceTests[] = {
     {TestKind::Lamps, "Lamp test", "Light one lamp, or walk them all", false},
     {TestKind::Gi, "GI test", "General illumination strings", false},
     {TestKind::Flashers, "Flasher test", "Fire one flasher, or walk them all", true},
+    {TestKind::LedStrings, "LED string test", "Every LED in the order it sits on the string", false},
 };
 static constexpr int kServiceTestCount = static_cast<int>(sizeof(kServiceTests) / sizeof(kServiceTests[0]));
 static int g_testsSelection = 0;
@@ -3082,14 +3246,18 @@ static BenchTestMode BenchModeFor(TestKind kind)
             return BenchTestMode::GI;
         case TestKind::Flashers:
             return BenchTestMode::FLASHERS;
+        case TestKind::LedStrings:
+            return BenchTestMode::LED_STRINGS;
         case TestKind::Switches:
             break;
     }
     return BenchTestMode::SWITCHES;
 }
 
-// A coil fires and is done; a lamp stays lit until it is turned off. Pressing
-// ENTER should do the thing the device does.
+// The tests whose outputs fire rather than light, and so need high power. The
+// LED string test pulses flasher numbers too, but only to light an LED: a board
+// lights its LEDs with high power off, and a real flasher sharing the number is
+// better left dark.
 static bool TestOutputIsMomentary(TestKind kind)
 {
     return kind == TestKind::Coils || kind == TestKind::Flashers;
@@ -3273,9 +3441,16 @@ static void FireSelectedTestOutput()
     const size_t index = static_cast<size_t>(
         std::clamp(g_serviceTest.selection, 0, static_cast<int>(g_serviceTest.steps.size()) - 1));
 
-    if (TestOutputIsMomentary(g_serviceTest.kind))
+    const BenchOutputStep& selected = g_serviceTest.steps[index];
+    if (selected.kind == BenchOutputKind::NONE)
     {
-        const BenchOutputStep& step = g_serviceTest.steps[index];
+        return;
+    }
+    // By the step rather than the test: the LED string test holds a lamp and
+    // pulses a flasher, as the lamp and flasher tests do.
+    if (selected.kind == BenchOutputKind::SOLENOID)
+    {
+        const BenchOutputStep& step = selected;
         printf("PPUC: test firing %s (%d)\n", step.description.c_str(), step.number);
         g_interceptorOutputs.PulseCoil(pPpuc, step.number, static_cast<uint32_t>(std::max(1, step.onDurationMs)));
         MonitorEntry& row = g_serviceTest.rows[index];
@@ -6331,6 +6506,10 @@ static struct cag_option options[] = {
     {.identifier = '2', .access_name = "lamp-test", .value_name = NULL, .description = "Run lamp test"},
     {.identifier = '3', .access_name = "gi-test", .value_name = NULL, .description = "Run lamp test"},
     {.identifier = '4', .access_name = "flasher-test", .value_name = NULL, .description = "Run flasher test"},
+    {.identifier = '_',
+     .access_name = "led-string-test",
+     .value_name = NULL,
+     .description = "Run lamp test along each LED string, LED by LED in wire order"},
     {.identifier = 'Z',
      .access_name = "interactive",
      .value_name = NULL,
@@ -6859,6 +7038,7 @@ int main(int argc, char** argv)
   bool opt_lamp_test = false;
   bool opt_gi_test = false;
   bool opt_flasher_test = false;
+  bool opt_led_string_test = false;
   uint8_t opt_number = 0;
   const char* opt_translite = NULL;
   const char* opt_translite_attract = NULL;
@@ -7187,6 +7367,8 @@ int main(int argc, char** argv)
           opt_gi_test = ParseIniBool(value);
         else if (key == "FlasherTest")
           opt_flasher_test = ParseIniBool(value);
+        else if (key == "LedStringTest")
+          opt_led_string_test = ParseIniBool(value);
         else if (key == "Interactive")
           opt_interactive = ParseIniBool(value);
         else if (key == "Number")
@@ -7499,6 +7681,9 @@ int main(int argc, char** argv)
       case '4':
         opt_flasher_test = true;
         break;
+      case '_':
+        opt_led_string_test = true;
+        break;
       case 'Z':
         opt_interactive = true;
         break;
@@ -7654,6 +7839,12 @@ int main(int argc, char** argv)
     return 1;
   }
 
+  if (opt_led_string_test && opt_number != 0)
+  {
+    fprintf(stderr, "--number is not supported with --led-string-test, which always walks every LED\n");
+    return 1;
+  }
+
   const bool useScriptEngine = opt_engine != nullptr && strcmp(opt_engine, "script") == 0;
   if (!useScriptEngine && (opt_engine == nullptr || strcmp(opt_engine, "pinmame") != 0))
   {
@@ -7701,6 +7892,15 @@ int main(int argc, char** argv)
     if (g_gameConfig.tilt.inhibitSwitch != 0)
     {
       pPpuc->SetTiltSwitch(static_cast<uint8_t>(g_gameConfig.tilt.inhibitSwitch));
+    }
+  }
+
+  {
+    std::string ledStringError;
+    if (!LoadLedStringsFromYaml(config_file, &g_ledStrings, &ledStringError))
+    {
+      // libppuc has accepted the file already; only the LED string test loses.
+      printf("%s\n", ledStringError.c_str());
     }
   }
 
@@ -8016,7 +8216,8 @@ int main(int argc, char** argv)
     pSpeechService->SpeakText("P P U C, the pinball power-up controller.");
   }
 
-  const bool bench_test_mode = opt_switch_test || opt_coil_test || opt_lamp_test || opt_gi_test || opt_flasher_test;
+  const bool bench_test_mode =
+      opt_switch_test || opt_coil_test || opt_lamp_test || opt_gi_test || opt_flasher_test || opt_led_string_test;
   const bool diagnostic_mode = bench_test_mode || opt_debug || opt_debug_errors || opt_debug_switches ||
                                opt_debug_coils || opt_debug_lamps || opt_debug_effects;
   if (diagnostic_mode)
@@ -8144,8 +8345,7 @@ int main(int argc, char** argv)
   pPpuc->SetSwitchReplyDelayUs(opt_switch_reply_delay_us);
   pPpuc->SetSwitchRefreshIdleMs(opt_switch_refresh_idle_ms);
   pPpuc->SetOutputFrameIntervalMs(opt_output_frame_interval_ms);
-  pPpuc->SetDisableFastFlipForTests(opt_switch_test || opt_coil_test || opt_lamp_test || opt_gi_test ||
-                                   opt_flasher_test);
+  pPpuc->SetDisableFastFlipForTests(bench_test_mode);
 
   if (opt_debug || opt_debug_errors)
   {
@@ -8164,7 +8364,7 @@ int main(int argc, char** argv)
     opt_serial = pPpuc->GetSerial();
   }
 
-  if (opt_switch_test || opt_coil_test || opt_lamp_test || opt_gi_test || opt_flasher_test)
+  if (bench_test_mode)
   {
     if (!pPpuc->Connect())
     {
@@ -8219,6 +8419,10 @@ int main(int argc, char** argv)
     else if (opt_flasher_test)
     {
       testMode = BenchTestMode::FLASHERS;
+    }
+    else if (opt_led_string_test)
+    {
+      testMode = BenchTestMode::LED_STRINGS;
     }
     else if (opt_coil_test)
     {

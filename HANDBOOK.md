@@ -201,8 +201,8 @@ flickers, so the monitor takes it outright.
 
 ### Tests
 
-The switch, coil, lamp, GI and flasher tests, on the backbox screen instead of
-a console. These have always existed as start-up modes — useful at a desk with
+The switch, coil, lamp, GI, flasher and LED string tests, on the backbox
+screen instead of a console. These have always existed as start-up modes — useful at a desk with
 a laptop wired to the playfield, useless at a machine in a cabinet — and this
 is the same set reached from the menu.
 
@@ -222,8 +222,17 @@ still works, but the game is running behind it.
 The switch test needs no cursor: press switches on the machine and watch them
 change.
 
+The **LED string test** goes along each LED string in the order the LEDs are
+wired — LED 0, LED 1, LED 2 — instead of by lamp number, so you can follow it
+down the string with a finger. Each step lights whatever that LED is assigned
+to: a lamp, a flasher (a short flash) or a GI string. Anything else assigned to
+the same lamp, flasher or GI string lights with it, which is expected; the
+console names those LEDs. An LED nothing is assigned to still gets its turn and
+stays dark, so the count never slips. Strings on boards that are not present
+are left out.
+
 Coil and flasher tests ask *"A game is in progress"* before opening if a ball
-is in play, since they can throw one. The other three open straight away.
+is in play, since they can throw one. The others open straight away.
 
 High power is raised for the coil and flasher tests when no game is running,
 and lowered again on the way out — but only if the test raised it, so leaving a
@@ -491,6 +500,26 @@ still have both the current and the previous stretch on the stick.
 **A coil never fires.** Select it in the monitor and press ENTER. If it fires,
 the wiring and the board are fine and the problem is upstream — the ROM, or a
 rule suppressing it. If it does not, it is the coil, its fuse or its connector.
+
+**An LED string goes dark after a certain LED, or some LEDs never change.**
+Start PPUC with `--led-string-test`, or open the LED string test from the
+tools menu, and watch the string while the console counts along it:
+
+```
+board=4 port=29 "Lamps"  LED 27 of 0-52: lamp #54 Left Loop HQ  color=FFFFFF
+```
+
+If the walk reaches an LED and it stays dark — and so does every LED after it —
+the data line breaks at that LED. Each LED passes the signal on to the next
+one, so a dead LED, a bad solder joint or a loose connector there darkens the
+rest of the string. Look at that LED's data-out and the next LED's data-in. If
+every LED lights correctly one at a time but the game still looks wrong, the
+string is fine and the problem is in the configuration.
+
+The test also lists, before it starts, any LED assigned beyond the end of its
+string. The board drives only as many LEDs as `amount` in `io-boards.yaml`
+says, so those can never light: either `amount` is too small or the LED number
+is wrong.
 
 **The screen flickers between two things.** Something is presenting twice. On a
 machine with a B2S or PUP pack, check you did not also configure a translite.
