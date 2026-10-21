@@ -201,8 +201,8 @@ flickers, so the monitor takes it outright.
 
 ### Tests
 
-The switch, coil, lamp, GI, flasher and LED string tests, on the backbox
-screen instead of a console. These have always existed as start-up modes — useful at a desk with
+The switch, coil, lamp, GI and flasher tests, on the backbox screen instead of
+a console. These have always existed as start-up modes — useful at a desk with
 a laptop wired to the playfield, useless at a machine in a cabinet — and this
 is the same set reached from the menu.
 
@@ -222,17 +222,8 @@ still works, but the game is running behind it.
 The switch test needs no cursor: press switches on the machine and watch them
 change.
 
-The **LED string test** goes along each LED string in the order the LEDs are
-wired — LED 0, LED 1, LED 2 — instead of by lamp number, so you can follow it
-down the string with a finger. Each step lights whatever that LED is assigned
-to: a lamp, a flasher (a short flash) or a GI string. Anything else assigned to
-the same lamp, flasher or GI string lights with it, which is expected; the
-console names those LEDs. An LED nothing is assigned to still gets its turn and
-stays dark, so the count never slips. Strings on boards that are not present
-are left out.
-
 Coil and flasher tests ask *"A game is in progress"* before opening if a ball
-is in play, since they can throw one. The others open straight away.
+is in play, since they can throw one. The other three open straight away.
 
 High power is raised for the coil and flasher tests when no game is running,
 and lowered again on the way out — but only if the test raised it, so leaving a
@@ -502,12 +493,22 @@ the wiring and the board are fine and the problem is upstream — the ROM, or a
 rule suppressing it. If it does not, it is the coil, its fuse or its connector.
 
 **An LED string goes dark after a certain LED, or some LEDs never change.**
-Start PPUC with `--led-string-test`, or open the LED string test from the
-tools menu, and watch the string while the console counts along it:
+Start PPUC with `--led-string-test` and watch the string while the console
+counts along it:
 
 ```
 board=4 port=29 "Lamps"  LED 27 of 0-52: lamp #54 Left Loop HQ  color=FFFFFF
 ```
+
+It goes along every LED string in the order the LEDs are wired — LED 0, LED 1,
+LED 2 — and lights **one LED at a time**, for a second each, even where a
+flasher covers three LEDs or a GI string forty. To do that, PPUC gives the
+boards a test configuration in which every LED is a lamp of its own; the next
+normal start sends the game's configuration again. Each LED shows in the colour
+it is configured with, and an LED nothing is assigned to lights white. Strings
+on boards that are skipped or not present are left out. There is no
+tools-menu version, because the boards cannot be reconfigured while a game is
+running.
 
 If the walk reaches an LED and it stays dark — and so does every LED after it —
 the data line breaks at that LED. Each LED passes the signal on to the next
