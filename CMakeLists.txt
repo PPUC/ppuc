@@ -298,6 +298,8 @@ endif()
 add_executable(ppuc-pinmame
    src/AttractSlides.cpp
    src/BallTroughWatch.cpp
+   src/LedStringWalk.cpp
+   src/LedStringWalkYaml.cpp
    src/AttractSlidesLoader.cpp
    src/AudioLanes.cpp
    src/AudioMixer.cpp
@@ -791,6 +793,7 @@ if(PPUC_BUILD_TESTS)
    add_executable(ppuc_tests
       src/AttractSlides.cpp
       src/BallTroughWatch.cpp
+      src/LedStringWalk.cpp
       src/AudioLanes.cpp
       src/AudioMixer.cpp
       src/LuaGameApi.cpp
@@ -822,6 +825,7 @@ if(PPUC_BUILD_TESTS)
       tests/test_pinmame_nvram_tracking.cpp
       tests/test_attract_slides.cpp
       tests/test_ball_trough_watch.cpp
+      tests/test_led_string_walk.cpp
       tests/test_audio_lanes.cpp
       tests/test_audio_mixer.cpp
       tests/test_plugin_switch_map.cpp

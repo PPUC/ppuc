@@ -492,6 +492,36 @@ still have both the current and the previous stretch on the stick.
 the wiring and the board are fine and the problem is upstream — the ROM, or a
 rule suppressing it. If it does not, it is the coil, its fuse or its connector.
 
+**An LED string goes dark after a certain LED, or some LEDs never change.**
+Start PPUC with `--led-string-test` and watch the string while the console
+counts along it:
+
+```
+board=4 port=29 "Lamps"  LED 27 of 0-52: lamp #54 Left Loop HQ  color=FFFFFF
+```
+
+It goes along every LED string in the order the LEDs are wired — LED 0, LED 1,
+LED 2 — and lights **one LED at a time**, for a second each, even where a
+flasher covers three LEDs or a GI string forty. To do that, PPUC gives the
+boards a test configuration in which every LED is a lamp of its own; the next
+normal start sends the game's configuration again. Each LED shows in the colour
+it is configured with, and an LED nothing is assigned to lights white. Strings
+on boards that are skipped or not present are left out. There is no
+tools-menu version, because the boards cannot be reconfigured while a game is
+running.
+
+If the walk reaches an LED and it stays dark — and so does every LED after it —
+the data line breaks at that LED. Each LED passes the signal on to the next
+one, so a dead LED, a bad solder joint or a loose connector there darkens the
+rest of the string. Look at that LED's data-out and the next LED's data-in. If
+every LED lights correctly one at a time but the game still looks wrong, the
+string is fine and the problem is in the configuration.
+
+The test also lists, before it starts, any LED assigned beyond the end of its
+string. The board drives only as many LEDs as `amount` in `io-boards.yaml`
+says, so those can never light: either `amount` is too small or the LED number
+is wrong.
+
 **The screen flickers between two things.** Something is presenting twice. On a
 machine with a B2S or PUP pack, check you did not also configure a translite.
 
