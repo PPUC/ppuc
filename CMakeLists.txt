@@ -168,6 +168,21 @@ list(APPEND PPUC_INCLUDE_DIRS
 )
 message(STATUS "Media plugin host: enabled (${PPUC_VPINBALL_DIR})")
 
+# The VPX plugin bus (MsgPluginManager and the host side of the plugin APIs),
+# shared with the ColorizingDMD editor: github.com/PPUC/libvpxhost, staged by
+# external.sh at LIBVPXHOST_SHA. Built against the same plugin SDK as
+# everything else here.
+if(NOT DEFINED PPUC_LIBVPXHOST_DIR OR PPUC_LIBVPXHOST_DIR STREQUAL "")
+   set(PPUC_LIBVPXHOST_DIR "${PPUC_REAL_SOURCE_DIR}/external/libvpxhost/libvpxhost")
+endif()
+if(NOT EXISTS "${PPUC_LIBVPXHOST_DIR}/CMakeLists.txt")
+   message(FATAL_ERROR
+      "Could not find libvpxhost in ${PPUC_LIBVPXHOST_DIR}. Run the platform external.sh script first.")
+endif()
+set(VPXHOST_VPINBALL_DIR "${PPUC_VPINBALL_DIR}" CACHE PATH "vpinball checkout providing the plugin SDK" FORCE)
+set(VPXHOST_BUILD_TESTS OFF CACHE BOOL "Build the libvpxhost tests" FORCE)
+add_subdirectory("${PPUC_LIBVPXHOST_DIR}" "${CMAKE_BINARY_DIR}/libvpxhost" EXCLUDE_FROM_ALL)
+
 set(PPUC_LUA_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third-party/lua-src")
 set(PPUC_LUA_INCLUDE_DIR "" CACHE PATH "Lua include directory")
 set(PPUC_LUA_LIBRARY "" CACHE FILEPATH "Lua library")
@@ -291,7 +306,7 @@ add_executable(ppuc-pinmame
    src/LuaGameApi.cpp
    src/LuaRulesEngine.cpp
    src/MediaPluginHost.cpp
-   src/PluginBus.cpp
+   src/PluginDir.cpp
    src/DmdSourceSelect.cpp
    src/PluginEngine.cpp
    src/SegmentDigitDecode.cpp
@@ -305,7 +320,6 @@ add_executable(ppuc-pinmame
    src/game/GameConfigYaml.cpp
    src/game/GameCore.cpp
    src/game/PlayfieldAssist.cpp
-   "${PPUC_VPINBALL_DIR}/plugins/plugins/MsgPluginManager.cpp"
    ${PPUC_LUA_SOURCES}
    src/SpeechCliSupport.cpp
    src/SpeechService.cpp
@@ -319,6 +333,7 @@ target_include_directories(ppuc-pinmame PUBLIC
 target_compile_definitions(ppuc-pinmame PRIVATE
    PPUC_RUNTIME_LIB_SUBDIR="${PLATFORM}-${ARCH}"
 )
+target_link_libraries(ppuc-pinmame PRIVATE vpxhost::vpxhost)
 
 if(PPUC_USE_KMSDMD)
    target_compile_definitions(ppuc-pinmame PRIVATE PPUC_USE_KMSDMD=1)
@@ -734,9 +749,8 @@ if(PPUC_BUILD_TESTS)
       src/AudioMixer.cpp
       src/AudioOutput.cpp
       src/MediaPluginHost.cpp
-      src/PluginBus.cpp
+      src/PluginDir.cpp
       src/ScriptObject.cpp
-      "${PPUC_VPINBALL_DIR}/plugins/plugins/MsgPluginManager.cpp"
       tests/fakectl/plugin_smoke.cpp
    )
    target_include_directories(ppuc_plugin_smoke PRIVATE ${PPUC_INCLUDE_DIRS})
@@ -744,7 +758,7 @@ if(PPUC_BUILD_TESTS)
       third-party/build-libs/${PLATFORM}-${ARCH}
       third-party/runtime-libs/${PLATFORM}-${ARCH}
    )
-   target_link_libraries(ppuc_plugin_smoke PRIVATE SDL3 SDL3_image)
+   target_link_libraries(ppuc_plugin_smoke PRIVATE SDL3 SDL3_image vpxhost::vpxhost)
    set_target_properties(ppuc_plugin_smoke PROPERTIES
       BUILD_WITH_INSTALL_RPATH TRUE
       INSTALL_RPATH "${CMAKE_CURRENT_SOURCE_DIR}/third-party/runtime-libs/${PLATFORM}-${ARCH}"

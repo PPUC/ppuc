@@ -67,7 +67,10 @@ Repository-local reference documentation:
 - `src/LuaRulesEngine.*`: embedded Lua 5.4 rules engine exposing the `ppuc`
   namespace.
 - `src/MediaPluginHost.*` (~2k lines): hosts VPX message plugins (PUP, B2S,
-  AltSound) through `MsgPluginManager` from the vpinball plugin SDK.
+  AltSound) on the plugin bus of `../libvpxhost` (`vpxhost::PluginBus`, shared
+  with the ColorizingDMD editor, pinned as `LIBVPXHOST_SHA`). Bus changes that
+  are not PPUC-specific belong there; `src/PluginDir.*` keeps PPUC's plugin
+  folder lookup.
 - `src/AudioOutput.*`: SDL3_mixer background music, ducking against PinMAME and
   speech audio.
 - `src/SpeechService.*`, `FliteSpeechService.*`, `ESpeakNgSpeechService.*`,
@@ -119,7 +122,7 @@ Useful environment variables:
   `LIBDMDUTIL_SOURCE_DIR` also redirects the copy `libsdldmd` stages.
 
 Dependency pins live in `platforms/config.sh` (`PINMAME_SHA`, `VPINBALL_SHA`,
-`LIBPPUC_SHA`, `LIBSDLDMD_SHA`, `LUA_VERSION`, …), but three of the VPX plugin
+`LIBPPUC_SHA`, `LIBSDLDMD_SHA`, `LIBVPXHOST_SHA`, `LUA_VERSION`, …), but three of the VPX plugin
 dependencies are deliberately **not** pinned there. SDL_ttf, libaltsound and
 ffmpeg are read from the staged vpinball tree by `ppuc_vpinball_pin`, and SDL
 itself from libsdldmd by `ppuc_libsdldmd_sdl_sha`.

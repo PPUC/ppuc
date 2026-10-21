@@ -20,7 +20,7 @@
 #include "AudioLanes.h"
 #include "AudioOutput.h"
 #include "MediaPluginHost.h"
-#include "PluginBus.h"
+#include "vpxhost/PluginBus.h"
 
 namespace
 {
@@ -57,7 +57,7 @@ int main(int argc, char** argv)
   std::filesystem::remove(logPath);
   setenv("PPUC_FAKECTL_LOG", logPath.c_str(), 1);
 
-  PluginBus bus;
+  vpxhost::PluginBus bus({"PPUC", "PPUC", "PPUC plugin host"});
   std::string error;
   if (!bus.Initialize(pluginDir, &error))
   {

@@ -14,6 +14,8 @@ echo "  LIBPPUC_SHA: ${LIBPPUC_SHA}"
 print_dependency_source LIBPPUC "${LIBPPUC_SHA}" LIBPPUC_SOURCE_DIR
 echo "  LIBSDLDMD_SHA: ${LIBSDLDMD_SHA}"
 print_dependency_source LIBSDLDMD "${LIBSDLDMD_SHA}" LIBSDLDMD_SOURCE_DIR
+echo "  LIBVPXHOST_SHA: ${LIBVPXHOST_SHA}"
+print_dependency_source LIBVPXHOST "${LIBVPXHOST_SHA}" LIBVPXHOST_SOURCE_DIR
 echo ""
 
 if [ -z "${CACHE_DIR}" ]; then
@@ -28,6 +30,7 @@ mkdir -p external ${CACHE_DIR}
 cd external
 
 ppuc_stage_lua_source
+ppuc_stage_libvpxhost_source
 
 #
 # build libsdldmd, SDL3_image, SDL3_mixer

@@ -8,7 +8,7 @@
 
 #include "DmdSourceSelect.h"
 #include "PinmameNvramMapLoader.h"
-#include "PluginBus.h"
+#include "vpxhost/PluginBus.h"
 #include "SegmentDigitDecode.h"
 #include "pinmame/PinMAMEPlugin.h"
 #include "plugins/ControllerPlugin.h"
