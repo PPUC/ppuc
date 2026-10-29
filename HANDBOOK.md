@@ -189,9 +189,11 @@ logged at all.
   Amber means it changed recently.
 - The coil side has a cursor. Move to a coil and press **ENTER** to fire it
   once — enough to release a stuck ball without lifting the glass.
-- When there are more switches than fit on the screen, the heading shows which
-  ones you are looking at, e.g. *(1-45)*. Operating a switch brings up its page
-  for a few seconds; when nothing changes, the pages take turns.
+- A long switch list is drawn with tighter rows and a smaller font so that it
+  fits on one screen. On a 1920x1080 backglass that holds 60 switches. Only
+  beyond that does it page: the heading shows which ones you are looking at,
+  e.g. *(1-60)*, operating a switch brings up its page for a few seconds, and
+  when nothing changes the pages take turns.
 
 The monitor shows what the *machine* is doing, before any rule suppresses
 anything. That is deliberate: if a rule is eating a switch, the monitor is how

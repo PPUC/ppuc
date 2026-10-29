@@ -2465,11 +2465,15 @@ static SDL_Renderer* g_uiRenderer = nullptr;
 #ifdef PPUC_HAS_SDL3_TTF
 static TTF_Font* pFirmwareFontLarge = nullptr;
 static TTF_Font* pFirmwareFontSmall = nullptr;
+// For lists that would not fit at the small size: the switch monitor closes
+// its rows up rather than putting switches on a page nobody sees.
+static TTF_Font* pFirmwareFontCompact = nullptr;
 #else
 // No SDL_ttf on this platform: the text calls below draw nothing.
 struct TTF_Font;
 static TTF_Font* pFirmwareFontLarge = nullptr;
 static TTF_Font* pFirmwareFontSmall = nullptr;
+static TTF_Font* pFirmwareFontCompact = nullptr;
 #endif
 [[maybe_unused]] static bool firmwareFontAttempted = false;
 
@@ -2505,6 +2509,7 @@ static void EnsureFirmwareFont()
         if (pFirmwareFontLarge)
         {
             pFirmwareFontSmall = TTF_OpenFont(path, 28);
+            pFirmwareFontCompact = TTF_OpenFont(path, 23);
             return;
         }
     }
@@ -2926,14 +2931,29 @@ static void DrawMonitorSection(const char* title, const std::vector<MonitorEntry
 
     const int top = y + 52;
     const int bottom = y + h - 12;
-    const int rowH = 32;
-    const int maxRows = std::max(1, (bottom - top) / rowH);
 
     // A column is as wide as a row needs, not as wide as the section divided
     // by however many columns happen to be required. Dividing the width put
     // the state word half a metre from the name it belonged to.
     const int kColumnWidth = 620;
     const int maxColumns = std::max(1, (w - 20) / kColumnWidth);
+
+    // Rows close up, with a smaller font, before a list goes on to a second
+    // page. On a 1920x1080 backglass the switch side has two columns of 26:
+    // one short of Flash's 58 switches, seven short of Dirty Harry's 59, and
+    // a switch that is on another page is a switch nobody sees close.
+    // Below kCompactRowHeight the names start touching, so past that it pages.
+    constexpr int kRowHeight = 32;
+    constexpr int kCompactRowHeight = 27;
+    int rowH = kRowHeight;
+    const int rowsNeeded =
+        static_cast<int>((entries.size() + static_cast<size_t>(maxColumns) - 1) / static_cast<size_t>(maxColumns));
+    if (rowsNeeded * kRowHeight > bottom - top && pFirmwareFontCompact != nullptr)
+    {
+        rowH = std::max(kCompactRowHeight, (bottom - top) / rowsNeeded);
+    }
+    TTF_Font* rowFont = rowH < kRowHeight ? pFirmwareFontCompact : pFirmwareFontSmall;
+    const int maxRows = std::max(1, (bottom - top) / rowH);
     const int columns =
         std::max(1, std::min(maxColumns, static_cast<int>((entries.size() + static_cast<size_t>(maxRows) - 1) /
                                                           static_cast<size_t>(maxRows))));
@@ -3044,8 +3064,8 @@ static void DrawMonitorSection(const char* title, const std::vector<MonitorEntry
         // that runs into the next column is worse than a name cut short.
         // Room for the state and, beside it, how long ago. Both sides now read
         // the same way: what it is doing, and when it last did something.
-        TruncateToWidth(line, pFirmwareFontSmall, contentWidth - 225);
-        DrawFirmwareTextLeft(line, pFirmwareFontSmall, rx, ry, nameColour);
+        TruncateToWidth(line, rowFont, contentWidth - 225);
+        DrawFirmwareTextLeft(line, rowFont, rx, ry, nameColour);
 
         char age[16];
         // How long it has been in the state it is in, whichever that is. A
@@ -3062,27 +3082,27 @@ static void DrawMonitorSection(const char* title, const std::vector<MonitorEntry
             // coil that never fired unmistakable.
             if (isActive)
             {
-                DrawFirmwareTextLeft("on", pFirmwareFontSmall, rx + contentWidth - 185, ry, green);
+                DrawFirmwareTextLeft("on", rowFont, rx + contentWidth - 185, ry, green);
             }
             else if (entry.activations != 0)
             {
                 snprintf(line, sizeof(line), "%ux", entry.activations);
-                DrawFirmwareTextLeft(line, pFirmwareFontSmall, rx + contentWidth - 185, ry, recent ? amber : dim);
+                DrawFirmwareTextLeft(line, rowFont, rx + contentWidth - 185, ry, recent ? amber : dim);
             }
             else
             {
-                DrawFirmwareTextLeft("never", pFirmwareFontSmall, rx + contentWidth - 185, ry, dim);
+                DrawFirmwareTextLeft("never", rowFont, rx + contentWidth - 185, ry, dim);
             }
         }
         else
         {
-            DrawFirmwareTextLeft(isActive ? "closed" : "open", pFirmwareFontSmall, rx + contentWidth - 185, ry,
+            DrawFirmwareTextLeft(isActive ? "closed" : "open", rowFont, rx + contentWidth - 185, ry,
                                  isActive ? green : dim);
         }
 
         if ((coils ? entry.lastActivationMs : entry.lastChangeMs) != 0)
         {
-            DrawFirmwareTextLeft(age, pFirmwareFontSmall, rx + contentWidth - 55, ry, recent ? amber : dim);
+            DrawFirmwareTextLeft(age, rowFont, rx + contentWidth - 55, ry, recent ? amber : dim);
         }
     }
 }
@@ -5463,6 +5483,11 @@ static void CloseFirmwareScreen()
     {
         TTF_CloseFont(pFirmwareFontSmall);
         pFirmwareFontSmall = nullptr;
+    }
+    if (pFirmwareFontCompact)
+    {
+        TTF_CloseFont(pFirmwareFontCompact);
+        pFirmwareFontCompact = nullptr;
     }
     if (firmwareFontAttempted)
     {
