@@ -1021,6 +1021,24 @@ bool PluginEngine::Start(std::string& error)
     return false;
   }
 
+  // Off before Run: PinMAME's simulated mechanics are for a cabinet with no
+  // playfield. They move a pretend assembly when its solenoid fires and write
+  // the switches that assembly would close -- T2's gun home and gun mark, its
+  // skull drop target -- into the same matrix the real switches arrive in, so
+  // the ROM would see both and believe whichever wrote last. The controller
+  // turns them all on when it is created, and the plugin only reads the flag
+  // when it declares its devices, so it has to be set here and not later.
+  // PinMAME's own P-ROC build does the same for the same reason.
+  ScriptVariant mechanics{};
+  mechanics.vInt32 = 0;
+  ScriptVariant mechanicsState{};
+  if (!m_controller.Call("HandleMechanics", {"int32"}, &mechanics) ||
+      !m_controller.Call("HandleMechanics", {}, nullptr, &mechanicsState) || mechanicsState.vInt32 != 0)
+  {
+    error = "could not turn off PinMAME's simulated mechanics";
+    return false;
+  }
+
   // Blocks until PinMAME is either running or has given up.
   if (!m_controller.Call("Run", {}))
   {
