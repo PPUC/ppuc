@@ -2944,11 +2944,35 @@ static void DrawMonitorSection(const char* title, const std::vector<MonitorEntry
     const int rows = std::max(1, std::min(maxRows, static_cast<int>((entries.size() + static_cast<size_t>(columns) - 1) /
                                                                     static_cast<size_t>(columns))));
     const size_t capacity = static_cast<size_t>(rows) * static_cast<size_t>(columns);
-    // The page the cursor is on, so walking the list scrolls it. Without a
-    // cursor -- the switch side -- it is the first page.
-    const size_t first = (selected >= 0 && capacity > 0)
-                             ? (static_cast<size_t>(selected) / capacity) * capacity
-                             : 0;
+    // The page the cursor is on, so walking the list scrolls it.
+    //
+    // Without a cursor -- the switch side -- this used to be the first page
+    // and nothing else, so on a machine with more switches than fit, the rest
+    // were out of reach: Dirty Harry's optos never appeared, Flash fits on one
+    // page and never showed it. Now the page follows the switch that changed
+    // last, which is the one somebody standing at the machine just pressed,
+    // and while nothing changes the pages take turns.
+    size_t focus = selected >= 0 ? static_cast<size_t>(selected) : 0;
+    if (selected < 0 && entries.size() > capacity)
+    {
+        constexpr uint64_t kFollowChangeMs = 5000;
+        constexpr uint64_t kPageTurnMs = 4000;
+        uint64_t latest = 0;
+        for (size_t i = 0; i < entries.size(); ++i)
+        {
+            if (entries[i].lastChangeMs > latest)
+            {
+                latest = entries[i].lastChangeMs;
+                focus = i;
+            }
+        }
+        if (latest == 0 || now - latest >= kFollowChangeMs)
+        {
+            const size_t pages = (entries.size() + capacity - 1) / capacity;
+            focus = static_cast<size_t>((now / kPageTurnMs) % pages) * capacity;
+        }
+    }
+    const size_t first = capacity > 0 ? (focus / capacity) * capacity : 0;
     const size_t last = std::min(entries.size(), first + capacity);
 
     if (entries.size() > capacity)
