@@ -2,8 +2,8 @@
 
 For the person who owns, sets up or operates a machine running PPUC. It covers
 what the machine does and how to make it do it: the game folder, sound, the
-service tools on the backbox screen, the how-to-play slideshow, and what to do
-when something looks wrong.
+service tools on the backbox screen, the how-to-play slideshow, updating the
+boards' firmware, and what to do when something looks wrong.
 
 It does not explain how any of it is built. Where that matters, each section
 points at the design document that does.
@@ -452,7 +452,103 @@ with no desktop compositor, two windows presenting means the panel alternates
 between them as fast as they draw — which looks exactly like a hardware fault
 and is not one.
 
-## 9. When something looks wrong
+## 9. Updating board firmware
+
+The boards can be updated from the host over the same bus that drives the
+game, so a board under the playfield never has to be unplugged. `ppuc` checks
+the boards at every start, before it configures them, and flashes only when you
+have explicitly allowed it.
+
+**1. Put the images in one folder.** One `.uf2` file per board type, named after
+the type and the version, the way the io-boards releases name them:
+
+```
+firmware/
+  IO_16_8_1-0.3.4.uf2
+  Opto_16-0.3.4.uf2
+```
+
+The name before the version must be one of `IO_16_8_1`, `IO_16x8_matrix`,
+`Out_8x10` or `Opto_16`; any other file is ignored. Each board gets the newest
+image *of its own type*, never another type's, so it is safe to keep the images
+for every board in the same folder. A snapshot build may carry a build id, as in
+`IO_16_8_1-0.3.4+1a2b3c4d.uf2`.
+
+**2. Look before you flash.** Start the machine with the folder but without
+permission to update:
+
+```
+ppuc --game /path/to/flash --firmware-path /path/to/firmware
+```
+
+The log says what every board runs and what would happen to it, then the game
+starts as usual:
+
+```
+PPUC: board 1 is IO_16_8_1, firmware 0.3.2 (admin protocol 1.0)
+PPUC: board 3 is Opto_16, firmware 0.3.2 (admin protocol 1.0)
+PPUC: board 1 (IO_16_8_1) will be updated: 0.3.2 -> 0.3.4
+PPUC: board 3 (Opto_16) has a newer image (0.3.2 -> 0.3.4) but will not be updated: firmware for this board type has never been run on real hardware
+PPUC: 1 board(s) would be updated; pass --allow-firmware-update to permit it
+```
+
+**3. Flash.** Add `--allow-firmware-update`. To include board types that are
+not yet proven on hardware — currently every type except `IO_16_8_1`, the opto
+board among them — also add `--allow-unvalidated-firmware-update`:
+
+```
+ppuc --game /path/to/flash --firmware-path /path/to/firmware \
+     --allow-firmware-update --allow-unvalidated-firmware-update
+```
+
+That second flag is a real decision, not a formality. Firmware nobody has run on
+a board type drives pins whose direction has so far only been read off a
+schematic, and a mistake there pushes an output into an input. If you would
+rather watch it happen, leave the flag out and flash that board over USB
+instead (see the io-boards README).
+
+While the update runs, the backbox shows the firmware update screen with
+*board N of M*, and the board being written shows two quick pulses on its LED,
+then dark. It takes minutes. **Do not switch the machine off**: a board
+interrupted mid-write has to be recovered over USB.
+
+When every board is written, `ppuc` stops on its own: the boards are rebooting
+into the new firmware and there is nothing to configure yet. The launcher starts
+it again (it exits with status 75, which the launcher reads as "start me again",
+not as a crash); if you started it by hand, start it again yourself. The next
+start logs the new versions, finds nothing to update, and plays.
+
+**The same in `ppuc.ini`**, for a machine you do not start from a keyboard:
+
+```ini
+[Runtime]
+FirmwarePath=/home/ppuc/firmware
+AllowFirmwareUpdate=true
+; only if the opto board or another unproven type needs it
+AllowUnvalidatedFirmwareUpdate=true
+```
+
+Give `FirmwarePath` as an absolute path: a relative one is read from wherever
+`ppuc` was started, not from the game folder. Keep comments on lines of their
+own here; the INI reader takes everything after `=` as the value.
+
+`FirmwarePath` on its own is harmless and worth leaving in: it only reports.
+Take the `Allow…` lines out again once the boards are updated, so that dropping
+a new image into the folder does not flash a machine at its next boot without
+anyone deciding to.
+
+**Two further switches**, for development rather than for operators:
+
+| Option / INI key | What it allows |
+|---|---|
+| `--allow-firmware-downgrade` / `AllowFirmwareDowngrade` | flashing a board whose firmware is *newer* than the image, to go back a version |
+| `--allow-dev-firmware-update` / `AllowDevFirmwareUpdate` | reflashing a board whose version matches the image but was built from a different commit — snapshots between releases all carry the same version number |
+
+**A board that says nothing.** `board N did not report a firmware version`
+means the board is absent, or runs firmware too old to take updates over the
+bus. Flash it once over USB; from then on it updates like the others.
+
+## 10. When something looks wrong
 
 **A board is being flashed and the machine looks dead.** It is not. A firmware
 transfer takes minutes, the screen says so, and a board interrupted mid-write
