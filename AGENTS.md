@@ -182,7 +182,7 @@ Precedence: built-in defaults → INI values → dedicated CLI options.
 The INI is consumed twice: `ppuc.cpp` parses `[Game]`, `[Paths]`, `[Backbox]`,
 `[Runtime]`, `[Speech]`, `[BenchTest]`, `[Translite]`, `[VirtualDMD]`, while the
 same file is handed to `libdmdutil` (`dmdConfig->parseConfigFile()`) for
-`[ZeDMD]`, `[ZeDMD-WiFi]`, `[ZeDMD-SPI]`, `[Pixelcade]`, `[PIN2DMD]`,
+`[ZeDMD]`, `[ZeDMD-WiFi]`, `[ZeDMD-SPI]`, `[Pixelcade]`, `[PIN2DMD]`, `[PinDMD3]`,
 `[OutputFilters]`. Keep `examples/ppuc-pinmame.ini` in sync when adding keys,
 and check whether `../config-tool` should export the new key.
 

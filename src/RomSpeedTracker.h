@@ -22,6 +22,10 @@ class RomSpeedTracker
   static constexpr int kMinChange = 8;
   // A trigger frame is not corrected by the next one the way output state is.
   static constexpr uint64_t kRepeatMs = 1000;
+  // What the board is told before anything is measured: hold the motor off. A
+  // first run takes three windows to measure, and running it at plain power
+  // meanwhile would be the fastest it could ever go.
+  static constexpr uint8_t kHoldScale = 0;
 
   // Feed it the mech's position. Returns true when the board should be told
   // *pValue, a scale from 1 to 255.

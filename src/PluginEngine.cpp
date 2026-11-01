@@ -364,6 +364,10 @@ void PluginEngine::SetUpRomSpeedMechs()
 
     ++mech;
     m_romSpeedMechs.push_back({coil, mech, RomSpeedTracker{}});
+    if (m_pHost != nullptr)
+    {
+      m_pHost->OnCoilSpeedChanged(coil, RomSpeedTracker::kHoldScale);
+    }
   }
 }
 
