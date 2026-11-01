@@ -311,6 +311,85 @@ void PluginEngine::OnControllersChanged()
   }
 }
 
+// ---- Motor speed ---------------------------------------------------------
+
+void PluginEngine::SetUpRomSpeedMechs()
+{
+  // A hard limit in libpinmame, shared with nothing else: PPUC defines no other
+  // mechs. A motor left out still runs, at its plain configured power.
+  constexpr int kMaxMechs = 5;
+  int mech = 0;
+  for (const uint16_t coil : m_options.romSpeedCoils)
+  {
+    if (mech == kMaxMechs)
+    {
+      if (m_pHost != nullptr)
+      {
+        const std::string message = "PinMAME can only measure " + std::to_string(kMaxMechs) +
+                                    " motors, coil " + std::to_string(coil) + " runs at its configured power";
+        m_pHost->OnLogMessage(true, message.c_str());
+      }
+      continue;
+    }
+
+    // One position per sample that finds the raw coil state on: fast, so it
+    // samples 480 times a second, linear, and with no switches, so it writes
+    // nothing into the matrix the real switches arrive in.
+    constexpr int kMechFast = 0x80;
+    const int config[][2] = {{1, coil},
+                             {3, RomSpeedTracker::kMechRange},
+                             {4, RomSpeedTracker::kMechRange},
+                             {5, kMechFast},
+                             {6, 1},
+                             {7, 1},
+                             {0, mech + 1}};
+    bool configured = true;
+    for (const auto& [property, value] : config)
+    {
+      ScriptVariant args[2]{};
+      args[0].vInt = property;
+      args[1].vInt32 = value;
+      configured = configured && m_controller.Call("Mech", {"int", "int32"}, args);
+    }
+    if (!configured)
+    {
+      if (m_pHost != nullptr)
+      {
+        const std::string message =
+            "could not set up a mech for coil " + std::to_string(coil) + ", it runs at its configured power";
+        m_pHost->OnLogMessage(true, message.c_str());
+      }
+      continue;
+    }
+
+    ++mech;
+    m_romSpeedMechs.push_back({coil, mech, RomSpeedTracker{}});
+  }
+}
+
+void PluginEngine::SampleRomSpeeds(uint64_t nowMs)
+{
+  for (RomSpeedMech& entry : m_romSpeedMechs)
+  {
+    ScriptVariant arg{};
+    arg.vInt = entry.mech;
+    ScriptVariant position{};
+    if (!m_controller.Call("GetMech", {"int"}, &arg, &position))
+    {
+      continue;
+    }
+    uint8_t speed = 0;
+    if (entry.tracker.Update(nowMs, position.vInt32, &speed) && m_pHost != nullptr)
+    {
+      if (m_options.debugCoils)
+      {
+        std::printf("Coil speed: #%u, %u\n", entry.coil, speed);
+      }
+      m_pHost->OnCoilSpeedChanged(entry.coil, speed);
+    }
+  }
+}
+
 // ---- The real-time coil path --------------------------------------------
 
 void PluginEngine::PollThreadMain()
@@ -1086,6 +1165,8 @@ bool PluginEngine::Start(std::string& error)
     return false;
   }
 
+  SetUpRomSpeedMechs();
+
   m_started = true;
   m_stopRequested.store(false, std::memory_order_release);
   // Spawned with the gate shut: it idles until OnStateSrcChanged publishes a
@@ -1387,6 +1468,12 @@ void PluginEngine::Update()
   {
     m_nextOutputSampleMs = now + static_cast<uint64_t>(1000 / std::max(1, m_options.outputPollHz));
     SampleOutputs();
+  }
+
+  if (!m_romSpeedMechs.empty() && now >= m_nextRomSpeedSampleMs)
+  {
+    m_nextRomSpeedSampleMs = now + 50;
+    SampleRomSpeeds(now);
   }
 
   // 60 Hz: a segment display is a 60 Hz device and sampling faster only costs

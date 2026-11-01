@@ -66,6 +66,10 @@ class GameEngineHost
   // this and nothing else.
   virtual void OnCoilStateSync(uint16_t number, uint8_t state) { (void)number, (void)state; }
 
+  // How fast the ROM is running a motor marked romSpeed, 1 to 255. It says
+  // nothing about whether it runs, which OnCoilChanged still decides.
+  virtual void OnCoilSpeedChanged(uint16_t number, uint8_t speed) { (void)number, (void)speed; }
+
   // PUSH, and deliberately separate from OnCoilChanged(gameOnSolenoid, ...).
   // The game-on solenoid means two different things that PinMAME conflates:
   // "high power is live on the boards" (a hardware gate) and "a game is in

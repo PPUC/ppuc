@@ -6666,6 +6666,8 @@ struct PpucEngineHost final : GameEngineHost
 
   }
 
+  void OnCoilSpeedChanged(uint16_t number, uint8_t speed) override { pPpuc->SetCoilPowerScale(number, speed); }
+
   void OnGameRunningChanged(bool gameRunning) override
   {
     ball_search_game_running.store(gameRunning, std::memory_order_release);
@@ -8989,6 +8991,7 @@ int main(int argc, char** argv)
     engineOptions.pinmamePath = opt_pinmame_path ? opt_pinmame_path : "";
     engineOptions.platform = pPpuc->GetPlatform();
     engineOptions.gameOnSolenoid = pPpuc->GetGameOnSolenoid();
+    engineOptions.romSpeedCoils = pPpuc->GetRomSpeedCoils();
     engineOptions.noSound = opt_no_sound;
     engineOptions.debug = opt_debug;
     engineOptions.debugCoils = opt_debug_coils;

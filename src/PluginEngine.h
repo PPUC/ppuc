@@ -11,6 +11,7 @@
 
 #include "GameEngine.h"
 #include "PinmameNvramTracking.h"
+#include "RomSpeedTracker.h"
 #include "ScriptObject.h"
 
 namespace vpxhost
@@ -49,6 +50,8 @@ class PluginEngine final : public GameEngine
     std::string pluginId = "PinMAME";
     uint8_t platform = 0;
     uint8_t gameOnSolenoid = 0;
+    // Motors whose speed the ROM sets, measured through a mech each.
+    std::vector<uint16_t> romSpeedCoils;
     bool noSound = false;
     bool debug = false;
     bool debugCoils = false;
@@ -114,6 +117,8 @@ class PluginEngine final : public GameEngine
   void ReportDmdRate();
   void OnControllersChanged();
   void PollThreadMain();
+  void SetUpRomSpeedMechs();
+  void SampleRomSpeeds(uint64_t nowMs);
   void SampleOutputs();
   void PollTrackedState();
   void ReportUndecodableTrackedField(const char* what, const PinmameTrackedField& field, const PinmameByteReader& read,
@@ -172,6 +177,14 @@ class PluginEngine final : public GameEngine
   std::vector<GameEngineOutputChange> m_lampChanges;
   std::vector<GameEngineOutputChange> m_giChanges;
   uint64_t m_nextOutputSampleMs = 0;
+  struct RomSpeedMech
+  {
+    uint16_t coil;
+    int mech;
+    RomSpeedTracker tracker;
+  };
+  std::vector<RomSpeedMech> m_romSpeedMechs;
+  uint64_t m_nextRomSpeedSampleMs = 0;
 
   // Segment displays live in Impl, not here: their accessor is a
   // SegSrcId::GetState function pointer returning a struct by value, and

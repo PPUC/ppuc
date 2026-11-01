@@ -310,6 +310,7 @@ add_executable(ppuc-pinmame
    src/MediaPluginHost.cpp
    src/PluginDir.cpp
    src/DmdSourceSelect.cpp
+   src/RomSpeedTracker.cpp
    src/PluginEngine.cpp
    src/SegmentDigitDecode.cpp
    src/ScriptObject.cpp
@@ -791,6 +792,7 @@ if(PPUC_BUILD_TESTS)
    # reader, while map loading lives in PinmameNvramMapLoader.cpp and is not
    # part of this target.
    add_executable(ppuc_tests
+      src/RomSpeedTracker.cpp
       src/AttractSlides.cpp
       src/BallTroughWatch.cpp
       src/LedStringWalk.cpp
@@ -829,6 +831,7 @@ if(PPUC_BUILD_TESTS)
       tests/test_audio_lanes.cpp
       tests/test_audio_mixer.cpp
       tests/test_plugin_switch_map.cpp
+      tests/test_rom_speed_tracker.cpp
       tests/test_script_object.cpp
       tests/test_segment_digit_decode.cpp
       tests/test_board_type_check.cpp
