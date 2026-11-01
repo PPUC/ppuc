@@ -516,7 +516,7 @@ with an error on a mismatch. A board that reports no type, or that the
 configuration does not list, is passed over.
 
 Board types are also marked as validated on hardware or not
-(`BoardTypeValidatedOnHardware()`). Only `IO_16_8_1` is today. ppuc reports a
+(`BoardTypeValidatedOnHardware()`). `IO_16_8_1` and `Opto_16` are today. ppuc reports a
 newer image for the others but refuses to install it, because their pin maps
 have never been checked against a real board and a wrong pin direction on this
 hardware drives an output into an input. Flash those over USB, where a person

@@ -709,9 +709,10 @@ All three carry an RP2040 and an ADM3483, so they join the same v2 bus and
 `config-tool` already knows `Out_8x10`.
 
 **Status:** firmware, host validation and the config-tool board types for all
-three are written and covered by host-side tests; none of the three has run on
-hardware yet, so all stay unvalidated. What to check on a bench is listed under
-"Board Types" in `io-boards/AGENTS.md`. `config-tool` authors a lamp matrix as
+three are written and covered by host-side tests. `Opto_16` has run in a machine
+and is validated; the other two have not run on hardware yet and stay
+unvalidated. What to check on a bench is listed under "Board Types" in
+`io-boards/AGENTS.md`. `config-tool` authors a lamp matrix as
 `lamp_matrix` and `lamp_matrix_lamp` content and exports it as `lampMatrix`.
 `ppuc-pinmame` compares each board's reported type with the configured one
 before configuring anything and refuses to start on a mismatch. Still open:
