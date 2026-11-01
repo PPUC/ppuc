@@ -6344,7 +6344,9 @@ static struct cag_option options[] = {
      .access_name = "altsound",
      .value_name = NULL,
      .description = "Enable AltSound through the plugin host (optional)"},
-    {.identifier = '?',
+    // Not '?': that is what cargs reports an unknown option as, so any mistyped
+    // option would silently turn the backglass on instead of being refused.
+    {.identifier = '/',
      .access_name = "b2s",
      .value_name = NULL,
      .description = "Enable B2S backglass rendering through the plugin host (optional)"},
@@ -7553,7 +7555,7 @@ int main(int argc, char** argv)
       case '9':
         opt_altsound = true;
         break;
-      case '?':
+      case '/':
         opt_b2s = true;
         break;
       case '+':
