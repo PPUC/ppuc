@@ -99,6 +99,13 @@ class GameEngineHost
   virtual void OnDmdRgb24Frame(const uint8_t* pData, int width, int height) = 0;
   virtual void OnSegmentDigit(int digit, int value) = 0;
   virtual void OnPlayerScore(int player, int score) = 0;
+  // The speaker lights of the colorization. A colorizer that runs as a plugin
+  // holds libserum, while the host holds the display they are wired to. colors
+  // is three entries.
+  virtual void OnLightEffect(int channel, uint8_t mode, uint16_t speed, uint8_t options, const uint32_t* colors,
+                             uint16_t durationMs, bool isDefault, uint8_t brightness) = 0;
+  // Back to the lights' own setting: a colorization without speaker lights.
+  virtual void OnLightEffectsReset() = 0;
 
   // ---- Audio ------------------------------------------------------------
   // PUSH. libpinmame's audio callback contract is "return the number of samples

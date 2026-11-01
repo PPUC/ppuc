@@ -12,6 +12,7 @@
 #include "SegmentDigitDecode.h"
 #include "pinmame/PinMAMEPlugin.h"
 #include "plugins/ControllerPlugin.h"
+#include "plugins/SerumPlugin.h"
 
 #if defined(__linux__)
 #include <pthread.h>
@@ -104,6 +105,34 @@ struct PluginEngine::Impl
   // sightings. Lives here rather than on the engine because the bus trampoline
   // below is all that touches it.
   std::unordered_set<uint64_t> seenSoundCommands;
+
+  GameEngineHost* host = nullptr;
+
+  static void MSGPIAPI OnLightEffects(unsigned int, void* userData, void* msgData)
+  {
+    auto* self = static_cast<Impl*>(userData);
+    const auto* msg = static_cast<const SerumLightEffectsMsg*>(msgData);
+    if (self == nullptr || msg == nullptr || self->host == nullptr)
+    {
+      return;
+    }
+    if (msg->isDefault != 0 && msg->channels == 0)
+    {
+      self->host->OnLightEffectsReset();
+      return;
+    }
+    for (int channel = 0; channel < SERUMPI_LIGHT_CHANNELS; channel++)
+    {
+      if ((msg->channels & (1u << channel)) == 0)
+      {
+        continue;
+      }
+      const SerumLightEffect& effect = msg->effects[channel];
+      self->host->OnLightEffect(channel, effect.mode, effect.speed, effect.options, effect.colors,
+                                static_cast<uint16_t>(std::min<uint32_t>(effect.durationMs, 0xffff)),
+                                msg->isDefault != 0, effect.brightness);
+    }
+  }
 
   static void MSGPIAPI OnAudioCmd(unsigned int, void* userData, void* msgData)
   {
@@ -962,6 +991,10 @@ bool PluginEngine::Start(std::string& error)
     api.SubscribeMsg(m_bus.HostEndpointId(), m_onAudioCmdId, &Impl::OnAudioCmd, m_impl.get());
     m_subscribedAudioCmd = true;
   }
+  // Before the controller exists: a colorization sends its defaults as it loads.
+  m_impl->host = m_pHost;
+  m_onLightEffectsId = api.GetMsgID(SERUMPI_NAMESPACE, SERUMPI_EVT_ON_LIGHT_EFFECTS);
+  api.SubscribeMsg(m_bus.HostEndpointId(), m_onLightEffectsId, &Impl::OnLightEffects, m_impl.get());
 
   m_impl->controllers = std::make_unique<CtrlItemConsumer<ControllerDef>>(
       &api, m_bus.HostEndpointId(), CTLPI_CONTROLLERS_GET_MSG, CTLPI_CONTROLLERS_ON_CHG_MSG,
@@ -1114,7 +1147,11 @@ void PluginEngine::Stop()
     api.UnsubscribeMsg(m_onAudioCmdId, &Impl::OnAudioCmd, m_impl.get());
     m_subscribedAudioCmd = false;
   }
-  for (unsigned int* id : {&m_getMachineStateId, &m_readMemoryId, &m_saveNvramId, &m_onAudioCmdId})
+  if (m_onLightEffectsId != 0)
+  {
+    api.UnsubscribeMsg(m_onLightEffectsId, &Impl::OnLightEffects, m_impl.get());
+  }
+  for (unsigned int* id : {&m_getMachineStateId, &m_readMemoryId, &m_saveNvramId, &m_onAudioCmdId, &m_onLightEffectsId})
   {
     if (*id != 0)
     {

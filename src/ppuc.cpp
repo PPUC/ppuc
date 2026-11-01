@@ -6747,6 +6747,14 @@ struct PpucEngineHost final : GameEngineHost
     pDmd->UpdateRGB24Data(pData, static_cast<uint16_t>(width), static_cast<uint16_t>(height));
   }
 
+  void OnLightEffect(int channel, uint8_t mode, uint16_t speed, uint8_t options, const uint32_t* colors,
+                     uint16_t durationMs, bool isDefault, uint8_t brightness) override
+  {
+    pDmd->SetLightEffect(static_cast<uint8_t>(channel), mode, speed, options, colors, durationMs, isDefault, brightness);
+  }
+
+  void OnLightEffectsReset() override { pDmd->ResetLightEffect(); }
+
   void OnSegmentDigit(int digit, int value) override
   {
     if (pMediaPluginHost != nullptr)

@@ -224,6 +224,15 @@ scans `<game>/rules/*.lua` in filename order. `AltColor` is the user-facing DMD
 colorization enable switch. `SerumTimeout` and `SerumSkipFrames` remain
 available for Serum-specific tuning only.
 
+A colorization's speaker lights reach a PPUCDMD on a UART of their own, next to
+the frames on SPI. Name it in the same INI, and never the RS485 bus:
+
+```ini
+[ZeDMD-SPI]
+Enabled = 1
+LightEffectDevice = /dev/ttyAMA5
+```
+
 ### Game Folder Media
 
 PUP packs live under `<game>/pup/pupvideos/<rom>/`. The `pupvideos` directory is

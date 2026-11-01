@@ -130,6 +130,7 @@ class PluginEngine final : public GameEngine
   unsigned int m_readMemoryId = 0;
   unsigned int m_saveNvramId = 0;
   unsigned int m_onAudioCmdId = 0;
+  unsigned int m_onLightEffectsId = 0;
   bool m_subscribedAudioCmd = false;
 
   ScriptObject m_controller;
