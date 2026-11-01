@@ -24,4 +24,6 @@ cp -R third-party/pinmame-nvram-maps ppuc/
 
 ppuc_build_vpinball_media_plugins linux x64
 
+ppuc_build_board_firmware
+
 ppuc_run_host_tests linux x64

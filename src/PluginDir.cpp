@@ -34,3 +34,21 @@ std::string ResolvePluginDir(const char* configured)
   // None exists. Name the first one, so the error says where they belong.
   return candidates.front().string();
 }
+
+std::string ResolveFirmwareDir(const char* configured)
+{
+  if (configured != nullptr && configured[0] != '\0')
+  {
+    return configured;
+  }
+
+  if (const char* basePath = SDL_GetBasePath(); basePath != nullptr && basePath[0] != '\0')
+  {
+    const std::filesystem::path candidate = std::filesystem::path(basePath) / "firmware";
+    if (std::filesystem::is_directory(candidate))
+    {
+      return candidate.string();
+    }
+  }
+  return "";
+}

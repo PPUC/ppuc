@@ -459,8 +459,11 @@ game, so a board under the playfield never has to be unplugged. `ppuc` checks
 the boards at every start, before it configures them, and flashes only when you
 have explicitly allowed it.
 
-**1. Put the images in one folder.** One `.uf2` file per board type, named after
-the type and the version, the way the io-boards releases name them:
+**1. Find the images.** A PPUC build has a `firmware` folder next to `plugins/`,
+with an image for every board type, and `ppuc` uses it by default. Point
+`--firmware-path` at another folder only to flash something else. That folder
+needs one `.uf2` file per board type, named after the type and the version, the
+way the io-boards releases name them:
 
 ```
 firmware/
@@ -474,11 +477,11 @@ image *of its own type*, never another type's, so it is safe to keep the images
 for every board in the same folder. A snapshot build may carry a build id, as in
 `IO_16_8_1-0.3.4+1a2b3c4d.uf2`.
 
-**2. Look before you flash.** Start the machine with the folder but without
-permission to update:
+**2. Look before you flash.** Every start checks, so start the machine as usual,
+without permission to update:
 
 ```
-ppuc --game /path/to/flash --firmware-path /path/to/firmware
+ppuc --game /path/to/flash
 ```
 
 The log says what every board runs and what would happen to it, then the game
@@ -497,8 +500,7 @@ not yet proven on hardware — currently every type except `IO_16_8_1`, the opto
 board among them — also add `--allow-unvalidated-firmware-update`:
 
 ```
-ppuc --game /path/to/flash --firmware-path /path/to/firmware \
-     --allow-firmware-update --allow-unvalidated-firmware-update
+ppuc --game /path/to/flash --allow-firmware-update --allow-unvalidated-firmware-update
 ```
 
 That second flag is a real decision, not a formality. Firmware nobody has run on
@@ -522,20 +524,18 @@ start logs the new versions, finds nothing to update, and plays.
 
 ```ini
 [Runtime]
-FirmwarePath=/home/ppuc/firmware
 AllowFirmwareUpdate=true
 ; only if the opto board or another unproven type needs it
 AllowUnvalidatedFirmwareUpdate=true
 ```
 
-Give `FirmwarePath` as an absolute path: a relative one is read from wherever
-`ppuc` was started, not from the game folder. Keep comments on lines of their
-own here; the INI reader takes everything after `=` as the value.
+If you set `FirmwarePath`, give an absolute path: a relative one is read from
+wherever `ppuc` was started, not from the game folder. Keep comments on lines of
+their own here; the INI reader takes everything after `=` as the value.
 
-`FirmwarePath` on its own is harmless and worth leaving in: it only reports.
-Take the `Allow…` lines out again once the boards are updated, so that dropping
-a new image into the folder does not flash a machine at its next boot without
-anyone deciding to.
+Take the `Allow…` lines out again once the boards are updated. Installing a new
+PPUC build brings new images with it, and with those lines left in it would flash
+the machine at its next boot without anyone deciding to.
 
 **Two further switches**, for development rather than for operators:
 

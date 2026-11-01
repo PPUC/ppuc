@@ -171,9 +171,9 @@ Linux targets), `ENABLE_SANITIZERS`.
 - `src/PPUCProtocolV2.h`: **the** wire format definition.
 - Root-level `*.ino` files are legacy and are not the active firmware.
 
-The firmware is **not** built by `ppuc`'s build graph — only its protocol
-headers are consumed, via `libppuc`. The binary is built and flashed separately
-with `pio run`.
+`ppuc`'s `build.sh` builds the firmware of the pinned revision into
+`ppuc/firmware`, one snapshot image per board type, when `pio` is installed. The
+C++ build only consumes its protocol headers, via `libppuc`.
 
 ### `libsdldmd`
 

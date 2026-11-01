@@ -1074,6 +1074,47 @@ ppuc_stage_doctest() {
    echo "${expected}" > "${marker}"
 }
 
+ppuc_build_board_firmware() {
+   # Builds every board type from the io-boards this build pinned, so what lands
+   # in ppuc/firmware is the firmware this ppuc was built against. Named and
+   # stamped like a CI snapshot: the firmware version does not move between
+   # snapshots, so the build id is what tells two of them apart.
+   local io_boards_dir="${PPUC_SOURCE_ROOT}/external/libppuc/libppuc/external/io-boards/io-boards"
+   local firmware_dir="${PPUC_SOURCE_ROOT}/ppuc/firmware"
+   local sha
+   local build_id
+   local version
+   local board
+
+   if [ "${PPUC_BUILD_FIRMWARE:-1}" = "0" ]; then
+      return 0
+   fi
+   if ! command -v pio >/dev/null 2>&1; then
+      echo "WARNING: PlatformIO (pio) not found, ppuc/firmware will not be built" >&2
+      return 0
+   fi
+
+   if [ -n "${IO_BOARDS_SOURCE_DIR:-}" ]; then
+      sha="$(git -C "${IO_BOARDS_SOURCE_DIR}" rev-parse HEAD)"
+   else
+      sha="$(sed -n 's/^IO_BOARDS_SHA=//p' "${PPUC_SOURCE_ROOT}/external/libppuc/libppuc/platforms/config.sh")"
+   fi
+   build_id="$(printf '%s' "${sha}" | cut -c1-8)"
+   version="$(sed -nE 's/^#define FIRMWARE_VERSION_(MAJOR|MINOR|PATCH) +([0-9]+).*/\2/p' "${io_boards_dir}/src/PPUC.h" | paste -sd. -)"
+
+   mkdir -p "${firmware_dir}"
+   # All of them or the build fails: the update path silently skips a board it
+   # has no image for.
+   for board in $(sed -nE 's/^\[env:([^]]+)\].*/\1/p' "${io_boards_dir}/platformio.ini"); do
+      if [ "${board}" = "native" ]; then
+         continue
+      fi
+      echo "Building firmware for ${board}"
+      (cd "${io_boards_dir}" && PLATFORMIO_BUILD_FLAGS="-DPPUC_BUILD_ID=0x${build_id}UL" pio run -s -e "${board}")
+      cp "${io_boards_dir}/.pio/build/${board}/firmware.uf2" "${firmware_dir}/${board}-${version}+${build_id}.uf2"
+   done
+}
+
 ppuc_parse_build_args() {
    # Shared option parsing for every platforms/*/*/build.sh.
    while [ $# -gt 0 ]; do

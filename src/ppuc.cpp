@@ -6403,7 +6403,8 @@ static struct cag_option options[] = {
     {.identifier = '(',
      .access_name = "firmware-path",
      .value_name = "PATH",
-     .description = "Directory holding board firmware images (<board type>-<version>[+<build id>].uf2)"},
+     .description = "Directory holding board firmware images (<board type>-<version>[+<build id>].uf2), by default "
+                    "the firmware folder next to this executable"},
     {.identifier = '|',
      .access_name = "allow-unvalidated-firmware-update",
      .description = "Update boards whose type has never been validated on hardware (USB flashing is safer)"},
@@ -7819,6 +7820,9 @@ int main(int argc, char** argv)
     fprintf(stderr, "%s\n", speechValidationError.c_str());
     return 1;
   }
+
+  const std::string firmwareDir = ResolveFirmwareDir(opt_firmware_path);
+  opt_firmware_path = firmwareDir.empty() ? nullptr : firmwareDir.c_str();
 
   if (opt_close_coin_door && opt_no_serial)
   {

@@ -126,6 +126,10 @@ jobs:
     # waits for it. It is a short, heavily cached job; the platform builds are
     # the long pole either way.
     needs: [ version, firmware ]
+    env:
+      # The firmware job builds it once for every platform, and for a tag names
+      # it as a release rather than as a snapshot.
+      PPUC_BUILD_FIRMWARE: 0
     strategy:
       fail-fast: false
       matrix:

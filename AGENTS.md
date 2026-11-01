@@ -91,7 +91,8 @@ cmake --build build                                            # incremental C++
 ```
 
 `build.sh` packages the result into `ppuc/`: the three executables, the runtime
-libraries, `pinmame-nvram-maps`, plus the VPX media plugins into `plugins/`.
+libraries, `pinmame-nvram-maps`, the VPX media plugins into `plugins/`, plus the
+board firmware of the pinned io-boards into `firmware/`.
 `build/` holds the raw CMake output. Binaries are linked with
 `@rpath`/`$ORIGIN`, so they only run next to their staged runtime libraries.
 
@@ -110,6 +111,8 @@ Useful environment variables:
 - `BUILD_TYPE=Debug`, `PPUC_VERBOSE=1`
 - `PPUC_BUILD_VPINBALL_MEDIA_PLUGINS=0` to skip the expensive vpinball/FFmpeg
   plugin build
+- `PPUC_BUILD_FIRMWARE=0` to skip building the board firmware into
+  `ppuc/firmware`. It is also skipped, with a warning, when `pio` is not installed
 - `LIBPPUC_SOURCE_DIR=../libppuc` and the other `*_SOURCE_DIR` variables build
   against a local checkout instead of the pinned archive. One variable per
   dependency, as in the rest of the VPX ecosystem; anything not named comes from
