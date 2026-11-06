@@ -19,6 +19,11 @@ The code in this directory and all sub-directories is licenced under GPLv3, exce
 in a file's header or in a sub-directory. Be aware of the fact that your own enhancements of ppuc need to be licenced
 under a compatible licence.
 
+The libraries, plugins, data and board firmware a release package contains are under their own
+licenses. [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) lists each of them with its
+revision, license, copyright notices and license text, and every package ships it beside
+`LICENSE`.
+
 PPUC uses
 * [libppuc](https://github.com/PPUC/libppuc) for host-side IO board communication
 * [libpinmame](https://github.com/vpinball/pinmame) for ROM emulation
