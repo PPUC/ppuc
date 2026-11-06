@@ -1074,6 +1074,33 @@ ppuc_stage_doctest() {
    echo "${expected}" > "${marker}"
 }
 
+ppuc_stage_license_notices() {
+   # Every package carries PPUC's license and the notices of everything else it
+   # ships: the GPL and the licenses of the bundled libraries require their
+   # texts to travel with the binaries. The Pinball Memory Maps are a database
+   # under the ODbL, which asks for its license to go with every copy, so their
+   # two license files go into pinmame-nvram-maps/ beside the maps.
+   #
+   # Copied from external/ rather than staged into third-party/ by external.sh,
+   # because CI keys its dependency cache on external.sh and a cached tree
+   # already holds the unpacked maps repository.
+   local package_dir="${PPUC_SOURCE_ROOT}/ppuc"
+   local maps_source="${PPUC_SOURCE_ROOT}/external/pinmame-nvram-maps/pinmame-nvram-maps"
+   local file
+
+   cp "${PPUC_SOURCE_ROOT}/LICENSE" "${PPUC_SOURCE_ROOT}/THIRD-PARTY-NOTICES.md" "${package_dir}/"
+
+   if [ -d "${package_dir}/pinmame-nvram-maps" ]; then
+      for file in LICENSE-ODbL.md LICENSE-DbCL; do
+         if [ ! -f "${maps_source}/${file}" ]; then
+            echo "Missing ${maps_source}/${file}; the maps cannot ship without their license." >&2
+            return 1
+         fi
+         cp "${maps_source}/${file}" "${package_dir}/pinmame-nvram-maps/"
+      done
+   fi
+}
+
 ppuc_build_board_firmware() {
    # Builds every board type from the io-boards this build pinned, so what lands
    # in ppuc/firmware is the firmware this ppuc was built against. Named and

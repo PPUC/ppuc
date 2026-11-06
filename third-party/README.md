@@ -173,3 +173,9 @@
 
 - Upstream: https://github.com/USCiLab/cereal
 - License: BSD 3-Clause License
+
+## Notices
+
+`THIRD-PARTY-NOTICES.md` in the repository root lists every component a release package
+contains, with the revision, the license, the copyright notices and the license texts. Every
+package ships it beside `LICENSE`.

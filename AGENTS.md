@@ -92,7 +92,10 @@ cmake --build build                                            # incremental C++
 
 `build.sh` packages the result into `ppuc/`: the three executables, the runtime
 libraries, `pinmame-nvram-maps`, the VPX media plugins into `plugins/`, plus the
-board firmware of the pinned io-boards into `firmware/`.
+board firmware of the pinned io-boards into `firmware/`, with `LICENSE` and
+`THIRD-PARTY-NOTICES.md` beside them.
+A change that ships a new library, plugin or data set, or moves a pinned
+revision, updates `THIRD-PARTY-NOTICES.md` and `third-party/README.md` with it.
 `build/` holds the raw CMake output. Binaries are linked with
 `@rpath`/`$ORIGIN`, so they only run next to their staged runtime libraries.
 

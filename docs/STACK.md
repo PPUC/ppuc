@@ -421,7 +421,9 @@ only a CMake warning — check the configure log when a feature seems "missing a
 runtime".
 
 `build.sh` packages into `ppuc/ppuc/`: the three executables, all runtime
-libraries, `pinmame-nvram-maps`, and the VPX media plugins into `ppuc/plugins/`.
+libraries, `pinmame-nvram-maps`, the VPX media plugins into `ppuc/plugins/`, and
+`LICENSE` with `THIRD-PARTY-NOTICES.md`, which lists the license of every
+component a package contains.
 `ppuc/build/` holds the raw CMake output. Binaries link against
 `@rpath`/`$ORIGIN`, so they only run next to their staged runtime libraries.
 

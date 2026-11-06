@@ -25,5 +25,6 @@ cp build/${BUILD_TYPE}/ppuc-menu ppuc/
 cp build/${BUILD_TYPE}/ppuc-backbox ppuc/
 cp -P third-party/runtime-libs/win-x86/*.dll ppuc/
 cp -R third-party/pinmame-nvram-maps ppuc/
+ppuc_stage_license_notices
 
 ppuc_run_host_tests win x86

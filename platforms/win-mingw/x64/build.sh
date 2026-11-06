@@ -25,6 +25,7 @@ cp build/ppuc-menu ppuc/
 cp build/ppuc-backbox ppuc/
 cp -P third-party/runtime-libs/win-mingw-x64/*.dll ppuc/
 cp -R third-party/pinmame-nvram-maps ppuc/
+ppuc_stage_license_notices
 
 ppuc_build_vpinball_media_plugins windows-mingw x64
 
