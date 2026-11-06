@@ -1074,6 +1074,20 @@ ppuc_stage_doctest() {
    echo "${expected}" > "${marker}"
 }
 
+ppuc_stage_espeak_data() {
+   # eSpeak NG reads its voices and dictionaries from espeak-ng-data at run time;
+   # the library alone does not speak. ESpeakNgSpeechService looks for the folder
+   # beside the executables first. The data is part of eSpeak NG and under its
+   # GPL-3.0-or-later, as THIRD-PARTY-NOTICES.md says. Platforms without eSpeak NG
+   # (Windows) stage no data, and nothing is copied.
+   local runtime_dir="${PPUC_SOURCE_ROOT}/third-party/runtime-libs/$1"
+   local package_dir="${PPUC_SOURCE_ROOT}/ppuc"
+
+   if [ -d "${runtime_dir}/espeak-ng-data" ]; then
+      cp -R "${runtime_dir}/espeak-ng-data" "${package_dir}/"
+   fi
+}
+
 ppuc_stage_license_notices() {
    # Every package carries PPUC's license and the notices of everything else it
    # ships: the GPL and the licenses of the bundled libraries require their

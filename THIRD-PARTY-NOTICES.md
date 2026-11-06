@@ -43,7 +43,7 @@ source of PPUC itself is https://github.com/PPUC/ppuc at the commit a release is
 | libvpxhost | 8236ca46 | GPL-3.0 | compiled into `ppuc-pinmame` |
 | mINI | as vendored by vpinball f87cba08 | MIT | compiled into `ppuc-pinmame` and the plugins |
 | flite | 6c9f20dc | BSD-style (flite) | compiled into `ppuc-pinmame` (macOS, Linux) |
-| eSpeak NG | 1.52.0 | GPL-3.0-or-later | `libespeak-ng` (macOS, Linux) |
+| eSpeak NG | 1.52.0 | GPL-3.0-or-later | `libespeak-ng`, `espeak-ng-data/` (macOS, Linux) |
 | libppuc | 216837b4 | GPL-3.0 | `libppuc` / `ppuc64.dll` |
 | yaml-cpp | 56e3bb55 | MIT | `libyaml-cpp` |
 | libserialport | 21b3dfe5 | LGPL-3.0-or-later | `libserialport` (shared) |
@@ -389,7 +389,8 @@ lang/cmu_grapheme_lex/grapheme_unitran_tables.c
   below).
 - Copyright: Copyright (C) 2005 to 2013 by Jonathan Duddington, Copyright (C) 2013-2017
   Reece H. Dunn, and the other eSpeak NG authors
-- Use: shared library `libespeak-ng` on macOS and Linux. The Windows packages have no eSpeak NG.
+- Use: shared library `libespeak-ng` and its voices and dictionaries in `espeak-ng-data/`, on
+  macOS and Linux. The Windows packages have no eSpeak NG.
 
 ```text
 Unicode Data Files include all data files under the directories

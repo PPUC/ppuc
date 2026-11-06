@@ -21,6 +21,7 @@ cp build/ppuc-menu ppuc/
 cp build/ppuc-backbox ppuc/
 cp -P third-party/runtime-libs/linux-aarch64/*.so* ppuc/
 cp -R third-party/pinmame-nvram-maps ppuc/
+ppuc_stage_espeak_data linux-aarch64
 ppuc_stage_license_notices
 
 ppuc_build_vpinball_media_plugins linux aarch64
