@@ -152,7 +152,7 @@ if [ "${SDL3_IMAGE_EXPECTED_SHA}" != "${SDL3_IMAGE_FOUND_SHA}" ]; then
    cd ..
 fi
 
-SDL3_MIXER_EXPECTED_SHA="${SDL_MIXER_SHA}-${LIBSDLDMD_SHA}-mp3only-v1-macos${MACOSX_DEPLOYMENT_TARGET}"
+SDL3_MIXER_EXPECTED_SHA="${SDL_MIXER_SHA}-${LIBSDLDMD_SHA}-mp3only-v2-macos${MACOSX_DEPLOYMENT_TARGET}"
 SDL3_MIXER_FOUND_SHA="$([ -f SDL3_mixer/cache.txt ] && cat SDL3_mixer/cache.txt || echo "")"
 
 if [ "${SDL3_MIXER_EXPECTED_SHA}" != "${SDL3_MIXER_FOUND_SHA}" ]; then
@@ -180,6 +180,7 @@ if [ "${SDL3_MIXER_EXPECTED_SHA}" != "${SDL3_MIXER_FOUND_SHA}" ]; then
       -DSDLMIXER_VORBIS_VORBISFILE=OFF \
       -DSDLMIXER_VORBIS_TREMOR=OFF \
       -DSDLMIXER_WAVPACK=OFF \
+      -DSDLMIXER_MIDI=OFF \
       -DSDL3_DIR=../../libsdldmd/libsdldmd/external/SDL/build \
       -DCMAKE_OSX_ARCHITECTURES=arm64 \
       -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \

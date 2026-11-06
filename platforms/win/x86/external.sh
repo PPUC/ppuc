@@ -105,7 +105,7 @@ if [ "${SDL3_IMAGE_EXPECTED_SHA}" != "${SDL3_IMAGE_FOUND_SHA}" ]; then
    cd ..
 fi
 
-SDL3_MIXER_EXPECTED_SHA="${SDL_MIXER_SHA}-${LIBSDLDMD_SHA}-mp3only-v1"
+SDL3_MIXER_EXPECTED_SHA="${SDL_MIXER_SHA}-${LIBSDLDMD_SHA}-mp3only-v2"
 SDL3_MIXER_FOUND_SHA="$([ -f SDL3_mixer/cache.txt ] && cat SDL3_mixer/cache.txt || echo "")"
 
 if [ "${SDL3_MIXER_EXPECTED_SHA}" != "${SDL3_MIXER_FOUND_SHA}" ]; then
@@ -135,6 +135,7 @@ if [ "${SDL3_MIXER_EXPECTED_SHA}" != "${SDL3_MIXER_FOUND_SHA}" ]; then
       -DSDLMIXER_VORBIS_VORBISFILE=OFF \
       -DSDLMIXER_VORBIS_TREMOR=OFF \
       -DSDLMIXER_WAVPACK=OFF \
+      -DSDLMIXER_MIDI=OFF \
       -DSDL3_DIR=../../libsdldmd/libsdldmd/external/SDL/build \
       -B build
    cmake --build build --config ${BUILD_TYPE}
