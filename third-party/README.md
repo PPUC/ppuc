@@ -23,8 +23,9 @@
 
 ## libserum
 
-- Upstream: https://github.com/zesinger/libserum
-- License: GPL-2.0 license
+- Upstream: https://github.com/PPUC/libserum
+- Original: https://github.com/zesinger/libserum
+- License: GPL-2.0-or-later
 
 ## libpupdmd
 
