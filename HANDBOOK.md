@@ -93,6 +93,7 @@ SlideFadeMs=350         ; fade between slides
 NoSerial=false          ; run without boards, for testing
 NoSound=false
 NoTimeFence=false       ; true lets PinMAME run a whole frame at a time
+SwitchMinHoldMs=10      ; shortest switch closure the ROM is shown; 0 is off
 Debug=false
 BallTroughSwitch=0      ; 0 is off; see the safety net below
 BallTroughGraceMs=5000  ; how long a solid closure is tolerated first
@@ -112,6 +113,16 @@ a millisecond at a time, which is what lets the ROM see a ball that only grazes
 a standup target and fire a diverter in time for a fast ramp shot. Set to `true`
 (or `--no-time-fence`), PinMAME runs about 16 ms of game at once and then waits.
 It is there to compare against if something looks different, not to be left on.
+
+**`SwitchMinHoldMs`** is the shortest time the ROM is shown a switch in any
+state. A ball that only grazes a standup target closes it for a few
+milliseconds; the ROM wants to read a switch several times before it believes
+it, and would miss many of those hits. With this set, the hit reaches the ROM at
+once and the switch is reported open again no sooner than this many
+milliseconds later. 10 is right for WPC. A different generation may want another
+value: if grazing hits still do not count, raise it a few milliseconds at a time.
+Do not go above half the time a fast spinner takes for one turn, or the ROM
+starts counting fewer turns than it spun. 0 switches it off.
 
 Volumes are percentages, 100 meaning unchanged. They are **levels, not
 balance**: turn a loud source down rather than a quiet one up, because a source

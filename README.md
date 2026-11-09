@@ -168,6 +168,16 @@ Dedicated command-line options override values from the game folder and INI.
     * re-read all IO board switches after this many milliseconds without non-button switch updates
     * default: `15000`
     * always active; the value must be greater than zero
+* --switch-min-hold-ms VALUE
+    * keep every switch state sent to the ROM for at least this many milliseconds before the next change of that switch follows
+    * the first edge is never delayed; only a reversal that comes back sooner is held, so a glancing hit on a standup target lasts long enough for the ROM to accept it
+    * keep it below half the period of the fastest switch (a spinner), or its turns merge
+    * default: `10`, sized for WPC; `0` turns it off; the `script` engine uses `0` unless the option is given
+    * optional
+* --no-time-fence
+    * let PinMAME run one video frame (~16 ms) at a time instead of advancing in step with the host every millisecond
+    * for comparison only: in frame steps the ROM misses short switch closures and reacts late
+    * optional
 * --ball-search
     * enable host-side ball search for coils marked `ballSearch: true` in `io-boards.yaml`
     * optional and disabled by default because newer ROMs often implement their own ball search

@@ -49,6 +49,7 @@
 #endif
 #include "AttractSlides.h"
 #include "BallTroughWatch.h"
+#include "SwitchHold.h"
 #include "LedStringWalk.h"
 #include "LedStringWalkYaml.h"
 #include "AudioLanes.h"
@@ -177,6 +178,17 @@ private:
   size_t m_phaseCount = 0;
 };
 constexpr uint32_t kDefaultSwitchRefreshIdleMs = 15000;
+// How long a switch state sent to the ROM stays before the next change of that
+// switch follows. Sized for WPC: its ROM accepts a state only after reading it
+// on several matrix scans in a row, and a bus poll every 4 ms can deliver a
+// glancing hit shorter than that.
+//
+// Measured on Dirty Harry (dh_lx2), 20 hits of 3 ms on a standup target during
+// a game, counted from the score: no hold 10-12 of 20, a 4 ms hold 19, 6 ms and
+// more all 20, and 10 ms still all 20 for 1 ms hits. 10 ms is twice the
+// threshold and still lets a spinner turn 50 times a second. Other generations
+// scan at their own rate; a game's ppuc.ini sets its own value.
+constexpr uint32_t kDefaultSwitchMinHoldMs = 10;
 // Exit status after flashing boards: they are rebooting into the new firmware
 // and ppuc-pinmame has to be started again to configure them.
 // The launcher script treats this as "start me again", without reporting it as
@@ -5056,6 +5068,33 @@ static void ServiceNvramSave(GameEngine* pEngine)
   pEngine->SaveNvram(kNvramSaveIdleMs);
 }
 
+// Every switch state the ROM engine is told about goes through here, so that a
+// state stays long enough for the ROM to accept it. See SwitchHold.h.
+//
+// All of them: the boards' own changes, those the rules inject, and the trough
+// safety net's re-presented edge. A path that went around it would leave the
+// hold remembering a state the engine no longer has.
+SwitchHold g_switchHold;
+
+static void SendSwitchToEngine(GameEngine* pEngine, int number, uint8_t state)
+{
+  if (pEngine == nullptr)
+  {
+    return;
+  }
+  g_switchHold.Submit(number, state, SDL_GetTicks(),
+                      [pEngine](int sw, uint8_t value) { pEngine->SendSwitch(sw, value); });
+}
+
+static void ServiceSwitchHold(GameEngine* pEngine)
+{
+  if (pEngine == nullptr)
+  {
+    return;
+  }
+  g_switchHold.Service(SDL_GetTicks(), [pEngine](int sw, uint8_t value) { pEngine->SendSwitch(sw, value); });
+}
+
 static void ServiceBallTroughWatch(GameEngine* pEngine)
 {
     if (opt_ball_trough_switch == 0 || pEngine == nullptr || !pEngine->IsReady())
@@ -5072,10 +5111,10 @@ static void ServiceBallTroughWatch(GameEngine* pEngine)
             printf("Ball trough: switch %d has been closed for %ums during a game; giving the ROM a fresh edge\n",
                    opt_ball_trough_switch, static_cast<unsigned>(opt_ball_trough_grace_ms));
             fflush(stdout);
-            pEngine->SendSwitch(opt_ball_trough_switch, 0);
+            SendSwitchToEngine(pEngine, opt_ball_trough_switch, 0);
             break;
         case BallTroughWatch::Action::SendClose:
-            pEngine->SendSwitch(opt_ball_trough_switch, 1);
+            SendSwitchToEngine(pEngine, opt_ball_trough_switch, 1);
             break;
         case BallTroughWatch::Action::None:
             break;
@@ -6428,6 +6467,10 @@ static struct cag_option options[] = {
      .access_name = "switch-reply-delay-us",
      .value_name = "VALUE",
      .description = "Per-board switch reply delay in microseconds"},
+    {.identifier = '\x02',
+     .access_name = "switch-min-hold-ms",
+     .value_name = "VALUE",
+     .description = "Keep each switch state sent to the ROM for at least this many ms, 0 is off (default 10, suits WPC)"},
     {.identifier = 'g',
      .access_name = "switch-refresh-idle-ms",
      .value_name = "VALUE",
@@ -7022,6 +7065,8 @@ int main(int argc, char** argv)
   uint32_t opt_switch_reply_delay_us = 0;
   const char* opt_switch_refresh_idle_ms_arg = NULL;
   uint32_t opt_switch_refresh_idle_ms = kDefaultSwitchRefreshIdleMs;
+  const char* opt_switch_min_hold_ms_arg = NULL;
+  uint32_t opt_switch_min_hold_ms = kDefaultSwitchMinHoldMs;
   const char* opt_output_frame_interval_ms_arg = NULL;
   uint32_t opt_output_frame_interval_ms = kDefaultOutputFrameIntervalMs;
   bool opt_ball_search = false;
@@ -7320,6 +7365,8 @@ int main(int argc, char** argv)
           opt_switch_reply_delay_us_arg = DuplicateOptionalIniString(value);
         else if (key == "SwitchRefreshIdleMs")
           opt_switch_refresh_idle_ms_arg = DuplicateOptionalIniString(value);
+        else if (key == "SwitchMinHoldMs")
+          opt_switch_min_hold_ms_arg = DuplicateOptionalIniString(value);
         else if (key == "OutputFrameIntervalMs")
           opt_output_frame_interval_ms_arg = DuplicateOptionalIniString(value);
         else if (key == "BallSearch")
@@ -7624,6 +7671,9 @@ int main(int argc, char** argv)
       case 'g':
         opt_switch_refresh_idle_ms_arg = cag_option_get_value(&cag_context);
         break;
+      case '\x02':
+        opt_switch_min_hold_ms_arg = cag_option_get_value(&cag_context);
+        break;
       case '%':
         opt_output_frame_interval_ms_arg = cag_option_get_value(&cag_context);
         break;
@@ -7789,6 +7839,11 @@ int main(int argc, char** argv)
     fprintf(stderr, "Invalid value for --switch-reply-delay-us: %s\n", opt_switch_reply_delay_us_arg);
     return 1;
   }
+  if (opt_switch_min_hold_ms_arg && !ParseUint32Strict(opt_switch_min_hold_ms_arg, &opt_switch_min_hold_ms))
+  {
+    fprintf(stderr, "Invalid value for --switch-min-hold-ms: %s\n", opt_switch_min_hold_ms_arg);
+    return 1;
+  }
   if (opt_switch_refresh_idle_ms_arg &&
       !ParseUint32Strict(opt_switch_refresh_idle_ms_arg, &opt_switch_refresh_idle_ms))
   {
@@ -7855,6 +7910,9 @@ int main(int argc, char** argv)
   }
 
   const bool useScriptEngine = opt_engine != nullptr && strcmp(opt_engine, "script") == 0;
+  // The ROM-less engine reads switches as they come, with no matrix scan to
+  // satisfy, so it gets no hold unless one is asked for.
+  g_switchHold.SetMinHoldMs((useScriptEngine && opt_switch_min_hold_ms_arg == NULL) ? 0 : opt_switch_min_hold_ms);
   if (!useScriptEngine && (opt_engine == nullptr || strcmp(opt_engine, "pinmame") != 0))
   {
     printf("Unknown engine '%s'. Valid values are 'pinmame' and 'script'.\n", opt_engine ? opt_engine : "(null)");
@@ -9037,7 +9095,8 @@ int main(int argc, char** argv)
   }
 
   // Rules-injected switches go to whichever engine is running.
-  g_interceptorOutputs.sendSwitch = [&pEngine](int number, uint8_t state) { pEngine->SendSwitch(number, state); };
+  g_interceptorOutputs.sendSwitch = [&pEngine](int number, uint8_t state)
+  { SendSwitchToEngine(pEngine.get(), number, state); };
   // What lets a service test freeze the game and give it back afterwards.
   g_pauseEngine = [&pEngine](bool paused) { return pEngine && pEngine->SetPaused(paused); };
   if (pPpuc != nullptr)
@@ -9274,7 +9333,7 @@ int main(int argc, char** argv)
         if (assistDecision.forwardToEngine && switchProcess.forwardToCpu &&
             (switchState->number < 200 || switchState->number > 241))
         {
-          pEngine->SendSwitch(switchState->number, newSwitchState);
+          SendSwitchToEngine(pEngine.get(), switchState->number, newSwitchState);
         }
 
         if (opt_debug || opt_debug_switches)
@@ -9301,6 +9360,9 @@ int main(int argc, char** argv)
       // own startup work (identity, tracking-map load) that must proceed while
       // the host is still waiting for it to come up.
       pEngine->Update();
+      // Before anything below can submit a switch: a reversal that has waited
+      // its hold time goes out ahead of newer changes.
+      ServiceSwitchHold(pEngine.get());
       // The DMD is sampled in here, which means a plugin's GetRenderFrame is
       // called from this loop -- the first place to look when it stalls.
       stallWatch.Phase("engine");
@@ -9629,12 +9691,12 @@ int main(int argc, char** argv)
               case 53:  // 5
                 // Coin Right on Williams Flash
                 NoteMachineActivity();
-                pEngine->SendSwitch(4, 1);
+                SendSwitchToEngine(pEngine.get(), 4, 1);
                 break;
               case 13:  // Enter
                 // Game Start on Williams Flash
                 NoteMachineActivity();
-                pEngine->SendSwitch(3, 1);
+                SendSwitchToEngine(pEngine.get(), 3, 1);
                 break;
             }
             break;
