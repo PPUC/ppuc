@@ -59,6 +59,11 @@ class PluginEngine final : public GameEngine
     bool debugSoundCommands = false;
     int coilPollHz = 1000;
     int outputPollHz = 120;
+    // How far ahead of the wall clock the emulation may run, in microseconds.
+    // The poll thread moves PinMAME's time fence forward on every tick, so the
+    // emulated CPU advances in steps of one tick instead of one video frame.
+    // 0 leaves the emulation to its own per-frame throttle.
+    int timeFenceLeadUs = 1000;
   };
 
   PluginEngine(PluginBus& bus, Options options);
@@ -206,6 +211,12 @@ class PluginEngine final : public GameEngine
   std::atomic<unsigned> m_gateActive{0};
   std::atomic<bool> m_stopRequested{false};
   std::thread m_pollThread;
+  // Decided once in Start(): the option is on and the controller has the
+  // TimeFence property. Read by the poll thread only after it is spawned.
+  bool m_timeFenceEnabled = false;
+  // Holds the time fence still while the emulation is paused, so it does not
+  // come back with a backlog to run through at full speed.
+  std::atomic<bool> m_paused{false};
 
   std::atomic<int> m_runState{0};
   mutable bool m_identityKnown = false;

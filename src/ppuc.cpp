@@ -423,6 +423,7 @@ int opt_altsound_mode = 0;
 int opt_serum_resolution = 0;
 bool opt_no_serial = false;
 bool opt_no_sound = false;
+bool opt_no_time_fence = false;
 // "pinmame" runs an original ROM under libpinmame; "script" runs the ROM-less
 // game core. Deliberately explicit rather than inferred from whether a ROM zip
 // happens to exist: a machine with no console that silently picked the wrong
@@ -6254,6 +6255,10 @@ static struct cag_option options[] = {
      .value_name = NULL,
      .description = "No serial communication to controllers (optional)"},
     {.identifier = 'M', .access_name = "no-sound", .value_name = NULL, .description = "Turn off sound (optional)"},
+    {.identifier = '\x01',
+     .access_name = "no-time-fence",
+     .value_name = NULL,
+     .description = "Let PinMAME run one video frame at a time instead of in step with the host (optional)"},
     {.identifier = 't',
      .access_name = "engine",
      .value_name = "VALUE",
@@ -7243,6 +7248,8 @@ int main(int argc, char** argv)
           opt_no_display = ParseIniBool(value);
         else if (key == "NoSound")
           opt_no_sound = ParseIniBool(value);
+        else if (key == "NoTimeFence")
+          opt_no_time_fence = ParseIniBool(value);
         else if (key == "Debug")
           opt_debug = ParseIniBool(value);
         else if (key == "DebugErrors")
@@ -7494,6 +7501,9 @@ int main(int argc, char** argv)
       }
       case 'M':
         opt_no_sound = true;
+        break;
+      case '\x01':
+        opt_no_time_fence = true;
         break;
       case 'W':
         opt_speech = true;
@@ -8999,6 +9009,10 @@ int main(int argc, char** argv)
     engineOptions.gameOnSolenoid = pPpuc->GetGameOnSolenoid();
     engineOptions.romSpeedCoils = pPpuc->GetRomSpeedCoils();
     engineOptions.noSound = opt_no_sound;
+    if (opt_no_time_fence)
+    {
+      engineOptions.timeFenceLeadUs = 0;
+    }
     engineOptions.debug = opt_debug;
     engineOptions.debugCoils = opt_debug_coils;
     engineOptions.debugSegments = opt_debug_segments;

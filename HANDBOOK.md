@@ -92,6 +92,7 @@ SlideFadeMs=350         ; fade between slides
 [Runtime]
 NoSerial=false          ; run without boards, for testing
 NoSound=false
+NoTimeFence=false       ; true lets PinMAME run a whole frame at a time
 Debug=false
 BallTroughSwitch=0      ; 0 is off; see the safety net below
 BallTroughGraceMs=5000  ; how long a solid closure is tolerated first
@@ -105,6 +106,12 @@ hand. With this set, a closure that stays solid for `BallTroughGraceMs` while a
 game is in play is sent to the ROM again as an open followed by a close, giving
 it a fresh edge to notice. It does nothing in attract mode, where a ball resting
 in the trough is exactly where it belongs.
+
+**`NoTimeFence`** stays `false`. PinMAME then advances in step with the machine,
+a millisecond at a time, which is what lets the ROM see a ball that only grazes
+a standup target and fire a diverter in time for a fast ramp shot. Set to `true`
+(or `--no-time-fence`), PinMAME runs about 16 ms of game at once and then waits.
+It is there to compare against if something looks different, not to be left on.
 
 Volumes are percentages, 100 meaning unchanged. They are **levels, not
 balance**: turn a loud source down rather than a quiet one up, because a source
