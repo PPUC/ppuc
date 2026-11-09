@@ -229,14 +229,9 @@ scans `<game>/rules/*.lua` in filename order. `AltColor` is the user-facing DMD
 colorization enable switch. `SerumTimeout` and `SerumSkipFrames` remain
 available for Serum-specific tuning only.
 
-A colorization's speaker lights reach a PPUCDMD on a UART of their own, next to
-the frames on SPI. Name it in the same INI, and never the RS485 bus:
-
-```ini
-[ZeDMD-SPI]
-Enabled = 1
-LightEffectDevice = /dev/ttyAMA5
-```
+A colorization's speaker lights reach a PPUCDMD with the frames, as a trailer
+of the SPI transfer, so they need no setting of their own. Without ZeDMD-SPI
+they are not sent.
 
 ### Game Folder Media
 

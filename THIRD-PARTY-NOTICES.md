@@ -40,39 +40,39 @@ source of PPUC itself is https://github.com/PPUC/ppuc at the commit a release is
 | Component | Revision | License | Shipped as |
 |---|---|---|---|
 | Lua | 5.5.1 | MIT | compiled into `ppuc-pinmame` |
-| libvpxhost | 8236ca46 | GPL-3.0 | compiled into `ppuc-pinmame` |
-| mINI | as vendored by vpinball f87cba08 | MIT | compiled into `ppuc-pinmame` and the plugins |
+| libvpxhost | 1cddb84b | GPL-3.0 | compiled into `ppuc-pinmame` |
+| mINI | as vendored by vpinball 3aa270ba | MIT | compiled into `ppuc-pinmame` and the plugins |
 | flite | 6c9f20dc | BSD-style (flite) | compiled into `ppuc-pinmame` (macOS, Linux) |
 | eSpeak NG | 1.52.0 | GPL-3.0-or-later | `libespeak-ng`, `espeak-ng-data/` (macOS, Linux) |
-| libppuc | 216837b4 | GPL-3.0 | `libppuc` / `ppuc64.dll` |
+| libppuc | a918cc99 | GPL-3.0 | `libppuc` / `ppuc64.dll` |
 | yaml-cpp | 56e3bb55 | MIT | `libyaml-cpp` |
 | libserialport | 21b3dfe5 | LGPL-3.0-or-later | `libserialport` (shared) |
-| SDL3 | 829a65d7 | Zlib | `libSDL3` / `SDL364.dll` |
+| SDL3 | f00dc919 | Zlib | `libSDL3` / `SDL364.dll` |
 | SDL3_image | f661fa1a | Zlib | `libSDL3_image` / `SDL3_image64.dll` |
 | SDL3_mixer | 72a81869 | Zlib | `libSDL3_mixer` / `SDL3_mixer64.dll` |
 | SDL3_ttf | a1ce3670 | Zlib | `libSDL3_ttf` / `SDL3_ttf64.dll` |
 | FreeType | as vendored by SDL3_ttf | FTL OR GPL-2.0-or-later | compiled into `libSDL3_ttf` |
 | HarfBuzz | as vendored by SDL3_ttf | MIT-Modern-Variant ("Old MIT") | compiled into `libSDL3_ttf` |
 | PlutoSVG, PlutoVG | as vendored by SDL3_ttf | MIT | compiled into `libSDL3_ttf` |
-| libsdldmd | ec3b523d | GPL-3.0 | `libsdldmd` |
+| libsdldmd | e148f611 | GPL-3.0 | `libsdldmd` |
 | xBRZ | as vendored by libsdldmd | GPL-3.0 with exception | compiled into `libsdldmd` |
-| libdmdutil | a391a1e1 | GPL-3.0-or-later | `libdmdutil` |
+| libdmdutil | a6bfd2ff | GPL-3.0-or-later | `libdmdutil` |
 | ini-cpp | as vendored by libdmdutil | BSD-3-Clause | compiled into `libdmdutil` |
 | komihash | as vendored | MIT | compiled into libdmdutil, libzedmd, libpupdmd |
 | miniz | 3.0.0, as vendored | MIT | compiled into libdmdutil, libzedmd, libserum |
-| libzedmd | c09a71c9 | GPL-3.0 | `libzedmd` |
+| libzedmd | c8222e5c | GPL-3.0 | `libzedmd` |
 | cargs | 0698c3f9 | MIT | `libcargs` |
 | sockpp | e6c4688a | BSD-3-Clause | `libsockpp` |
-| libframeutil | 711ab21d, 28f2bae0 | GPL-3.0 | header compiled into libzedmd, libserum, libvni |
-| libserum | d936ba7b | GPL-2.0-or-later | `libserum` |
+| libframeutil | aa2a26dc, 711ab21d, 28f2bae0 | GPL-3.0 | header compiled into libzedmd, libserum, libvni |
+| libserum | a7562bc6 | GPL-2.0-or-later | `libserum` |
 | LZ4 | as vendored by libserum | BSD-2-Clause | compiled into `libserum` |
 | cereal | as vendored by libserum | BSD-3-Clause | compiled into `libserum` |
-| libvni | eb910403 | GPL-2.0 | `libvni` |
+| libvni | c878f7db | GPL-2.0 | `libvni` |
 | libpupdmd | 64f98eab | GPL-3.0 | `libpupdmd` |
 | libusb | 87a55632 | LGPL-2.1-or-later | `libusb-1.0` (shared) |
-| PinMAME (libpinmame) | cad5b307 | BSD-3-Clause and the PinMAME license | `libpinmame` / `pinmame64.dll` |
-| Pinball Memory Maps | 8186fc1d | ODbL-1.0, contents DbCL-1.0 | `pinmame-nvram-maps/` |
-| Visual Pinball plugins | f87cba08 | GPL-3.0-or-later and the Visual Pinball license | `plugins/` |
+| PinMAME (libpinmame) | 7b65e891 | BSD-3-Clause and the PinMAME license | `libpinmame` / `pinmame64.dll` |
+| Pinball Memory Maps | eba90209 | ODbL-1.0, contents DbCL-1.0 | `pinmame-nvram-maps/` |
+| Visual Pinball plugins | 3aa270ba | GPL-3.0-or-later and the Visual Pinball license | `plugins/` |
 | tinyxml2, unordered_dense, nlohmann/json, simple-uri-parser, ThreadPool, RSJp-cpp | as vendored by vpinball | Zlib, MIT, MIT, MIT, Zlib, GPL-3.0-or-later | compiled into the plugins |
 | libaltsound | 2f134adb | BSD-3-Clause | `plugins/altsound/` |
 | inipp | as vendored by libaltsound | MIT | compiled into libaltsound |
@@ -80,7 +80,7 @@ source of PPUC itself is https://github.com/PPUC/ppuc at the commit a release is
 | GCC runtime libraries | MSYS2 UCRT64 | GPL-3.0-or-later WITH GCC-exception-3.1 | `libgcc_s_seh-1.dll`, `libstdc++-6.dll` (Windows) |
 | winpthreads | MSYS2 UCRT64 | MIT and BSD-3-Clause | `libwinpthread-1.dll` (Windows) |
 | zlib, bzip2, liblzma, libiconv | MSYS2 UCRT64 | Zlib, bzip2-1.0.6, 0BSD, LGPL-2.1-or-later | `plugins/pup/` (Windows) |
-| io-boards firmware | 300a112e | GPL-3.0 | `firmware/*.uf2` |
+| io-boards firmware | a6b93d12 | GPL-3.0 | `firmware/*.uf2` |
 | arduino-pico, Pico SDK, TinyUSB | 6.3.2, 079c6f39, 86ad6e56 | LGPL-2.1-or-later, BSD-3-Clause, MIT | compiled into the firmware |
 | Adafruit_NeoPixel, WS2812FX, Bounce2, WavePWM | b1dc07a3, 0f992434, 6545c10e, 76b1f1fe | LGPL-3.0, MIT, MIT, CC-BY-4.0 | compiled into the firmware |
 
@@ -123,7 +123,7 @@ the GNU LGPL version 3 follow once, at the end of this file, and the entries ref
 ## libvpxhost
 
 - Upstream: https://github.com/PPUC/libvpxhost
-- Revision: 8236ca462a841b7a1e69d80116b327f7555a2f50
+- Revision: 1cddb84b7585e196de06a749a859e42a09ce94f1
 - License: GPL-3.0 (`LICENSE`)
 - Copyright: the PPUC contributors
 - Use: compiled into `ppuc-pinmame`, together with `MsgPluginManager.cpp` of the Visual Pinball
@@ -453,7 +453,7 @@ written authorization of the copyright holder.
 ## libppuc
 
 - Upstream: https://github.com/PPUC/libppuc
-- Revision: 216837b4e99582e57a8ad7e7521284f729894173
+- Revision: a918cc99ebea8b0e20eb1b52823c60d9f9560e39
 - License: GPL-3.0 (`LICENSE`)
 - Copyright: the PPUC contributors
 - Use: shared library `libppuc` (`ppuc64.dll` on Windows).
@@ -503,7 +503,7 @@ THE SOFTWARE.
 ## SDL3
 
 - Upstream: https://github.com/libsdl-org/SDL
-- Revision: 829a65d769d935c4852f8159e964312c0957260a (vpinball's `SDL_SHA`, built by libsdldmd)
+- Revision: f00dc919ca35b9756316e86c4777392de442f9b2 (vpinball's `SDL_SHA`, built by libsdldmd)
 - License: Zlib
 - Use: shared library `libSDL3` (`SDL364.dll`). SDL contains a few bundled sources under their
   own permissive licenses, named in its source tree.
@@ -768,7 +768,7 @@ SOFTWARE.
 ## libsdldmd and xBRZ
 
 - Upstream: https://github.com/PPUC/libsdldmd
-- Revision: ec3b523d6f4ad594e7024af7c5e01309b2f64fde
+- Revision: e148f611099644b4d95bd84f9c825f23c3309232
 - License: GPL-3.0 (`LICENSE`)
 - Copyright: the PPUC contributors
 - Use: shared library `libsdldmd`. It compiles in xBRZ (https://sourceforge.net/projects/xbrz/),
@@ -795,7 +795,7 @@ SOFTWARE.
 ## libdmdutil and ini-cpp
 
 - Upstream: https://github.com/vpinball/libdmdutil
-- Revision: a391a1e1f10ea35396f666cc7a32c6c2bd8390aa (pinned by libsdldmd)
+- Revision: a6bfd2ff8066ce0b369b0b1a1a2e2069d719c0df (pinned by libsdldmd)
 - License: GPL-3.0-or-later
 - Use: shared library `libdmdutil`. It compiles in ini-cpp (https://github.com/SSARCandy/ini-cpp),
   komihash and miniz.
@@ -917,7 +917,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ## libzedmd
 
 - Upstream: https://github.com/PPUC/libzedmd
-- Revision: c09a71c9d3c6c10f5cca341b491e1db9696945ac (pinned by libdmdutil)
+- Revision: c8222e5cbec8bbf839e50030ca9aca24b9a30e64 (pinned by libdmdutil)
 - License: GPL-3.0 (`LICENSE`)
 - Copyright: the PPUC contributors
 - Use: shared library `libzedmd`.
@@ -995,8 +995,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ## libframeutil
 
 - Upstream: https://github.com/PPUC/libframeutil
-- Revision: 711ab21dcf9ad33d8db8339dfd3b1548bcc34cdb (libzedmd, libserum),
-  28f2bae0dabcbd5c599e6f62211f009e078c1f96 (libvni)
+- Revision: aa2a26dc8e852cff710e398d50cd8574460e6c5f (libzedmd),
+  711ab21dcf9ad33d8db8339dfd3b1548bcc34cdb (libserum), 28f2bae0dabcbd5c599e6f62211f009e078c1f96 (libvni)
 - License: GPL-3.0 (`LICENSE`). Portions derived from DMDExt
   (https://github.com/freezy/dmd-extensions).
 - Use: header-only, compiled into libzedmd, libserum, libvni and libdmdutil.
@@ -1005,7 +1005,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 - Upstream: https://github.com/PPUC/libserum
 - Original: https://github.com/zesinger/libserum
-- Revision: d936ba7b33da61e00a5eaccc29968c8fd90792d4 (pinned by libdmdutil)
+- Revision: a7562bc66f72dcef02fcfbf60e9d52b3a190276e (pinned by libdmdutil)
 - License: GPL-2.0-or-later (`LICENSE.md`, the GPL version 2 at the end of this file)
 - Copyright: the libserum authors
 - Use: shared library `libserum`, loaded by libdmdutil and the Serum plugin. It compiles in miniz,
@@ -1084,7 +1084,7 @@ cereal:
 ## libvni
 
 - Upstream: https://github.com/PPUC/libvni
-- Revision: eb910403834184e1d098bcc310054ac17a00b53d (pinned by libdmdutil)
+- Revision: c878f7dbfd9e9cec33bcbf0e896f1188a01933b8 (pinned by libdmdutil)
 - License: GPL-2.0 (`LICENSE.md`, the GPL version 2 at the end of this file). Its README states
   it keeps the GPLv2 of LibDmd (https://github.com/freezy/dmd-extensions), of whose VNI
   converter it is a conversion.
@@ -1116,9 +1116,9 @@ cereal:
 - Upstream: https://github.com/vpinball/pinmame, built from the forks
   https://github.com/mkalkbrenner/pinmame (macOS, Linux) and https://github.com/vbousquet/pinmame
   (Windows)
-- Revision: cad5b3076c5453a02a66b82a1c9cf45648a2a083. On Windows, `plugins/pinmame/` holds a
+- Revision: 7b65e89165430a5cd7fc6b4bf731808dba852fbc. On Windows, `plugins/pinmame/` holds a
   second `pinmame64.dll` that vpinball's build stages, from https://github.com/vpinball/pinmame
-  at 8950184a4e1852c7bee6933e430f1c7767dfa595.
+  at 08ef874b64e5e3f436cb5d696c06092806e59a06.
 - License: files whose first line is `// license:BSD-3-Clause` are under the BSD-3-Clause license.
   All other files remain under PinMAME's older "old MAME" license, as PinMAME's own `LICENSE`
   states; it restricts selling and commercial use. Bundled sources under their own licenses that
@@ -1334,7 +1334,7 @@ Copyright notice:
 ## Pinball Memory Maps (pinmame-nvram-maps)
 
 - Upstream: https://github.com/tomlogic/pinball-memory-maps (formerly pinmame-nvram-maps)
-- Revision: 8186fc1d27e59d654fb6a8654ade6d9eb9d77498
+- Revision: eba90209c329acaaa129ad8077ef63d8d0c43958
 - License: the database is made available under the Open Data Commons Open Database License
   (ODbL) v1.0, https://opendatacommons.org/licenses/odbl/1-0/. Any rights in individual contents
   of the database are licensed under the Database Contents License (DbCL) v1.0,
@@ -1349,7 +1349,7 @@ https://github.com/tomlogic/pinball-memory-maps.
 ## Visual Pinball plugins
 
 - Upstream: https://github.com/vpinball/vpinball, built from the fork https://github.com/PPUC/vpinball
-- Revision: f87cba08cff98047b8ce3a14a62780de9f51b462
+- Revision: 3aa270ba95aa0755a675423041680b69f4586c96
 - Plugins shipped in `plugins/`: AlphaDMD (`alphadmd`), AltSound (`altsound`), B2S (`b2s`),
   PinMAME (`pinmame`), PinUP Player (`pup`), Serum (`serum`) and VNI (`vni`). The other
   directories `plugins/` may contain are empty.
@@ -2092,7 +2092,7 @@ the io-boards revision libppuc pins, and each is a single statically linked prog
 ### io-boards
 
 - Upstream: https://github.com/PPUC/io-boards
-- Revision: 300a112e334500ac2985d15969b984c06418b1dc (libppuc's `IO_BOARDS_SHA`)
+- Revision: a6b93d128a4c52c4193e5f0cc1c0a9665dea7c48 (libppuc's `IO_BOARDS_SHA`)
 - License: GPL-3.0 (`LICENSE`)
 - Copyright: the PPUC contributors
 
