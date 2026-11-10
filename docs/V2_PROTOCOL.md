@@ -39,7 +39,7 @@ is what tells you.
 |---|---|
 | Physical layer | RS485, half duplex, one differential pair |
 | Transceiver | ADM3483 (slew-rate limited, 250 kbps ceiling) |
-| Baud rate | **115200** (`kBaudRate`) |
+| Baud rate | **250000** (`kBaudRate`), since firmware 0.4.0; 115200 before |
 | Framing | 8N1 |
 | Max boards | **8** (`kMaxBoards`) |
 | Board addressing | 0…7, with `0xFF` (`kNoBoard`) meaning "no specific board" |
@@ -631,7 +631,7 @@ have to form the skippable prefix. The rest keep their configured order. It is
 meant for the board carrying the switches a ROM answers with a coil while the
 ball is still moving: on Dirty Harry the opto board in front of the diverters,
 which board numbering had put last, costing ~12 ms per answer with five switch
-boards at 115200 baud. Mark one board, or very few: each one marked pushes the
+boards at 115200 baud (before the move to 250000). Mark one board, or very few: each one marked pushes the
 others back. `slowSwitches` wins if a board carries both, with a warning.
 `--debug` prints the resulting order as `PPUC: switch chain order: ...`.
 
@@ -714,7 +714,7 @@ driving switch must be released before it fires again.
 | `switchReplyDelayUs` | **0** by default | Wait before asserting DE. Set via `--switch-reply-delay-us` or `SwitchReplyDelayUs` in the INI — **never** in the game YAML. |
 | post-TX settle | `switchReplyDelayUs / 4`, capped 2000 µs | Stalls the board after it has already gone high-Z. |
 | frame read timeout | frame wire time + 25 % + 700 µs | How long `readBytes()` waits for a frame it has started reading. |
-| UART receive buffer | 512 bytes (`Serial1.setFIFOSize`) | ~44 ms of traffic at 115200 baud. Must exceed `kMaxFrameBytes`. |
+| UART receive buffer | 512 bytes (`Serial1.setFIFOSize`) | ~20 ms of traffic at 250000 baud (~44 ms at 115200). Must exceed `kMaxFrameBytes`. |
 
 DE is released when the UART reports the last bit has left the shift register
 (`uart0` BUSY clear), so the line is handed over as soon as the frame is
@@ -741,7 +741,8 @@ chunks and failed at 256 for precisely this reason.
 
 `Serial1.begin()` allocates the core's default 32-byte receive buffer unless
 `setFIFOSize()` is called first. Thirty-two bytes is **2.8 ms** of traffic at
-115200 baud, and it is smaller than a single update chunk.
+115200 baud (1.3 ms at today's 250000), and it is smaller than a single update
+chunk.
 
 When a board's core is blocked for longer than the buffer holds, incoming bytes
 are dropped *before the parser sees them*. There is no CRC failure and no
@@ -914,12 +915,16 @@ The general rule this leaves: **anything that reads this port must hold
 `m_portMutex`.** A second reader does not corrupt frames, it steals them, and
 the loss is indistinguishable from a board that never replied.
 
-### Bus is at 46 % of the transceiver's ceiling
+### Bus is at the transceiver's ceiling
 
-115200 baud against the ADM3483's 250 kbps limit. There is real headroom, and
-the no-change reply already keeps the common case small. Raising it is a
-separate question from stability and should not be attempted until the
-outstanding turnaround measurement is done — see `BUS_MEASUREMENT.md`.
+250000 baud since firmware 0.4.0, the ADM3483's rated maximum; it was 115200.
+Taken before the turnaround measurement in `BUS_MEASUREMENT.md`, because
+Dirty Harry's diverters needed the time and no V2 release had gone out yet, so
+no installed board was stranded by it. There is no headroom left above it
+without a different transceiver. What is left to gain is in the fixed
+per-board costs listed in [`TIMINGS.md`](TIMINGS.md), which the baud rate does
+not shrink. A board on earlier firmware cannot be reached at this rate, not even
+to update it over the bus, and is flashed over USB once.
 
 ### Asymmetric device limits
 

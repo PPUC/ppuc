@@ -42,6 +42,8 @@ Companion documents in this directory:
 - [`BUS_MEASUREMENT.md`](BUS_MEASUREMENT.md) — logic-analyzer brief for
   establishing real RS485 cycle timing and what the switch-reply delay
   compensates for.
+- [`TIMINGS.md`](TIMINGS.md) — every hardcoded delay, poll rate and timeout a
+  switch or coil can wait behind, and which of them are worth tuning.
 - [`V2_PROTOCOL.md`](V2_PROTOCOL.md) — reference for the V2 wire protocol:
   framing, frame types, payload layouts, session lifecycle and timing, plus a
   section recording missing features and future work.
@@ -70,7 +72,7 @@ repository root.
   │    AudioOutput ── SDL3_mixer music, flite / espeak-ng speech       │
   │    libppuc ── YAML config, dense bitmap mapping, RS485 v2          │
   └───────────────────────────────┬────────────────────────────────────┘
-                                  │ RS485, 115200 baud, v2 framing
+                                  │ RS485, 250000 baud, v2 framing
                     ┌─────────────┴─────────────┬──────────────┐
                     v                           v              v
               IO board 0                  IO board 1     … up to 8
@@ -268,9 +270,10 @@ PWM outputs, `debounce` + `debounceMode` (`standard` / `fastFlip`),
 
 Authoritative definition: `io-boards/src/PPUCProtocolV2.h`.
 
-- UART on `Serial1`, baud `115200` (`ppuc::v2::kBaudRate`). The transceiver is
-  an ADM3483, slew-rate-limited for noise immunity and capped at **250 kbps** —
-  a permanent hardware ceiling, not a milestone.
+- UART on `Serial1`, baud `250000` (`ppuc::v2::kBaudRate`) since firmware
+  0.4.0, 115200 before. The transceiver is an ADM3483, slew-rate-limited for
+  noise immunity and capped at **250 kbps** — a permanent hardware ceiling, and
+  the bus now runs at it.
 - Sync `0xA5`, 5-byte header (`sync`, `typeAndFlags`, `nextBoard`, `sequence`,
   `epoch`), CCITT-16 CRC over header + payload, big-endian multibyte fields.
 - Frame types: `OutputState 0x01`, `SwitchState 0x02`, `Heartbeat 0x03`,
