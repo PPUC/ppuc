@@ -613,6 +613,28 @@ report them all, so at the default divider that is ~32 ms per transition. That
 is the reason the flag belongs only on boards whose switches are genuinely
 slow. Ring overflow is reported as `kStatusSwitchOverflow`.
 
+### A board that answers first
+
+The ROM sees a board's switches the moment its reply is read, but a coil it
+fires in answer only leaves with the **next** output frame, and that frame is
+sent once the whole chain has answered. Where a board sits in the chain
+therefore decides whether that answer makes the next frame:
+
+- answering **first**, the ROM has the rest of the chain to decide, and its
+  answer usually catches the frame that follows;
+- answering **last**, its report arrives just as the next frame leaves, so the
+  coil always waits one more full pass.
+
+A board marked `firstInChain: true` in the game YAML goes to the front of the
+boards polled every chain, right after any `slowSwitches` boards, which still
+have to form the skippable prefix. The rest keep their configured order. It is
+meant for the board carrying the switches a ROM answers with a coil while the
+ball is still moving: on Dirty Harry the opto board in front of the diverters,
+which board numbering had put last, costing ~12 ms per answer with five switch
+boards at 115200 baud. Mark one board, or very few: each one marked pushes the
+others back. `slowSwitches` wins if a board carries both, with a warning.
+`--debug` prints the resulting order as `PPUC: switch chain order: ...`.
+
 ---
 
 ## 10. Configuration topics
