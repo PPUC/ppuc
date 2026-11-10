@@ -9594,6 +9594,16 @@ int main(int argc, char** argv)
       }
 
 #ifndef PPUC_USE_KMSDMD
+      // The virtual DMD is drawn here, not where its frames arrive. libdmdutil
+      // hands them over on its own thread, and the window's GL context belongs
+      // to this one: drawing there failed silently on the Pi's KMS/DRM backend,
+      // and the boot splash stayed on the screen for the whole game. Returns at
+      // once when no new frame is waiting.
+      if (pVirtualDMD)
+      {
+        pVirtualDMD->Render();
+      }
+
       SDL_Event event;
       // Drained rather than one per pass: a key held down repeats, and a
       // queue that only ever loses one event per iteration turns a menu into

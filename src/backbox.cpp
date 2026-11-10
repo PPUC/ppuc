@@ -486,8 +486,10 @@ int main(int argc, char* argv[])
     SDL_Event event;
 
     // Use SDL_WaitEventTimeout instead of SDL_PollEvent to reduce CPU usage
-    // and ensure we can still process signals
-    if (SDL_WaitEventTimeout(&event, 100))  // Wait up to 100ms for an event
+    // and ensure we can still process signals. With a virtual DMD the wait is
+    // short, because this loop is also what draws it: SDLDMD only collects
+    // frames on libdmdutil's thread and presents them on this one.
+    if (SDL_WaitEventTimeout(&event, pVirtualDMD ? 5 : 100))
     {
       switch (event.type)
       {
@@ -498,7 +500,14 @@ int main(int argc, char* argv[])
       }
     }
 
-    SDL_Delay(10);
+    if (pVirtualDMD)
+    {
+      pVirtualDMD->Render();
+    }
+    else
+    {
+      SDL_Delay(10);
+    }
   }
 
   pServer->Stop();
