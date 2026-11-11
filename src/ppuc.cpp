@@ -7118,6 +7118,14 @@ static void ServicePlayfieldAssist(GameEngine* pEngine)
 
 int main(int argc, char** argv)
 {
+  // Line-buffered even into a pipe. On a cabinet stdout is always one: the
+  // launcher tees it to the console and the log and keeps the last lines to
+  // show after an exit. Fully buffered, the last 4 KB - the lines that say why
+  // ppuc stopped - died with the process whenever it crashed or was killed.
+  // The buffer is the same size either way; what changes is one write per
+  // line, and ppuc prints a few lines a minute unless a --debug flag is on.
+  setvbuf(stdout, nullptr, _IOLBF, BUFSIZ);
+
   // version info
   printf("PPUC Version: %s\n", PPUC_EXECUTABLE_VERSION);
   printf("Commit SHA: %s\n", PPUC_EXECUTABLE_SHA);
