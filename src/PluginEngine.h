@@ -52,6 +52,9 @@ class PluginEngine final : public GameEngine
     uint8_t gameOnSolenoid = 0;
     // Motors whose speed the ROM sets, measured through a mech each.
     std::vector<uint16_t> romSpeedCoils;
+    // Switches the machine reports, so a Fliptronic button input the cabinet
+    // does not wire separately can follow the lower button on its side.
+    std::vector<uint16_t> configuredSwitches;
     bool noSound = false;
     bool debug = false;
     bool debugCoils = false;
@@ -127,6 +130,8 @@ class PluginEngine final : public GameEngine
   void SampleOutputs();
   void PollTrackedState();
   void PollGameOver(const PinmameByteReader& read);
+  bool IsSimulatedByPinmame(int number) const;
+  int MirroredFlipperButton(int number) const;
   void ReportUndecodableTrackedField(const char* what, const PinmameTrackedField& field, const PinmameByteReader& read,
                                      bool& alreadyReported);
 

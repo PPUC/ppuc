@@ -9204,6 +9204,10 @@ int main(int argc, char** argv)
     engineOptions.platform = pPpuc->GetPlatform();
     engineOptions.gameOnSolenoid = pPpuc->GetGameOnSolenoid();
     engineOptions.romSpeedCoils = pPpuc->GetRomSpeedCoils();
+    for (const auto& ppucSwitch : pPpuc->GetSwitches())
+    {
+      engineOptions.configuredSwitches.push_back(ppucSwitch.number);
+    }
     engineOptions.noSound = opt_no_sound;
     if (opt_no_time_fence)
     {

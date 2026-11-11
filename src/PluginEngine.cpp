@@ -32,6 +32,10 @@ uint64_t NowMs()
 }
 
 constexpr int kPlatformWpc = 1;  // PLATFORM_WPC, mirrored to avoid a libppuc include
+// PINMAME_HARDWARE_GEN_WPCFLIPTRON through PINMAME_HARDWARE_GEN_WPC95, mirrored
+// to avoid a libpinmame include: every WPC generation whose flippers the ROM
+// drives through a Fliptronic board.
+constexpr uint64_t kHardwareGenWpcFliptronic = 0x08 | 0x10 | 0x20 | 0x40 | 0x80;
 
 // A ball number is one decimal digit on every pinball machine ever built, so
 // anything above nine is not one.
@@ -1003,8 +1007,59 @@ void PluginEngine::PollChangedGis(std::vector<GameEngineOutputChange>& changes)
   changes.swap(m_giChanges);
 }
 
+// A switch PinMAME writes itself, so anything sent for it is overwritten.
+//
+// On a game whose ROM drives the flippers, PinMAME's core simulates the
+// end-of-stroke switches from the ROM's own flipper solenoids, every frame
+// (core_updateSw, "EOS switches"). The real EOS contacts are on the boards,
+// which use them as stop switches for the power windings; sending them on as
+// well only fought the simulation. The ledger audit then saw PinMAME disagree
+// and wrote them back, dozens of times a game, and between the two the ROM was
+// shown EOS states that matched neither its flippers nor the real ones.
+bool PluginEngine::IsSimulatedByPinmame(int number) const
+{
+  if (!m_identityKnown || (m_identity.hardwareGen & kHardwareGenWpcFliptronic) == 0)
+  {
+    return false;
+  }
+  // F1, F3, F5, F7: lower right, lower left, upper right, upper left EOS.
+  return number == 111 || number == 113 || number == 115 || number == 117;
+}
+
+// The upper flipper button input a Fliptronic board has whether or not the
+// playfield has that flipper, or 0.
+//
+// A Fliptronic board reads four buttons: F2/F4 for the lower flippers and F6/F8
+// for the upper ones, and a real cabinet wires each cabinet button to both
+// inputs on its side, upper flipper or not. The ROM tests them all: a machine
+// whose boards report only the lower button got an "upper left flipper button
+// is broken" in its switch test, Dirty Harry among them. Mirrored only when the
+// configuration does not report that input itself.
+int PluginEngine::MirroredFlipperButton(int number) const
+{
+  if (!m_identityKnown || (m_identity.hardwareGen & kHardwareGenWpcFliptronic) == 0)
+  {
+    return 0;
+  }
+  const int upper = number == 112 ? 116 : number == 114 ? 118 : 0;
+  if (upper == 0)
+  {
+    return 0;
+  }
+  const auto& configured = m_options.configuredSwitches;
+  return std::find(configured.begin(), configured.end(), upper) == configured.end() ? upper : 0;
+}
+
 void PluginEngine::SendSwitch(int number, uint8_t state)
 {
+  if (IsSimulatedByPinmame(number))
+  {
+    return;
+  }
+  if (const int upper = MirroredFlipperButton(number); upper != 0)
+  {
+    SendSwitch(upper, state);
+  }
   // Preserved from PinmameEngine: 200..241 are board-local and never reach the
   // ROM, and >=241 maps into PinMAME's negative cabinet-switch space.
   if (number >= 200 && number <= 241)
@@ -1066,9 +1121,13 @@ bool PluginEngine::SaveNvram(uint32_t minIdleMs)
 
 void PluginEngine::AuditSwitches()
 {
-
   for (const auto& [number, value] : m_sentSwitchValues)
   {
+    // Recorded before the identity was known, when it could not be told apart.
+    if (IsSimulatedByPinmame(number))
+    {
+      continue;
+    }
     const auto it = m_switchesByNumber.find(number);
     if (it == m_switchesByNumber.end())
     {
