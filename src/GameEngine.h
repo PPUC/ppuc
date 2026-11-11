@@ -81,7 +81,19 @@ class GameEngineHost
   // When one coil edge carries both meanings, this is emitted BEFORE the
   // matching OnCoilChanged, so that a rules handler reacting to the coil already
   // sees the new attract state.
+  //
+  // PinmameEngine takes "a game is in progress" from the ROM's game_over flag
+  // when its NVRAM map has one, and reports the solenoid separately through
+  // OnBallInPlayChanged: on a Fliptronic or later WPC the solenoid is the
+  // flipper enable, which drops at every drained ball and at a tilt.
   virtual void OnGameRunningChanged(bool running) = 0;
+
+  // PUSH. Whether a ball is being played: the flippers are live and high power
+  // is up. The game-on solenoid, without the meaning of "a game is in progress"
+  // -- ball search, the trough watch and the playfield assist want this one,
+  // because a drained ball or a tilt is exactly when they must stand down.
+  // An engine that cannot tell the two apart reports the same edge to both.
+  virtual void OnBallInPlayChanged(bool inPlay) { (void)inPlay; }
 
   // ---- Run state --------------------------------------------------------
   // PUSH. state == 0 means the engine has stopped and the host should shut

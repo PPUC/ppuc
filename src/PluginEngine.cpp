@@ -171,7 +171,7 @@ bool PluginEngine::HasCapability(Capability capability) const
       // PinMAME's GI is unusable outside WPC; libppuc forces GI on there.
       return m_options.platform == kPlatformWpc;
     case Capability::TracksBallAndPlayer:
-      return m_tracking.loaded;
+      return m_tracking.loaded && (m_tracking.currentBall.available || m_tracking.currentPlayer.available);
     case Capability::AudioStream:
       return !m_options.noSound;
     case Capability::SegmentDisplays:
@@ -542,11 +542,21 @@ void PluginEngine::PollThreadMain()
           // A game ending is the one moment the ball and the player go to zero,
           // and this engine reports that like any other change rather than
           // letting the host write it behind the cache's back.
-          if (value == 0)
+          //
+          // All of that holds only while the solenoid is what says a game is
+          // running. Once the map's game_over flag has taken that over, a drop
+          // here is a drained ball or a tilt, and the game goes on.
+          m_gameOnActive.store(value != 0, std::memory_order_release);
+          if (!m_gameOverFromMap.load(std::memory_order_acquire))
           {
-            m_trackingResetPending.store(true, std::memory_order_release);
+            if (value == 0)
+            {
+              m_trackingResetPending.store(true, std::memory_order_release);
+            }
+            m_reportedGameRunning.store(value != 0, std::memory_order_release);
+            m_pHost->OnGameRunningChanged(value != 0);
           }
-          m_pHost->OnGameRunningChanged(value != 0);
+          m_pHost->OnBallInPlayChanged(value != 0);
         }
         if (m_options.debugCoils)
         {
@@ -1369,6 +1379,14 @@ void PluginEngine::PollTrackedState()
     if (tracking)
     {
       std::printf("Ball and player tracking: %s\n", m_tracking.mapPath.c_str());
+      if (m_tracking.gameOver.available)
+      {
+        std::printf("Attract mode: from the ROM's game_over flag at 0x%X\n", m_tracking.gameOver.address);
+      }
+      else
+      {
+        std::printf("Attract mode: from the game-on solenoid (%s)\n", m_tracking.gameOverUnavailableReason.c_str());
+      }
     }
     else
     {
@@ -1417,6 +1435,8 @@ void PluginEngine::PollTrackedState()
   // test around the decode. A machine with no game-on solenoid configured -- any
   // --no-serial run, and every test harness -- would otherwise have no ball and
   // no player at all.
+  PollGameOver(read);
+
   if (m_trackingResetPending.exchange(false, std::memory_order_acq_rel))
   {
     if (!m_hasLastBall || m_lastBall != 0)
@@ -1431,6 +1451,13 @@ void PluginEngine::PollTrackedState()
       m_lastPlayer = 0;
       m_pHost->OnCurrentPlayerChanged(0);
     }
+  }
+
+  // Between games the ROM's memory still holds the last game's ball and player.
+  // On the map's account there is no game, so there is no ball and no player.
+  if (m_gameOverFromMap.load(std::memory_order_acquire) && !m_mapGameRunning)
+  {
+    return;
   }
 
   uint8_t ball = 0;
@@ -1468,6 +1495,58 @@ void PluginEngine::PollTrackedState()
     m_lastPlayer = player;
     m_pHost->OnCurrentPlayerChanged(player);
   }
+}
+
+// Attract mode from game_over.
+//
+// A game starts when the ROM says it is not over and the flippers are live; it
+// ends when the ROM says it is over, and at nothing else. Both conditions for a
+// start, because a ROM that is still initialising its RAM can read "not over"
+// for a moment, and no ROM enables the flippers before it has started a game.
+// Neither is a matter of time: no edge is waited out, so nothing depends on how
+// long a bonus count or a ball search takes.
+void PluginEngine::PollGameOver(const PinmameByteReader& read)
+{
+  if (!m_tracking.gameOver.available)
+  {
+    return;
+  }
+
+  bool gameOver = true;
+  if (!TryDecodeTrackedPinmameFlag(m_tracking.gameOver, read, &gameOver))
+  {
+    if (!m_undecodableGameOver)
+    {
+      m_undecodableGameOver = true;
+      std::printf("Tracking: game_over at 0x%X does not decode; %s\n", m_tracking.gameOver.address,
+                  m_gameOverFromMap.load(std::memory_order_acquire) ? "attract mode stays as it is until it does"
+                                                                    : "attract mode follows the game-on solenoid");
+    }
+    return;
+  }
+  m_undecodableGameOver = false;
+
+  if (!m_gameOverFromMap.load(std::memory_order_acquire))
+  {
+    // Taking over from the solenoid. Whatever it last reported stands until the
+    // flag says otherwise, so the handover itself is never an edge.
+    m_mapGameRunning = m_reportedGameRunning.load(std::memory_order_acquire);
+    m_gameOverFromMap.store(true, std::memory_order_release);
+  }
+
+  const bool running = m_mapGameRunning ? !gameOver : (!gameOver && m_gameOnActive.load(std::memory_order_acquire));
+  if (running == m_mapGameRunning)
+  {
+    return;
+  }
+
+  m_mapGameRunning = running;
+  if (!running)
+  {
+    m_trackingResetPending.store(true, std::memory_order_release);
+  }
+  m_reportedGameRunning.store(running, std::memory_order_release);
+  m_pHost->OnGameRunningChanged(running);
 }
 
 // A mapped field the ROM's memory does not answer for.

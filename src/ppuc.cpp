@@ -541,7 +541,15 @@ bool opt_hard_reset = false;
 const char* opt_virtual_dmd_renderer = "dots";
 const char* opt_pinmame_path = NULL;
 const char* opt_rom = NULL;
-std::atomic<bool> ball_search_game_running{false};
+// A game is in progress: attract mode is off. From the ROM's game_over flag
+// where the NVRAM map has one, from the game-on solenoid otherwise. Music, the
+// translites, the slides, the Lua attract mode and the NVRAM saves follow this.
+std::atomic<bool> g_gameInProgress{false};
+// A ball is being played: the game-on solenoid, which on a Fliptronic or later
+// WPC is the flipper enable and drops at every drained ball and at a tilt. Ball
+// search, the trough watch, the playfield assist and anything that needs high
+// power up follow this.
+std::atomic<bool> g_ballInPlay{false};
 // Held off by a rule for as long as the machine is deliberately waiting: a
 // multiball start leaves a ball in the shooter lane and another in a kickout
 // hole, and nothing is lost -- a search would fire coils under balls that are
@@ -3312,7 +3320,7 @@ static void CloseServiceTest()
     // if the machine is in attract.
     if (pAudioOutput != nullptr)
     {
-        pAudioOutput->SetMusicEnabled(ball_search_game_running.load(std::memory_order_acquire));
+        pAudioOutput->SetMusicEnabled(g_gameInProgress.load(std::memory_order_acquire));
     }
 
     g_serviceTest.steps.clear();
@@ -3355,7 +3363,7 @@ static bool OpenServiceTest(TestKind kind)
         // Coils and flashers need high power. During a game it is already up,
         // and raising it again would be harmless but lowering it afterwards
         // would not -- so remember whether this was ours to raise.
-        if (TestOutputIsMomentary(kind) && !ball_search_game_running.load(std::memory_order_acquire))
+        if (TestOutputIsMomentary(kind) && !g_ballInPlay.load(std::memory_order_acquire))
         {
             pPpuc->SetSolenoidState(pPpuc->GetGameOnSolenoid(), 1);
             g_serviceTest.gameOnRaised = true;
@@ -3667,7 +3675,7 @@ static void FireSelectedCoil()
         return;
     }
 
-    if (!ball_search_game_running.load(std::memory_order_acquire) && !g_monitorRaisedGameOn)
+    if (!g_ballInPlay.load(std::memory_order_acquire) && !g_monitorRaisedGameOn)
     {
         pPpuc->SetSolenoidState(pPpuc->GetGameOnSolenoid(), 1);
         g_monitorRaisedGameOn = true;
@@ -3718,8 +3726,7 @@ static void CloseOverlay()
         return;
     }
     QueueTransliteRender(
-        ball_search_game_running.load(std::memory_order_acquire) ? RenderCommand::RENDER_GAME
-                                                                 : RenderCommand::RENDER_ATTRACT,
+        g_gameInProgress.load(std::memory_order_acquire) ? RenderCommand::RENDER_GAME : RenderCommand::RENDER_ATTRACT,
         true);
 }
 
@@ -3760,7 +3767,7 @@ static void RequestServiceTest(int index)
     {
         return;
     }
-    const bool gameRunning = ball_search_game_running.load(std::memory_order_acquire);
+    const bool gameRunning = g_gameInProgress.load(std::memory_order_acquire);
     if (kServiceTests[index].throwsBall && gameRunning)
     {
         g_pendingTestIndex = index;
@@ -4991,7 +4998,7 @@ static bool HandleSlideNav(SlideNav direction, bool bothHeld)
     }
     // Attract only. During a game the flipper buttons belong to the flippers,
     // and this must never be a thing that happens while a ball is in play.
-    if (ball_search_game_running.load(std::memory_order_acquire))
+    if (g_gameInProgress.load(std::memory_order_acquire))
     {
         return false;
     }
@@ -5055,10 +5062,15 @@ static const uint64_t kTroughRepresentGapMs = 80;
 // was a factory reset. So the moments that matter are also saved outright,
 // whatever NVRAM is doing:
 //
-// - When a game ends, which is when the game-on solenoid drops.
-// - Again a while later, without a new game in between. The game-on solenoid
-//   drops at the end of the last ball, before match and high score entry, so
-//   the first save has the scores but not the initials.
+// - When a game ends: g_gameInProgress going false. That is the ROM's own
+//   game_over flag wherever the NVRAM map has one, and deliberately not the
+//   game-on solenoid, which on a Fliptronic or later WPC is the flipper enable
+//   and drops at every drained ball. A save stalls the emulation for as long as
+//   the write and its fsync take, and doing that after every ball made a game
+//   sluggish: late poppers, frozen lamps, short coil pulses.
+// - Again a while later, without a new game in between. Where the game end is
+//   still the solenoid, it drops at the end of the last ball, before match and
+//   high score entry, so the first save has the scores but not the initials.
 // - When the coin door is closed, a little later, so that the ROM has left
 //   the service menu and stored what was changed in it. Only with a real coin
 //   door switch: a door that CloseCoinDoor holds shut never closes.
@@ -5109,7 +5121,7 @@ static void ServiceNvramSave(GameEngine* pEngine)
   }
 
   const uint64_t nowMs = SDL_GetTicks();
-  const bool gameRunning = ball_search_game_running.load(std::memory_order_acquire);
+  const bool gameRunning = g_gameInProgress.load(std::memory_order_acquire);
   if (gameRunning != g_nvramSawGameRunning)
   {
     g_nvramSawGameRunning = gameRunning;
@@ -5186,7 +5198,7 @@ static void ServiceBallTroughWatch(GameEngine* pEngine)
     }
 
     const uint64_t nowMs = SDL_GetTicks();
-    const bool gameRunning = ball_search_game_running.load(std::memory_order_acquire);
+    const bool gameRunning = g_ballInPlay.load(std::memory_order_acquire);
     switch (BallTroughWatch::Update(g_troughWatch, gameRunning, nowMs, opt_ball_trough_grace_ms,
                                     kTroughRepresentGapMs))
     {
@@ -5371,7 +5383,7 @@ static const uint64_t kMinAttractBeforePicker = 3000;
 static void ServiceSongPicker()
 {
     const uint64_t nowMs = SDL_GetTicks();
-    const bool gameRunning = ball_search_game_running.load(std::memory_order_acquire);
+    const bool gameRunning = g_gameInProgress.load(std::memory_order_acquire);
     static bool wasRunning = false;
     if (!gameRunning && (wasRunning || g_gameOffAtMs == 0))
     {
@@ -5406,7 +5418,7 @@ static void ServiceSongPicker()
         CloseSongPicker();
     }
     // A game that ended while the chooser was up takes it with it.
-    if (g_songPicker.active && !ball_search_game_running.load(std::memory_order_acquire))
+    if (g_songPicker.active && !g_gameInProgress.load(std::memory_order_acquire))
     {
         CloseSongPicker();
     }
@@ -6804,7 +6816,7 @@ struct PpucEngineHost final : GameEngineHost
 
   void OnGameRunningChanged(bool gameRunning) override
   {
-    ball_search_game_running.store(gameRunning, std::memory_order_release);
+    g_gameInProgress.store(gameRunning, std::memory_order_release);
     if (pAudioOutput != nullptr)
     {
       pAudioOutput->SetMusicEnabled(gameRunning);
@@ -6848,11 +6860,16 @@ struct PpucEngineHost final : GameEngineHost
       // unchanged and the rules kept the zeros. PluginEngine reports zeros for
       // attract itself now, which is the same outcome from one place.
     }
+  }
 
+  void OnBallInPlayChanged(bool inPlay) override
+  {
+    g_ballInPlay.store(inPlay, std::memory_order_release);
     if (g_playfieldAssistEnabled)
     {
-      // Neither feature should act in attract.
-      g_playfieldAssist.SetPlayActive(gameRunning);
+      // Neither feature should act in attract, nor while the ROM has the
+      // flippers off between balls or after a tilt.
+      g_playfieldAssist.SetPlayActive(inPlay);
     }
   }
 
@@ -9263,7 +9280,8 @@ int main(int argc, char** argv)
     bool loggedIdentity = false;
     const bool pollGis = pEngine->HasCapability(GameEngine::Capability::ChangedGis);
 
-    ball_search_game_running.store(false, std::memory_order_release);
+    g_gameInProgress.store(false, std::memory_order_release);
+    g_ballInPlay.store(false, std::memory_order_release);
 
     // Draw the attract translite now that everything else has finished taking
     // the display.
@@ -9471,8 +9489,7 @@ int main(int argc, char** argv)
         delete switchState;
       }
 
-      ServiceBallSearchRunner(pPpuc, ballSearchRunner,
-                              ball_search_game_running.load(std::memory_order_acquire),
+      ServiceBallSearchRunner(pPpuc, ballSearchRunner, g_ballInPlay.load(std::memory_order_acquire),
                               opt_ball_search_delay_ms, opt_ball_search_round_delay_ms);
       ServiceBallTroughWatch(pEngine.get());
       ServiceNvramSave(pEngine.get());
@@ -9669,7 +9686,7 @@ int main(int argc, char** argv)
       // presents, and a second presenter here is what made the screen flicker.
       if (g_attractSlides)
       {
-        g_attractSlides->Update(!ball_search_game_running.load(std::memory_order_acquire), SDL_GetTicks());
+        g_attractSlides->Update(!g_gameInProgress.load(std::memory_order_acquire), SDL_GetTicks());
 
         // Compared against what was on the screen last pass, not against what
         // was true a line ago. A show can be taken down from three places --
@@ -9686,9 +9703,8 @@ int main(int argc, char** argv)
           // the frame the slideshow was covering.
           ReleaseSlideTexture();
           ReleaseSlideFrame();
-          QueueTransliteRender(ball_search_game_running.load(std::memory_order_acquire)
-                                   ? RenderCommand::RENDER_GAME
-                                   : RenderCommand::RENDER_ATTRACT,
+          QueueTransliteRender(g_gameInProgress.load(std::memory_order_acquire) ? RenderCommand::RENDER_GAME
+                                                                                : RenderCommand::RENDER_ATTRACT,
                                true);
         }
         slidesWereShowing = showing;
@@ -9781,7 +9797,7 @@ int main(int argc, char** argv)
             // the slideshow has something to say: otherwise they fall through
             // to whatever else is bound.
             if (g_attractSlides && !g_attractSlides->Empty() && g_overlay == OverlayScreen::None &&
-                !ball_search_game_running.load(std::memory_order_acquire))
+                !g_gameInProgress.load(std::memory_order_acquire))
             {
               bool handled = true;
               switch (event.key.key)

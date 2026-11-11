@@ -126,6 +126,7 @@ class PluginEngine final : public GameEngine
   void SampleRomSpeeds(uint64_t nowMs);
   void SampleOutputs();
   void PollTrackedState();
+  void PollGameOver(const PinmameByteReader& read);
   void ReportUndecodableTrackedField(const char* what, const PinmameTrackedField& field, const PinmameByteReader& read,
                                      bool& alreadyReported);
 
@@ -238,6 +239,27 @@ class PluginEngine final : public GameEngine
   // announces the ball and the player as zero through the same path as any other
   // change -- keeping the cache and the rules in agreement.
   std::atomic<bool> m_trackingResetPending{false};
+
+  // Attract mode from the ROM's own game_over flag, when its map has one.
+  //
+  // The game-on solenoid is not "a game is running" on every machine. From
+  // Fliptronic on it is the flipper enable, which the ROM drops at every drained
+  // ball and at a tilt -- so every drain looked like a game over: an NVRAM save
+  // in the middle of a game, attract rules firing between balls, the playlist
+  // moving on. game_over is what the ROM itself keeps for exactly this question.
+  //
+  // Set once the flag has decoded, and from then on the solenoid only says
+  // whether a ball is in play. Until then, and for a ROM whose map has no usable
+  // flag, the solenoid answers both questions, as it always did.
+  std::atomic<bool> m_gameOverFromMap{false};
+  // Whether flippers are live, as the poll thread last saw the game-on solenoid.
+  std::atomic<bool> m_gameOnActive{false};
+  // What the host was last told about a game running, by either path, so the
+  // handover starts from what the host believes.
+  std::atomic<bool> m_reportedGameRunning{false};
+  // What the host was last told about a game running, on the map's account.
+  bool m_mapGameRunning = false;
+  bool m_undecodableGameOver = false;
 
   struct Impl;
   std::unique_ptr<Impl> m_impl;

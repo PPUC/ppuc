@@ -2,6 +2,20 @@
 
 #include <climits>
 
+static uint8_t ApplyNibble(uint8_t value, PinmameMapNibble nibble)
+{
+  switch (nibble)
+  {
+    case PinmameMapNibble::HIGH:
+      return static_cast<uint8_t>((value >> 4) & 0x0F);
+    case PinmameMapNibble::LOW:
+      return static_cast<uint8_t>(value & 0x0F);
+    case PinmameMapNibble::BOTH:
+      break;
+  }
+  return value;
+}
+
 bool TryDecodeTrackedPinmameValue(const PinmameTrackedField& field, const PinmameByteReader& readByte, uint8_t* pValue)
 {
   if (!field.available || pValue == nullptr || !readByte)
@@ -15,18 +29,7 @@ bool TryDecodeTrackedPinmameValue(const PinmameTrackedField& field, const Pinmam
     return false;
   }
 
-  uint8_t value = static_cast<uint8_t>(rawByte & field.mask);
-  switch (field.nibble)
-  {
-    case PinmameMapNibble::HIGH:
-      value = static_cast<uint8_t>((value >> 4) & 0x0F);
-      break;
-    case PinmameMapNibble::LOW:
-      value = static_cast<uint8_t>(value & 0x0F);
-      break;
-    case PinmameMapNibble::BOTH:
-      break;
-  }
+  const uint8_t value = ApplyNibble(static_cast<uint8_t>(rawByte & field.mask), field.nibble);
 
   uint8_t decodedValue = value;
   if (field.encoding == PinmameMapEncoding::BCD)
@@ -70,5 +73,37 @@ bool TryDecodeTrackedPinmameValue(const PinmameTrackedField& field, const Pinmam
   }
 
   *pValue = static_cast<uint8_t>(adjustedValue);
+  return true;
+}
+
+bool TryDecodeTrackedPinmameFlag(const PinmameTrackedFlag& flag, const PinmameByteReader& readByte, bool* pValue)
+{
+  if (!flag.available || pValue == nullptr || !readByte)
+  {
+    return false;
+  }
+
+  uint8_t rawByte = 0;
+  if (!readByte(flag.address, &rawByte))
+  {
+    return false;
+  }
+
+  const uint8_t value = ApplyNibble(static_cast<uint8_t>(rawByte & flag.mask), flag.nibble);
+  bool decoded;
+  if (flag.enumValues.empty())
+  {
+    decoded = value != 0;
+  }
+  else
+  {
+    if (value >= flag.enumValues.size())
+    {
+      return false;
+    }
+    decoded = flag.enumValues[value];
+  }
+
+  *pValue = flag.invert ? !decoded : decoded;
   return true;
 }

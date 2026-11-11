@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <vector>
 
 // Decoding of the ball/player fields that pinmame-nvram-maps describes.
 //
@@ -35,6 +36,24 @@ struct PinmameTrackedField
   bool treatZeroAsUnavailable = false;
 };
 
+// A yes/no field: the map's `bool` and `enum` encodings, as game_over uses them.
+//
+// `bool` is true when the masked byte is non-zero, and `invert` turns that
+// round. `enum` looks the masked byte up in a list of values, which for
+// game_over are all booleans -- System 6 keeps a status in two bits of which
+// only one value means "game over". A byte the list has no entry for is not a
+// game state at all, and does not decode.
+struct PinmameTrackedFlag
+{
+  bool available = false;
+  uint32_t address = 0;
+  PinmameMapNibble nibble = PinmameMapNibble::BOTH;
+  uint8_t mask = 0xFF;
+  bool invert = false;
+  // Empty for `bool`; the value per masked byte for `enum`.
+  std::vector<bool> enumValues;
+};
+
 struct PinmameTrackingConfig
 {
   bool attemptedLoad = false;
@@ -42,6 +61,11 @@ struct PinmameTrackingConfig
   std::string mapPath;
   PinmameTrackedField currentPlayer;
   PinmameTrackedField currentBall;
+  // Whether the ROM considers the game over. Optional: a map without it, or with
+  // a form this cannot read, leaves it unavailable and says why in
+  // gameOverUnavailableReason, and the ball and the player are tracked anyway.
+  PinmameTrackedFlag gameOver;
+  std::string gameOverUnavailableReason;
 };
 
 struct PinmamePlatformMemoryRange
@@ -62,3 +86,6 @@ using PinmameByteReader = std::function<bool(uint32_t address, uint8_t* pValue)>
 // previous value.
 bool TryDecodeTrackedPinmameValue(const PinmameTrackedField& field, const PinmameByteReader& readByte,
                                   uint8_t* pValue);
+
+// Decodes one yes/no field. Same contract as above: false leaves *pValue alone.
+bool TryDecodeTrackedPinmameFlag(const PinmameTrackedFlag& flag, const PinmameByteReader& readByte, bool* pValue);

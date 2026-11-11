@@ -46,6 +46,15 @@ ppuc.currentPlayer()
 ppuc.attractMode()
 ```
 
+`ppuc.attractMode()` is true while no game is in progress. Under PinMAME it
+comes from the ROM's own `game_over` flag in its
+[pinball-memory-maps](https://github.com/tomlogic/pinball-memory-maps) map, so a
+drained ball, the bonus count and a tilt are all still part of the game. A ROM
+whose map has no usable `game_over` falls back to the configured game-on
+solenoid; on a Fliptronic or later WPC that is the flipper enable, which drops
+between balls, so attract mode then flickers on at every drain. ppuc prints
+which of the two it uses at startup (`Attract mode: ...`).
+
 Named states, timing, and switch groups:
 
 ```lua

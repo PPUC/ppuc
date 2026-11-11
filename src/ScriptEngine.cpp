@@ -161,6 +161,7 @@ void ScriptEngine::Update()
   {
     m_gameRunning = running;
     m_pHost->OnGameRunningChanged(running);
+    m_pHost->OnBallInPlayChanged(running);
   }
 
   const uint8_t ball = m_game.GetCurrentBall();

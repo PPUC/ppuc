@@ -461,6 +461,102 @@ static bool TryLoadTrackedFieldFromMap(const YAML::Node& fieldNode,
   return true;
 }
 
+// game_over, or why it cannot be used. Never fails the map as a whole: the
+// ball and the player are worth having on their own, and a game this cannot
+// read falls back to the game-on solenoid for attract mode.
+static void LoadGameOverFlagFromMap(const YAML::Node& fieldNode,
+                                    const std::vector<PinmamePlatformMemoryRange>& platformRanges,
+                                    PinmameTrackedFlag* pFlag, std::string* pReason)
+{
+  *pFlag = PinmameTrackedFlag{};
+  pReason->clear();
+  if (!fieldNode || !fieldNode.IsMap())
+  {
+    *pReason = "the map has no game_over field";
+    return;
+  }
+
+  uint32_t address = 0;
+  if (fieldNode["start"])
+  {
+    if (!TryParseMapUnsigned(fieldNode["start"], &address))
+    {
+      *pReason = "game_over has an invalid start address";
+      return;
+    }
+  }
+  else
+  {
+    // Capcom maps list the bytes instead of giving a start. A flag is one byte.
+    const YAML::Node offsets = fieldNode["offsets"];
+    if (!offsets || !offsets.IsSequence() || offsets.size() != 1 || !TryParseMapUnsigned(offsets[0], &address))
+    {
+      *pReason = "game_over has no single address";
+      return;
+    }
+  }
+
+  const std::string encodingText = fieldNode["encoding"] ? fieldNode["encoding"].as<std::string>() : "";
+  std::vector<bool> enumValues;
+  if (encodingText == "enum")
+  {
+    const YAML::Node values = fieldNode["values"];
+    if (!values || !values.IsSequence() || values.size() == 0)
+    {
+      *pReason = "game_over is an enum without values";
+      return;
+    }
+    for (const YAML::Node& value : values)
+    {
+      bool flag = false;
+      if (!value.IsScalar() || !YAML::convert<bool>::decode(value, flag))
+      {
+        *pReason = "game_over is an enum whose values are not all true or false";
+        return;
+      }
+      enumValues.push_back(flag);
+    }
+  }
+  else if (encodingText != "bool")
+  {
+    *pReason = "game_over uses unsupported encoding: " + encodingText;
+    return;
+  }
+
+  uint32_t mask = 0xFF;
+  if (fieldNode["mask"] && (!TryParseMapUnsigned(fieldNode["mask"], &mask) || mask == 0 || mask > 0xFF))
+  {
+    *pReason = "game_over has an invalid mask";
+    return;
+  }
+
+  PinmameMapNibble nibble = ResolvePlatformNibbleDefault(platformRanges, address).value_or(PinmameMapNibble::BOTH);
+  if (fieldNode["nibble"])
+  {
+    const auto parsedNibble = TryParseMapNibble(fieldNode["nibble"]);
+    if (!parsedNibble.has_value())
+    {
+      *pReason = "game_over has an invalid nibble setting";
+      return;
+    }
+    nibble = parsedNibble.value();
+  }
+
+  bool invert = false;
+  if (fieldNode["invert"] && !YAML::convert<bool>::decode(fieldNode["invert"], invert))
+  {
+    *pReason = "game_over has an invalid invert setting";
+    return;
+  }
+
+  pFlag->available = true;
+  pFlag->address = address;
+  pFlag->nibble = nibble;
+  pFlag->mask = static_cast<uint8_t>(mask);
+  pFlag->invert = invert;
+  pFlag->enumValues = std::move(enumValues);
+}
+
 bool TryLoadPinmameTrackingConfig(const char* rom, const uint64_t hardwareGen, const char* pinmamePath,
                                   PinmameTrackingConfig* pConfig, std::string* pError)
 {
@@ -474,6 +570,8 @@ bool TryLoadPinmameTrackingConfig(const char* rom, const uint64_t hardwareGen, c
   pConfig->mapPath.clear();
   pConfig->currentPlayer = PinmameTrackedField{};
   pConfig->currentBall = PinmameTrackedField{};
+  pConfig->gameOver = PinmameTrackedFlag{};
+  pConfig->gameOverUnavailableReason.clear();
 
   const std::string romName = NormalizeRomNameForMapLookup(rom);
   if (romName.empty())
@@ -558,9 +656,12 @@ bool TryLoadPinmameTrackingConfig(const char* rom, const uint64_t hardwareGen, c
     return false;
   }
 
-  if (!pConfig->currentPlayer.available && !pConfig->currentBall.available)
+  LoadGameOverFlagFromMap(gameState["game_over"], platformRanges, &pConfig->gameOver,
+                          &pConfig->gameOverUnavailableReason);
+
+  if (!pConfig->currentPlayer.available && !pConfig->currentBall.available && !pConfig->gameOver.available)
   {
-    if (pError) *pError = "map file does not define current_player or current_ball";
+    if (pError) *pError = "map file does not define current_player, current_ball or game_over";
     return false;
   }
 

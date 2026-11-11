@@ -203,3 +203,101 @@ TEST_CASE("the configured address is the one read")
   CHECK(Decode(field, ReaderAt(0x1F40, 4)) == 4);
   CHECK(Decode(field, ReaderAt(0x1F41, 4)) == std::nullopt);
 }
+
+// ---- game_over --------------------------------------------------------------
+//
+// Attract mode, and with it the NVRAM saves, follow this flag. Every form below
+// occurs in pinmame-nvram-maps: WPC's plain byte, Data East's inverted one,
+// Stern's masked bits and System 6's two-bit status.
+
+namespace
+{
+
+PinmameTrackedFlag Flag()
+{
+  PinmameTrackedFlag flag;
+  flag.available = true;
+  flag.address = 0x8D;
+  return flag;
+}
+
+std::optional<bool> DecodeFlag(const PinmameTrackedFlag& flag, const PinmameByteReader& reader)
+{
+  bool value = false;
+  bool poison = true;
+  if (!TryDecodeTrackedPinmameFlag(flag, reader, &value))
+  {
+    // A refused decode must not touch the caller's value.
+    CHECK(TryDecodeTrackedPinmameFlag(flag, reader, &poison) == false);
+    CHECK(poison);
+    return std::nullopt;
+  }
+  return value;
+}
+
+}  // namespace
+
+TEST_CASE("a bool flag is set by any non-zero byte")
+{
+  const PinmameTrackedFlag flag = Flag();
+  CHECK(DecodeFlag(flag, ReaderAt(0x8D, 0)) == false);
+  CHECK(DecodeFlag(flag, ReaderAt(0x8D, 1)) == true);
+  CHECK(DecodeFlag(flag, ReaderAt(0x8D, 0xFF)) == true);
+}
+
+TEST_CASE("an inverted bool flag reads the other way round")
+{
+  PinmameTrackedFlag flag = Flag();
+  flag.invert = true;
+  CHECK(DecodeFlag(flag, ReaderAt(0x8D, 0)) == true);
+  CHECK(DecodeFlag(flag, ReaderAt(0x8D, 3)) == false);
+}
+
+TEST_CASE("a masked bool flag looks only at its bits")
+{
+  PinmameTrackedFlag flag = Flag();
+  flag.mask = 0x04;
+  CHECK(DecodeFlag(flag, ReaderAt(0x8D, 0xFB)) == false);
+  CHECK(DecodeFlag(flag, ReaderAt(0x8D, 0x04)) == true);
+}
+
+TEST_CASE("an enum flag looks the masked byte up in its values")
+{
+  // System 6: status in the low two bits, 1 means game over, and a tilt (2 or
+  // 3) is still a game.
+  PinmameTrackedFlag flag = Flag();
+  flag.address = 0x78;
+  flag.mask = 0x03;
+  flag.enumValues = {false, true, false, false};
+  CHECK(DecodeFlag(flag, ReaderAt(0x78, 0x00)) == false);
+  CHECK(DecodeFlag(flag, ReaderAt(0x78, 0x01)) == true);
+  CHECK(DecodeFlag(flag, ReaderAt(0x78, 0x02)) == false);
+  CHECK(DecodeFlag(flag, ReaderAt(0x78, 0xF1)) == true);
+}
+
+TEST_CASE("an enum byte the values do not cover does not decode")
+{
+  PinmameTrackedFlag flag = Flag();
+  flag.enumValues = {false, true};
+  CHECK(DecodeFlag(flag, ReaderAt(0x8D, 2)) == std::nullopt);
+}
+
+TEST_CASE("a flag in a nibble-wide platform range reads only that nibble")
+{
+  PinmameTrackedFlag flag = Flag();
+  flag.nibble = PinmameMapNibble::LOW;
+  CHECK(DecodeFlag(flag, ReaderAt(0x8D, 0xF0)) == false);
+  CHECK(DecodeFlag(flag, ReaderAt(0x8D, 0x01)) == true);
+}
+
+TEST_CASE("an unavailable flag, a failed read or a missing reader does not decode")
+{
+  PinmameTrackedFlag flag = Flag();
+  CHECK(DecodeFlag(flag, FailingReader()) == std::nullopt);
+  CHECK(DecodeFlag(flag, ReaderAt(0x8E, 1)) == std::nullopt);
+  bool value = false;
+  CHECK_FALSE(TryDecodeTrackedPinmameFlag(flag, PinmameByteReader{}, &value));
+  CHECK_FALSE(TryDecodeTrackedPinmameFlag(flag, ReaderAt(0x8D, 1), nullptr));
+  flag.available = false;
+  CHECK(DecodeFlag(flag, ReaderAt(0x8D, 1)) == std::nullopt);
+}
