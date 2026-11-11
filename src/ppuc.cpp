@@ -5030,6 +5030,40 @@ static BallTroughWatch::State g_troughWatch;
 // enough to be invisible. An open and a close in the same instant is not an edge.
 static const uint64_t kTroughRepresentGapMs = 80;
 
+// How often the bus needed its recovery mechanisms, and the last things that
+// went wrong on it. Printed on every way out that still has a bus, including
+// the emergency exit a signal takes while Serum is loaded: that is how a
+// machine is normally stopped over ssh, and it used to leave without a word.
+static void ReportBusHealth()
+{
+  // Report how often the bus needed its recovery mechanisms before tearing
+  // it down. Several host-side timeouts and retries were tuned by trial
+  // against a bus that misbehaved for reasons since addressed, and there was
+  // no way to tell which of them still earn their keep. A session that ends
+  // with zeros here is evidence one can be tightened or removed; anything
+  // non-zero says it is still load-bearing, and where to look next.
+  const PPUCBusHealth health = pPpuc->GetBusHealth();
+  printf(
+      "PPUC: bus health: %u switch reply chains, %u clean, %u missed, "
+      "%u session resync(s), %u config ack retries, %u config ack timeouts, "
+      "%u serial write failures, %u CRC errors\n",
+      health.switchReplyChains, health.switchReplyChainsClean, health.switchReplyMisses, health.sessionResyncs,
+      health.configAckRetries, health.configAckTimeouts, health.serialWriteFailures, health.frameCrcErrors);
+
+  // Recorded in RAM rather than logged: the target has a read-only root and
+  // no console. If this run was started by hand over ssh, this is where the
+  // detail of anything that went wrong comes out.
+  const std::vector<std::string> anomalies = pPpuc->GetRecentAnomalies();
+  if (!anomalies.empty())
+  {
+    printf("PPUC: last %zu unexpected condition(s):\n", anomalies.size());
+    for (const std::string& line : anomalies)
+    {
+      printf("PPUC:   %s\n", line.c_str());
+    }
+  }
+}
+
 // Give the ROM the edge it missed.
 //
 // The decision is in BallTroughWatch, free of SDL and of the engine, so the
@@ -9873,6 +9907,7 @@ int main(int argc, char** argv)
       pPpuc->StopUpdates();
       if (!opt_no_serial)
       {
+        ReportBusHealth();
         pPpuc->Disconnect();
       }
       fflush(stdout);
@@ -9893,33 +9928,7 @@ int main(int argc, char** argv)
 
   if (!opt_no_serial)
   {
-    // Report how often the bus needed its recovery mechanisms before tearing
-    // it down. Several host-side timeouts and retries were tuned by trial
-    // against a bus that misbehaved for reasons since addressed, and there was
-    // no way to tell which of them still earn their keep. A session that ends
-    // with zeros here is evidence one can be tightened or removed; anything
-    // non-zero says it is still load-bearing, and where to look next.
-    const PPUCBusHealth health = pPpuc->GetBusHealth();
-    printf("PPUC: bus health: %u switch reply chains, %u clean, %u missed, "
-           "%u session resync(s), %u config ack retries, %u config ack timeouts, "
-           "%u serial write failures, %u CRC errors\n",
-           health.switchReplyChains, health.switchReplyChainsClean,
-           health.switchReplyMisses, health.sessionResyncs,
-           health.configAckRetries, health.configAckTimeouts,
-           health.serialWriteFailures, health.frameCrcErrors);
-
-    // Recorded in RAM rather than logged: the target has a read-only root and
-    // no console. If this run was started by hand over ssh, this is where the
-    // detail of anything that went wrong comes out.
-    const std::vector<std::string> anomalies = pPpuc->GetRecentAnomalies();
-    if (!anomalies.empty())
-    {
-      printf("PPUC: last %zu unexpected condition(s):\n", anomalies.size());
-      for (const std::string& line : anomalies)
-      {
-        printf("PPUC:   %s\n", line.c_str());
-      }
-    }
+    ReportBusHealth();
 
     // Close the serial device
     pPpuc->Disconnect();
