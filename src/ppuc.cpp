@@ -5047,9 +5047,59 @@ static const uint64_t kTroughRepresentGapMs = 80;
 //
 // What is still lost after this is the game in progress, which no amount of
 // saving can keep: the ROM has not recorded its result yet.
+//
+// That policy never fires on a WPC game. PinMAME's NVRAM for WPC is the CPU's
+// whole RAM - 8 KB, 12 KB from WPC Security on - stack and working variables
+// included, so it changes on every frame, attract mode or not, and is never
+// still for thirty seconds. A Dirty Harry kept nothing at all: every power-up
+// was a factory reset. So the moments that matter are also saved outright,
+// whatever NVRAM is doing:
+//
+// - When a game ends, which is when the game-on solenoid drops.
+// - Again a while later, without a new game in between. The game-on solenoid
+//   drops at the end of the last ball, before match and high score entry, so
+//   the first save has the scores but not the initials.
+// - When the coin door is closed, a little later, so that the ROM has left
+//   the service menu and stored what was changed in it. Only with a real coin
+//   door switch: a door that CloseCoinDoor holds shut never closes.
+//
+// A save that finds NVRAM identical to the last one written writes nothing.
 static const uint64_t kNvramSaveIntervalMs = 90000;
 static const uint32_t kNvramSaveIdleMs = 30000;
+static const uint64_t kNvramGameOverFollowUpMs = 120000;
+static const uint64_t kNvramCoinDoorDelayMs = 10000;
 static uint64_t g_nextNvramSaveMs = 0;
+static bool g_nvramSawGameRunning = false;
+static bool g_nvramGameOverSaveDue = false;
+static uint64_t g_nvramFollowUpSaveAtMs = 0;
+static uint64_t g_nvramCoinDoorSaveAtMs = 0;
+static int g_nvramCoinDoorState = -1;
+
+// Called for every switch change from the boards. -1 until the first report:
+// the door's state at startup is where it was left, not somebody closing it.
+static void NoteNvramCoinDoorSwitch(int number, uint8_t state)
+{
+  const uint8_t coinDoorSwitch = pPpuc != nullptr ? pPpuc->GetCoinDoorClosedSwitch() : 0;
+  if (coinDoorSwitch == 0 || number != coinDoorSwitch)
+  {
+    return;
+  }
+  // libppuc may repeat a state it has already reported; only open -> closed
+  // is the door being shut.
+  if (state != 0 && g_nvramCoinDoorState == 0)
+  {
+    g_nvramCoinDoorSaveAtMs = SDL_GetTicks() + kNvramCoinDoorDelayMs;
+  }
+  g_nvramCoinDoorState = state != 0 ? 1 : 0;
+}
+
+static void SaveNvramNow(GameEngine* pEngine, const char* reason)
+{
+  if (pEngine->SaveNvram(0))
+  {
+    printf("PPUC: NVRAM saved (%s)\n", reason);
+  }
+}
 
 static void ServiceNvramSave(GameEngine* pEngine)
 {
@@ -5059,6 +5109,39 @@ static void ServiceNvramSave(GameEngine* pEngine)
   }
 
   const uint64_t nowMs = SDL_GetTicks();
+  const bool gameRunning = ball_search_game_running.load(std::memory_order_acquire);
+  if (gameRunning != g_nvramSawGameRunning)
+  {
+    g_nvramSawGameRunning = gameRunning;
+    if (gameRunning)
+    {
+      // A new game before the follow-up: the initials are in, or were never
+      // going to be, and this game's own end schedules the next one.
+      g_nvramFollowUpSaveAtMs = 0;
+    }
+    else
+    {
+      g_nvramGameOverSaveDue = true;
+      g_nvramFollowUpSaveAtMs = nowMs + kNvramGameOverFollowUpMs;
+    }
+  }
+
+  if (g_nvramGameOverSaveDue)
+  {
+    g_nvramGameOverSaveDue = false;
+    SaveNvramNow(pEngine, "game over");
+  }
+  if (g_nvramFollowUpSaveAtMs != 0 && nowMs >= g_nvramFollowUpSaveAtMs)
+  {
+    g_nvramFollowUpSaveAtMs = 0;
+    SaveNvramNow(pEngine, "after game over");
+  }
+  if (g_nvramCoinDoorSaveAtMs != 0 && nowMs >= g_nvramCoinDoorSaveAtMs)
+  {
+    g_nvramCoinDoorSaveAtMs = 0;
+    SaveNvramNow(pEngine, "coin door closed");
+  }
+
   if (nowMs < g_nextNvramSaveMs)
   {
     return;
@@ -9238,6 +9321,7 @@ int main(int argc, char** argv)
         // Before any suppression: the screen answers what the machine is
         // doing, not what the engine was told about it.
         NoteSwitchMonitorState(switchState->number, newSwitchState);
+        NoteNvramCoinDoorSwitch(switchState->number, newSwitchState);
         // The slideshow. The two navigation buttons steer it; the other
         // buttons take it down.
         //
