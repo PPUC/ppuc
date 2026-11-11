@@ -71,6 +71,21 @@ void AudioOutput::Shutdown()
   speechQueue_.clear();
   DestroyResampler(speechResampler_);
 #if defined(PPUC_HAS_SDL3_MIXER)
+  if (effectTrack_ != nullptr)
+  {
+    MIX_DestroyTrack(effectTrack_);
+    effectTrack_ = nullptr;
+  }
+  for (auto& entry : effectAudio_)
+  {
+    MIX_DestroyAudio(entry.second);
+  }
+  effectAudio_.clear();
+  if (effectMixer_ != nullptr)
+  {
+    MIX_DestroyMixer(effectMixer_);
+    effectMixer_ = nullptr;
+  }
   DestroyMusicTracksLocked();
   if (musicTrack_ != nullptr)
   {
@@ -553,6 +568,7 @@ void SDLCALL AudioOutput::OnDeviceNeedsAudio(void* userdata, SDL_AudioStream* st
     const bool speechActive = AudioMixer::Mix(self->speechQueue_, mixBuffer.data(), sampleCount,
                                               self->masterVolume_ * self->speechVolume_);
     self->MixMusicLocked(mixBuffer.data(), sampleCount, gameActive || pluginActive || speechActive);
+    self->MixEffectsLocked(mixBuffer.data(), sampleCount);
   }
 
   SDL_PutAudioStreamData(stream, mixBuffer.data(), additionalAmount);
@@ -789,6 +805,138 @@ void SDLCALL AudioOutput::OnMusicTrackStopped(void* userdata, MIX_Track* track)
   }
 }
 
+bool AudioOutput::EnsureEffectMixerLocked(std::string* errorMessage)
+{
+  if (effectMixer_ != nullptr && effectTrack_ != nullptr)
+  {
+    return true;
+  }
+  if (!MIX_Init())
+  {
+    if (errorMessage != nullptr)
+    {
+      *errorMessage = SDL_GetError();
+    }
+    return false;
+  }
+  if (effectMixer_ == nullptr)
+  {
+    effectMixer_ = MIX_CreateMixer(&deviceSpec_);
+  }
+  if (effectMixer_ != nullptr && effectTrack_ == nullptr)
+  {
+    effectTrack_ = MIX_CreateTrack(effectMixer_);
+  }
+  if (effectMixer_ == nullptr || effectTrack_ == nullptr)
+  {
+    if (errorMessage != nullptr)
+    {
+      *errorMessage = SDL_GetError();
+    }
+    return false;
+  }
+  return true;
+}
+#endif
+
+bool AudioOutput::PlayEffect(const std::string& path, std::string* errorMessage)
+{
+#if defined(PPUC_HAS_SDL3_MIXER)
+  MIX_Mixer* mixer = nullptr;
+  MIX_Audio* audio = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!EnsureEffectMixerLocked(errorMessage))
+    {
+      return false;
+    }
+    mixer = effectMixer_;
+    const auto it = effectAudio_.find(path);
+    if (it != effectAudio_.end())
+    {
+      audio = it->second;
+    }
+  }
+
+  if (audio == nullptr)
+  {
+    // Opened outside the lock: the device callback takes it for every block,
+    // and reading a file from a USB stick while holding it is an audible gap.
+    // Not decoded up front either - the track decodes as it plays, the way the
+    // music does, so a long file costs no memory and no wait.
+    audio = MIX_LoadAudio(mixer, path.c_str(), false);
+    if (audio == nullptr)
+    {
+      if (errorMessage != nullptr)
+      {
+        *errorMessage = SDL_GetError();
+      }
+      return false;
+    }
+  }
+
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (effectMixer_ != mixer || effectTrack_ == nullptr)
+  {
+    // Shut down while the file was being opened.
+    MIX_DestroyAudio(audio);
+    if (errorMessage != nullptr)
+    {
+      *errorMessage = "audio output is shut down";
+    }
+    return false;
+  }
+  const auto inserted = effectAudio_.emplace(path, audio);
+  if (!inserted.second && inserted.first->second != audio)
+  {
+    // Opened twice at once; keep the first.
+    MIX_DestroyAudio(audio);
+    audio = inserted.first->second;
+  }
+  if (!MIX_SetTrackAudio(effectTrack_, audio) || !MIX_PlayTrack(effectTrack_, 0))
+  {
+    if (errorMessage != nullptr)
+    {
+      *errorMessage = SDL_GetError();
+    }
+    return false;
+  }
+  return true;
+#else
+  (void)path;
+  if (errorMessage != nullptr)
+  {
+    *errorMessage = "built without SDL3_mixer";
+  }
+  return false;
+#endif
+}
+
+void AudioOutput::MixEffectsLocked(int16_t* mixBuffer, size_t sampleCount)
+{
+#if defined(PPUC_HAS_SDL3_MIXER)
+  if (mixBuffer == nullptr || effectMixer_ == nullptr || effectTrack_ == nullptr || !MIX_TrackPlaying(effectTrack_))
+  {
+    return;
+  }
+  std::vector<int16_t> effectBuffer(sampleCount, 0);
+  if (MIX_Generate(effectMixer_, effectBuffer.data(), static_cast<int>(sampleCount * sizeof(int16_t))) < 0)
+  {
+    return;
+  }
+  for (size_t i = 0; i < sampleCount; ++i)
+  {
+    const int mixed = static_cast<int>(mixBuffer[i]) +
+                      static_cast<int>(std::lround(static_cast<float>(effectBuffer[i]) * masterVolume_));
+    mixBuffer[i] = AudioMixer::ClampSample(mixed);
+  }
+#else
+  (void)mixBuffer;
+  (void)sampleCount;
+#endif
+}
+
+#if defined(PPUC_HAS_SDL3_MIXER)
 bool AudioOutput::EnsureMusicMixerLocked(std::string* errorMessage)
 {
   if (!MIX_Init())

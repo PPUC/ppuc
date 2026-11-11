@@ -22,6 +22,8 @@ class LuaRulesEngine
  public:
   using TriggerCallback = std::function<void(char source, uint16_t id, uint8_t value)>;
   using SpeechCallback = std::function<void(const std::string& text)>;
+  // Returns whether the sound started.
+  using SoundCallback = std::function<bool(const std::string& file)>;
   // Start a scene in the Serum colorization. Separate from TriggerCallback
   // because a 'D' trigger and a scene are two different requests to two
   // different consumers that happen to share a numbering space: the trigger
@@ -63,6 +65,7 @@ class LuaRulesEngine
   void SetDebug(bool debug);
   void SetTriggerCallback(TriggerCallback callback);
   void SetSpeechCallback(SpeechCallback callback);
+  void SetSoundCallback(SoundCallback callback);
   void SetSerumSceneCallback(SerumSceneCallback callback);
   void SetActionCallback(ActionCallback callback);
   // Overrides the clock. Passing an empty function restores the default.
@@ -187,6 +190,7 @@ class LuaRulesEngine
   static int LuaAfter(lua_State* L);
   static int LuaPupTrigger(lua_State* L);
   static int LuaSpeech(lua_State* L);
+  static int LuaPlaySound(lua_State* L);
   static int LuaSerumScene(lua_State* L);
   static int LuaEffectTrigger(lua_State* L);
   static int LuaSuppressSwitch(lua_State* L);
@@ -214,6 +218,7 @@ class LuaRulesEngine
   CurrentEvent m_currentEvent;
   TriggerCallback m_triggerCallback;
   SpeechCallback m_speechCallback;
+  SoundCallback m_soundCallback;
   SerumSceneCallback m_serumSceneCallback;
   ActionCallback m_actionCallback;
   ClockFn m_clock;

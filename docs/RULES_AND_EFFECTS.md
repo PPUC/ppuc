@@ -18,6 +18,7 @@ behavior:
 - play a Serum colorization scene with `ppuc.serumScene(...)`
 - trigger board-local effects with `ppuc.effectTrigger(...)`
 - speak text with `ppuc.speech(...)`
+- play an audio file from the game folder with `ppuc.playSound(...)`
 - delay work without blocking with `ppuc.after(...)`
 - suppress or later send physical switches to PinMAME
 - pulse coils and blink lamps as host-side interceptor output overrides
@@ -73,6 +74,7 @@ ppuc.after(delayMs, function() ... end)
 ppuc.pupTrigger(source, id, value)
 ppuc.serumScene(id)
 ppuc.speech(text)
+ppuc.playSound(file)
 ppuc.effectTrigger(id, value)
 ppuc.effectTrigger(name, value)
 ppuc.suppressSwitch(number)
@@ -106,6 +108,42 @@ function ppuc.onPlayerChanged(player)
 end
 
 function ppuc.onRulesUpdate()
+end
+```
+
+## Playing Sounds
+
+`ppuc.playSound(file)` plays an audio file once, mixed over the game's own
+sound at the master `Volume`. `file` is relative to the game folder, for
+example `"sounds/intro.mp3"`; an absolute path or one leaving the folder with
+`..` is refused. MP3 is the format to use: it is the one SDL_mixer is built
+with. One sound plays at a time, and a second call replaces one still
+playing. It plays in attract mode too, where the music is off. It returns
+whether the sound started: `false` without sound output, or when the file is
+missing or unreadable, which is also printed.
+
+Once per attract mode, 10 seconds after it began:
+
+```lua
+local wasAttract = false
+local pending = false
+
+function ppuc.onRulesUpdate()
+  if ppuc.attractMode() then
+    if not wasAttract then
+      wasAttract = true
+      pending = true
+      ppuc.setState("intro wait", 10000)
+    end
+    if pending and not ppuc.stateActive("intro wait") then
+      pending = false
+      ppuc.playSound("sounds/intro.mp3")
+    end
+  else
+    wasAttract = false
+    pending = false
+    ppuc.clearState("intro wait")
+  end
 end
 ```
 

@@ -97,6 +97,12 @@ class AudioOutput
   // that decides whether the music can be heard at all while a ball is in play.
   void SetMusicDuck(float duck);
 
+  // Plays an audio file once, over everything else, at the master volume. One
+  // at a time: a second effect replaces one still playing. Independent of the
+  // music, so it plays in attract mode, when the music is off. Files are
+  // opened on first use and kept, so playing one again costs no file access.
+  bool PlayEffect(const std::string& path, std::string* errorMessage);
+
  public:
   struct MusicTrack
   {
@@ -168,7 +174,9 @@ class AudioOutput
   void ScheduleNextMusicTrackLocked();
   void AdvanceMusicTrackLocked();
   void HandleMusicTrackStoppedLocked(MIX_Track* track);
+  bool EnsureEffectMixerLocked(std::string* errorMessage);
 #endif
+  void MixEffectsLocked(int16_t* mixBuffer, size_t sampleCount);
 
   mutable std::mutex mutex_;
   bool debugAudio_ = false;
@@ -213,6 +221,11 @@ class AudioOutput
 #if defined(PPUC_HAS_SDL3_MIXER)
   MIX_Mixer* musicMixer_ = nullptr;
   MIX_Track* musicTrack_ = nullptr;
+  // Effects have a mixer of their own: the music's output is scaled by its
+  // ducking ramp, which is zero whenever the music is off.
+  MIX_Mixer* effectMixer_ = nullptr;
+  MIX_Track* effectTrack_ = nullptr;
+  std::unordered_map<std::string, MIX_Audio*> effectAudio_;
   // True only while a track is deliberately being swapped in. SDL_mixer reports
   // the outgoing track as stopped when that happens, and the stopped callback's
   // job is to move the playlist on -- which would step past the very track being

@@ -8668,6 +8668,36 @@ int main(int argc, char** argv)
             g_interceptorOutputs.HandleAction(pPpuc, action);
           }
         });
+    // A path relative to the game folder, and only inside it: a rules file is
+    // content from a config tool, and nothing in it should reach the rest of
+    // the file system.
+    pLuaRulesEngine->SetSoundCallback(
+        [](const std::string& file) -> bool
+        {
+          if (pAudioOutput == nullptr || !HasOptionValue(opt_game_folder))
+          {
+            return false;
+          }
+          const std::filesystem::path relative(file);
+          bool inside = !relative.empty() && relative.is_relative() && !relative.has_root_name();
+          for (const std::filesystem::path& part : relative)
+          {
+            inside = inside && part != "..";
+          }
+          if (!inside)
+          {
+            printf("PPUC: playSound: '%s' is not a path inside the game folder\n", file.c_str());
+            return false;
+          }
+          const std::filesystem::path path = std::filesystem::path(opt_game_folder) / relative;
+          std::string error;
+          if (!pAudioOutput->PlayEffect(path.string(), &error))
+          {
+            printf("PPUC: playSound: could not play %s: %s\n", path.string().c_str(), error.c_str());
+            return false;
+          }
+          return true;
+        });
     pLuaRulesEngine->SetSpeechCallback(
         [](const std::string& text)
         {

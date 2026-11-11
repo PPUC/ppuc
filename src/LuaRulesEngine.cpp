@@ -126,6 +126,12 @@ void LuaRulesEngine::SetSpeechCallback(SpeechCallback callback)
   m_speechCallback = std::move(callback);
 }
 
+void LuaRulesEngine::SetSoundCallback(SoundCallback callback)
+{
+  std::lock_guard<std::recursive_mutex> lock(m_mutex);
+  m_soundCallback = std::move(callback);
+}
+
 void LuaRulesEngine::SetActionCallback(ActionCallback callback)
 {
   std::lock_guard<std::recursive_mutex> lock(m_mutex);
@@ -197,6 +203,7 @@ void LuaRulesEngine::RegisterApi()
   SetPpucFunction(m_lua, this, "pupTrigger", LuaPupTrigger);
   SetPpucFunction(m_lua, this, "serumScene", LuaSerumScene);
   SetPpucFunction(m_lua, this, "speech", LuaSpeech);
+  SetPpucFunction(m_lua, this, "playSound", LuaPlaySound);
   SetPpucFunction(m_lua, this, "effectTrigger", LuaEffectTrigger);
   SetPpucFunction(m_lua, this, "suppressSwitch", LuaSuppressSwitch);
   SetPpucFunction(m_lua, this, "sendSwitchToCpu", LuaSendSwitchToCpu);
@@ -942,6 +949,18 @@ int LuaRulesEngine::LuaSpeech(lua_State* L)
     engine->m_speechCallback(text);
   }
   return 0;
+}
+
+// ppuc.playSound(file) -- play an audio file from the game folder once, over
+// the game's own sound. Returns whether it started: false without sound, for a
+// file that is missing or unreadable, or for a path outside the game folder.
+int LuaRulesEngine::LuaPlaySound(lua_State* L)
+{
+  auto* engine = FromLua(L);
+  const char* file = luaL_checkstring(L, 1);
+  const bool started = engine->m_soundCallback && file != nullptr && file[0] != '\0' && engine->m_soundCallback(file);
+  lua_pushboolean(L, started ? 1 : 0);
+  return 1;
 }
 
 // ppuc.serumScene(id) -- play scene `id` in the Serum colorization.
