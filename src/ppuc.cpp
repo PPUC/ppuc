@@ -40,6 +40,7 @@
 #include "DMDUtil/Config.h"
 #include "DMDUtil/ConsoleDMD.h"
 #include "DMDUtil/DMDUtil.h"
+#include "DebugTime.h"
 #include "Uf2Image.h"
 #include "ppuc_version.h"  // <--- HINZUGEFÜGT
 #ifdef PPUC_USE_KMSDMD
@@ -6596,6 +6597,10 @@ static struct cag_option options[] = {
      .access_name = "switch-reply-delay-us",
      .value_name = "VALUE",
      .description = "Per-board switch reply delay in microseconds"},
+    {.identifier = '\x03',
+     .access_name = "switch-idle-refresh-polls",
+     .value_name = "VALUE",
+     .description = "Quiet polls before a board re-reads its switches by itself, 0-255, 0 is off (default 100)"},
     {.identifier = '\x02',
      .access_name = "switch-min-hold-ms",
      .value_name = "VALUE",
@@ -6839,7 +6844,8 @@ struct PpucEngineHost final : GameEngineHost
       const uint8_t brightness = state != 0 ? mapping.onBrightness : mapping.offBrightness;
       if (opt_debug || opt_debug_coils)
       {
-        printf("Coil GI mapping: solenoid=%d, state=%d, gi=%u, brightness=%u\n", number, state, mapping.gi, brightness);
+        printf("[%10.3f] Coil GI mapping: solenoid=%d, state=%d, gi=%u, brightness=%u\n", DebugTimestampMs(), number,
+               state, mapping.gi, brightness);
       }
       pPpuc->SetGIState(mapping.gi, brightness);
     }
@@ -7176,6 +7182,8 @@ int main(int argc, char** argv)
   // The buffer is the same size either way; what changes is one write per
   // line, and ppuc prints a few lines a minute unless a --debug flag is on.
   setvbuf(stdout, nullptr, _IOLBF, BUFSIZ);
+  // Zero for the timestamps on the --debug-* lines.
+  DebugTimestampMs();
 
   // version info
   printf("PPUC Version: %s\n", PPUC_EXECUTABLE_VERSION);
@@ -7205,6 +7213,8 @@ int main(int argc, char** argv)
   bool opt_allow_unvalidated_firmware_update = false;
   const char* opt_switch_reply_delay_us_arg = NULL;
   uint32_t opt_switch_reply_delay_us = 0;
+  const char* opt_switch_idle_refresh_polls_arg = NULL;
+  uint32_t opt_switch_idle_refresh_polls = 100;
   const char* opt_switch_refresh_idle_ms_arg = NULL;
   uint32_t opt_switch_refresh_idle_ms = kDefaultSwitchRefreshIdleMs;
   const char* opt_switch_min_hold_ms_arg = NULL;
@@ -7505,6 +7515,8 @@ int main(int argc, char** argv)
           opt_allow_unvalidated_firmware_update = ParseIniBool(value);
         else if (key == "SwitchReplyDelayUs")
           opt_switch_reply_delay_us_arg = DuplicateOptionalIniString(value);
+        else if (key == "SwitchIdleRefreshPolls")
+          opt_switch_idle_refresh_polls_arg = DuplicateOptionalIniString(value);
         else if (key == "SwitchRefreshIdleMs")
           opt_switch_refresh_idle_ms_arg = DuplicateOptionalIniString(value);
         else if (key == "SwitchMinHoldMs")
@@ -7810,6 +7822,9 @@ int main(int argc, char** argv)
       case '7':
         opt_switch_reply_delay_us_arg = cag_option_get_value(&cag_context);
         break;
+      case '\x03':
+        opt_switch_idle_refresh_polls_arg = cag_option_get_value(&cag_context);
+        break;
       case 'g':
         opt_switch_refresh_idle_ms_arg = cag_option_get_value(&cag_context);
         break;
@@ -7979,6 +7994,14 @@ int main(int argc, char** argv)
   if (opt_switch_reply_delay_us_arg && !ParseUint32Strict(opt_switch_reply_delay_us_arg, &opt_switch_reply_delay_us))
   {
     fprintf(stderr, "Invalid value for --switch-reply-delay-us: %s\n", opt_switch_reply_delay_us_arg);
+    return 1;
+  }
+  if (opt_switch_idle_refresh_polls_arg &&
+      (!ParseUint32Strict(opt_switch_idle_refresh_polls_arg, &opt_switch_idle_refresh_polls) ||
+       opt_switch_idle_refresh_polls > 255))
+  {
+    fprintf(stderr, "Invalid value for --switch-idle-refresh-polls: %s (0 to 255)\n",
+            opt_switch_idle_refresh_polls_arg);
     return 1;
   }
   if (opt_switch_min_hold_ms_arg && !ParseUint32Strict(opt_switch_min_hold_ms_arg, &opt_switch_min_hold_ms))
@@ -8574,6 +8597,7 @@ int main(int argc, char** argv)
   pPpuc->SetSkippedBoardsCsv(opt_skip_boards);
   pPpuc->SetCoilHoldFrames(opt_coil_hold_frames);
   pPpuc->SetSwitchReplyDelayUs(opt_switch_reply_delay_us);
+  pPpuc->SetSwitchIdleRefreshPolls(opt_switch_idle_refresh_polls);
   pPpuc->SetSwitchRefreshIdleMs(opt_switch_refresh_idle_ms);
   pPpuc->SetOutputFrameIntervalMs(opt_output_frame_interval_ms);
   pPpuc->SetDisableFastFlipForTests(bench_test_mode);
@@ -8764,7 +8788,7 @@ int main(int argc, char** argv)
           {
             if (opt_debug || opt_debug_effects)
             {
-              printf("Effect trigger emitted: id=%u value=%u\n", id, value);
+              printf("[%10.3f] Effect trigger emitted: id=%u value=%u\n", DebugTimestampMs(), id, value);
             }
             if (pPpuc != nullptr)
             {
@@ -9516,7 +9540,7 @@ int main(int argc, char** argv)
 
         if (opt_debug || opt_debug_switches)
         {
-          printf("Switch updated: #%d, %d\n", switchState->number, newSwitchState);
+          printf("[%10.3f] Switch updated: #%d, %d\n", DebugTimestampMs(), switchState->number, newSwitchState);
         }
 
         if (pMediaPluginHost != nullptr)
@@ -9574,7 +9598,7 @@ int main(int argc, char** argv)
 
         if (opt_debug || opt_debug_lamps)
         {
-          printf("Lamp updated: #%d, %d\n", lampNo, lampState);
+          printf("[%10.3f] Lamp updated: #%d, %d\n", DebugTimestampMs(), lampNo, lampState);
         }
 
         if (pMediaPluginHost != nullptr)
@@ -9610,7 +9634,7 @@ int main(int argc, char** argv)
 
           if (opt_debug || opt_debug_lamps)
           {
-            printf("GI updated: #%d, %d\n", giString, giState);
+            printf("[%10.3f] GI updated: #%d, %d\n", DebugTimestampMs(), giString, giState);
           }
 
           if (pMediaPluginHost != nullptr)

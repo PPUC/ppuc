@@ -6,13 +6,14 @@
 #include <cstring>
 #include <unordered_set>
 
+#include "DebugTime.h"
 #include "DmdSourceSelect.h"
 #include "PinmameNvramMapLoader.h"
-#include "vpxhost/PluginBus.h"
 #include "SegmentDigitDecode.h"
 #include "pinmame/PinMAMEPlugin.h"
 #include "plugins/ControllerPlugin.h"
 #include "plugins/SerumPlugin.h"
+#include "vpxhost/PluginBus.h"
 
 #if defined(__linux__)
 #include <pthread.h>
@@ -391,7 +392,7 @@ void PluginEngine::SampleRomSpeeds(uint64_t nowMs)
     {
       if (m_options.debugCoils)
       {
-        std::printf("Coil speed: #%u, %u\n", entry.coil, speed);
+        std::printf("[%10.3f] Coil speed: #%u, %u\n", DebugTimestampMs(), entry.coil, speed);
       }
       m_pHost->OnCoilSpeedChanged(entry.coil, speed);
     }
@@ -564,7 +565,7 @@ void PluginEngine::PollThreadMain()
         }
         if (m_options.debugCoils)
         {
-          std::printf("Coil updated: #%u, %u\n", numbers[i], value);
+          std::printf("[%10.3f] Coil updated: #%u, %u\n", DebugTimestampMs(), numbers[i], value);
         }
         m_pHost->OnCoilChanged(numbers[i], value);
       }
