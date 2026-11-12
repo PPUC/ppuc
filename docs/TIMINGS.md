@@ -15,7 +15,7 @@ stages are paid twice: once to report the opto, once to send the coil.
 
 | Stage | Where | Bounded by |
 |---|---|---|
-| Board debounce | io-boards | `debounce` + `debounceMode` per switch. Fast Flip reports the first edge at once. |
+| Board debounce | io-boards | `debounce` + `debounceMode` per switch. Fast Flip reports a close at once; since firmware 0.4.3 a release only once the input has stayed open for the debounce window. |
 | Wait to be polled | libppuc | one switch-chain pass, plus the idle interval when nothing is queued |
 | Host → PinMAME | ppuc | main loop (20 µs) and the time fence (1 ms steps) |
 | ROM decides | ROM | the ROM's own switch scan; about 5 ms for a WPC ROM to accept a closure |
@@ -35,7 +35,7 @@ These are the ones worth tuning.
 | `kBaudRate` | 250000 | `io-boards/src/PPUCProtocolV2.h` | wire time of every frame and reply | The ADM3483's rated maximum since firmware 0.4.0 (was 115200). No headroom left above it. |
 | Output frame interval (`OutputFrameIntervalMs`, `RS485_COMM_DEFAULT_OUTPUT_FRAME_INTERVAL_MS`, `kDefaultOutputFrameIntervalMs`) | 4 ms | `libppuc/src/RS485Comm.h`, `ppuc/src/ppuc.cpp`, config-tool `field_ini_output_frame_ms` | Idle wait before the next pass when nothing is queued. A busy game queues lamp snapshots and skips it; a quiet stretch pays it on **every** pass, which delays every switch report by up to that much. | **Candidate.** A coil change now cuts the wait short, but a switch still waits for the next pass. Try 2 or 1 ms on Dirty Harry; the cost is bus occupancy, not correctness. Settable per game in config-tool. |
 | `RS485_MODE_SWITCH_DELAY` | 50 µs, twice per reply | `io-boards/src/EventDispatcher/Event.h` | 100 µs per board per pass: 0.5 ms a pass on a five-board chain | **Candidate, after measuring.** The ADM3483's driver enable is in the hundreds of nanoseconds; this covers the host adapter's turnaround and loop jitter. Lower only with the DE lines on a scope, see `BUS_MEASUREMENT.md`. Also referenced by `kReadTimeoutSlackUs`. |
-| `switchReplyDelayUs` (`SwitchReplyDelayUs`) | 0 | firmware, libppuc, ppuc, config-tool | delay × boards per pass, plus a quarter of it again as post-TX settle | Keep at 0 on firmware ≥ 0.3.0, whose 512-byte receive FIFO made it unnecessary. |
+| `switchReplyDelayUs` (`SwitchReplyDelayUs`) | 0 | firmware, libppuc, ppuc, config-tool | Since firmware 0.4.4 once per pass, before the reply that follows the host's frame (before: delay × boards). Plus a quarter of it as post-TX settle after every reply. | Depends on the host adapter: 300–500 µs on a Raspberry Pi carrier board, whose UART releases the bus in software, 0 on a USB adapter with automatic direction control. See `RS485_HOST_ADAPTERS.md`. |
 | `RS485_COMM_SLOW_SWITCH_POLL_DIVIDER` | 8 | `libppuc/src/RS485Comm.h` | a `slowSwitches` board is polled every eighth pass | Not used on Dirty Harry: the gun trigger on the cabinet board needs every pass. |
 | Coil poll (`coilPollHz`) | 1000 Hz | `ppuc/src/PluginEngine.h` | up to 1 ms between the ROM setting a coil and the host seeing it | Could go to 2000 Hz; worth little against the bus. |
 | `timeFenceLeadUs` | 1000 µs | `ppuc/src/PluginEngine.h` | how far PinMAME may run ahead of the wall clock | `--no-time-fence` restores the old 16 ms bursts, for comparison only. Not exposed as a value. |

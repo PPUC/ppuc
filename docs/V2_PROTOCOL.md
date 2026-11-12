@@ -47,6 +47,9 @@ is what tells you.
 One pair is shared by the host and every board, so exactly one device may drive
 the line at a time. Each board controls its transceiver with a **DE** (driver
 enable) GPIO and returns to receive mode as soon as its reply has left the wire.
+How the *host* hands the line over depends on its adapter: a Raspberry Pi's
+UART releases it in software, a USB-RS485 adapter in hardware. See
+[`RS485_HOST_ADAPTERS.md`](RS485_HOST_ADAPTERS.md).
 
 Boards are not polled individually by address. The host names the next board to
 speak in the frame header (`nextBoard`), and each board's reply names the one
@@ -711,7 +714,7 @@ driving switch must be released before it fires again.
 | Constant | Value | Meaning |
 |---|---|---|
 | `RS485_MODE_SWITCH_DELAY` | 50 µs | Between asserting DE and the first bit, and around releasing. |
-| `switchReplyDelayUs` | **0** by default | Wait before asserting DE. Set via `--switch-reply-delay-us` or `SwitchReplyDelayUs` in the INI — **never** in the game YAML. |
+| `switchReplyDelayUs` | **0** by default | Wait before asserting DE. Since firmware 0.4.4 only for the reply that follows the host's own frame, not one that follows another board. Set via `--switch-reply-delay-us` or `SwitchReplyDelayUs` in the INI — **never** in the game YAML. 300–500 µs on a Raspberry Pi carrier board, 0 on a USB adapter; see [`RS485_HOST_ADAPTERS.md`](RS485_HOST_ADAPTERS.md). |
 | post-TX settle | `switchReplyDelayUs / 4`, capped 2000 µs | Stalls the board after it has already gone high-Z. |
 | frame read timeout | frame wire time + 25 % + 700 µs | How long `readBytes()` waits for a frame it has started reading. |
 | UART receive buffer | 512 bytes (`Serial1.setFIFOSize`) | ~20 ms of traffic at 250000 baud (~44 ms at 115200). Must exceed `kMaxFrameBytes`. |
@@ -774,6 +777,13 @@ Two traps this leaves behind, both worth stating plainly:
   on the playfield reproduces it.
 - **`switchReplyDelayUs` must not be lowered on firmware older than 0.3.0.**
 
+The receive buffer is not the only thing the delay covers. A host that releases
+its own transceiver late — a Raspberry Pi's UART does it in software, after an
+interrupt — collides with the first board's reply however large the buffer is.
+That is a property of the host adapter, not of the boards, and since firmware
+0.4.4 the delay is paid only on that one handover. See
+[`RS485_HOST_ADAPTERS.md`](RS485_HOST_ADAPTERS.md).
+
 ### Host side
 
 | Constant | Value | Meaning |
@@ -788,9 +798,10 @@ Two traps this leaves behind, both worth stating plainly:
 | `kDefaultOutputFrameIntervalMs` | 4 ms | Output broadcast interval. |
 | `kDefaultSwitchRefreshIdleMs` | 15 s | Idle before a forced full refresh. |
 
-Note that `switchReplyDelayUs` adds `delay × boards` to the board-side chain
-**and** the same amount to the host's window, so with respect to that window the
-two roughly cancel.
+The host's window still adds `delay × boards`. Since firmware 0.4.4 the boards
+spend the delay only once per round, so the window is generous by
+`delay × (boards − 1)`; that only lengthens the wait before a chain counts as
+missed.
 
 **Where the 40 ms comes from.** It is not arbitrary, though it reads that way.
 A board occupies the chain for its reply on the wire, plus its blind time, plus

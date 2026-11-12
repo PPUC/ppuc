@@ -42,6 +42,9 @@ Companion documents in this directory:
 - [`BUS_MEASUREMENT.md`](BUS_MEASUREMENT.md) — logic-analyzer brief for
   establishing real RS485 cycle timing and what the switch-reply delay
   compensates for.
+- [`RS485_HOST_ADAPTERS.md`](RS485_HOST_ADAPTERS.md) — Raspberry Pi carrier
+  board versus USB-RS485 adapters, how each hands the bus over, and what
+  `SwitchReplyDelayUs` to use with each.
 - [`TIMINGS.md`](TIMINGS.md) — every hardcoded delay, poll rate and timeout a
   switch or coil can wait behind, and which of them are worth tuning.
 - [`V2_PROTOCOL.md`](V2_PROTOCOL.md) — reference for the V2 wire protocol:
