@@ -6857,6 +6857,15 @@ struct PpucEngineHost final : GameEngineHost
   void OnGameRunningChanged(bool gameRunning) override
   {
     g_gameInProgress.store(gameRunning, std::memory_order_release);
+    // Board flippers: on for the whole game, off at game over. Deliberately not
+    // the game-on solenoid, which drops between balls and is what the boards
+    // stop listening to in this mode. Where the NVRAM map has no game_over flag,
+    // a game running is that solenoid after all, and the flippers then go off
+    // between balls as before.
+    if (pPpuc != nullptr)
+    {
+      pPpuc->SetFlippersEnabled(gameRunning);
+    }
     if (pAudioOutput != nullptr)
     {
       pAudioOutput->SetMusicEnabled(gameRunning);
@@ -8601,6 +8610,15 @@ int main(int argc, char** argv)
   pPpuc->SetSwitchRefreshIdleMs(opt_switch_refresh_idle_ms);
   pPpuc->SetOutputFrameIntervalMs(opt_output_frame_interval_ms);
   pPpuc->SetDisableFastFlipForTests(bench_test_mode);
+  if (pPpuc->UsesBoardFlippers() && !bench_test_mode)
+  {
+    std::string coils;
+    for (uint16_t coil : pPpuc->GetBoardFlipperCoils())
+    {
+      coils += (coils.empty() ? "" : ", ") + std::to_string(coil);
+    }
+    printf("Flippers: driven by the boards between game start and game over (coils %s)\n", coils.c_str());
+  }
 
   if (opt_debug || opt_debug_errors)
   {
