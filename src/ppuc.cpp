@@ -5920,14 +5920,17 @@ static void ReportBoardStats(PPUC* pPpuc, const char* when)
       printf("PPUC:   board %u did not answer the stats query\n", s.board);
       continue;
     }
-    printf("PPUC:   board %u: selected=%u txFrames=%u missedReplies=%d versionQueries=%u versionReplies=%u gate=%s%s gameOn=%u doorSw=%u rxFrames=%u rxCrcFail=%u\n",
+    // The reset cause says why the board last started; rxFrames how long ago,
+    // roughly: a board that has just come back has seen a handful of frames
+    // where the others have seen hundreds of thousands.
+    printf("PPUC:   board %u: selected=%u txFrames=%u missedReplies=%d versionQueries=%u versionReplies=%u gate=%s%s gameOn=%u doorSw=%u rxFrames=%u rxCrcFail=%u lastStart=%s\n",
            s.board, s.selected, s.txFrames,
            static_cast<int>(s.selected) - static_cast<int>(s.txFrames),
            s.versionQueries, s.versionReplies,
            (s.highPowerGate & 1) ? "powerOn " : "powerOFF ",
            (s.highPowerGate & 2) ? "doorClosed" : "doorOPEN",
            (s.highPowerGate >> 8) & 0xFF, (s.highPowerGate >> 16) & 0xFF,
-           s.rxFrames, s.rxCrcFail);
+           s.rxFrames, s.rxCrcFail, PPUC::ResetCauseName(s.resetCause));
   }
 }
 
@@ -9549,13 +9552,19 @@ int main(int argc, char** argv)
       // it without the full configuration pass that only startup performs.
       if (!opt_no_serial && pPpuc != nullptr)
       {
-        const uint32_t lostConfiguration = pPpuc->GetBusHealth().boardsLostConfiguration;
+        const PPUCBusHealth health = pPpuc->GetBusHealth();
+        const uint32_t lostConfiguration = health.boardsLostConfiguration;
         if (lostConfiguration > boardsLostConfigurationSeen)
         {
           boardsLostConfigurationSeen = lostConfiguration;
           fprintf(stderr,
-                  "PPUC: a board restarted and lost its configuration; ending the game.\n"
-                  "PPUC: restart ppuc-pinmame to reconfigure the boards before playing again.\n");
+                  "PPUC: board %u restarted and lost its configuration; ending the game.\n"
+                  "PPUC: restart ppuc-pinmame to reconfigure the boards before playing again.\n",
+                  health.lastBoardLostConfiguration);
+          // Which board it was is taken from its place in the switch chain,
+          // and the chain is what was failing. Every board says itself why it
+          // last started, and how many frames it has seen since.
+          ReportBoardStats(pPpuc, "after a board restarted");
           running = false;
           shutdown_requested = 1;
           break;
