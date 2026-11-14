@@ -5108,7 +5108,8 @@ static void ReportBusHealth()
 //   high score entry, so the first save has the scores but not the initials.
 // - When the coin door is closed, a little later, so that the ROM has left
 //   the service menu and stored what was changed in it. Only with a real coin
-//   door switch: a door that CloseCoinDoor holds shut never closes.
+//   door switch: a door that CloseCoinDoor holds shut never closes. And not
+//   while a game is running, where the stall costs coils; its end saves.
 //
 // A save that finds NVRAM identical to the last one written writes nothing.
 static const uint64_t kNvramSaveIntervalMs = 90000;
@@ -5186,7 +5187,19 @@ static void ServiceNvramSave(GameEngine* pEngine)
   if (g_nvramCoinDoorSaveAtMs != 0 && nowMs >= g_nvramCoinDoorSaveAtMs)
   {
     g_nvramCoinDoorSaveAtMs = 0;
-    SaveNvramNow(pEngine, "coin door closed");
+    // Not in a game. A save stops the emulation for as long as the write to
+    // the stick takes, and in a game that is coils firing late or not at all
+    // -- the door is opened mid-game to clear a stuck ball as often as for
+    // the service menu. Whatever the menu changed is written with the game's
+    // end, which saves the same memory.
+    if (gameRunning)
+    {
+      printf("PPUC: NVRAM save for the closed coin door skipped, a game is running; it is saved at game over\n");
+    }
+    else
+    {
+      SaveNvramNow(pEngine, "coin door closed");
+    }
   }
 
   if (nowMs < g_nextNvramSaveMs)
