@@ -85,6 +85,10 @@ class MediaPluginHost
   // Whether there is a backglass window to draw into at all. A machine with a
   // translite, or with no video, has none and the overlay opens its own.
   bool HasBackglass() const;
+  // The window the backglass is presented in, or null. Only for asking where
+  // it is: whoever else draws to the same screen has to stand aside while the
+  // overlay is up, and that is decided by whether the windows overlap.
+  SDL_Window* BackglassWindow() const;
   void QueueSegmentDisplay(int digit, int value);
   void QueuePlayerScore(int player, int score);
   void QueueDmdTrigger(uint16_t id);

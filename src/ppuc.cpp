@@ -7182,6 +7182,121 @@ static void ServicePlayfieldAssist(GameEngine* pEngine)
   }
 }
 
+#ifndef PPUC_USE_KMSDMD
+// The newest frame the virtual DMD was given, kept so it can be put back.
+//
+// While the tools menu or the switch monitor is up, the virtual DMD stops
+// presenting (see VirtualDmdYieldsToOverlay). Its frames keep arriving and
+// SDLDMD keeps only the newest, so when the overlay closes the next Render()
+// shows the current picture -- but only if a frame arrived meanwhile. A DMD
+// standing on one frame, as on a match or a paused attract screen, would then
+// leave the screen to whatever the overlay window left behind, and on KMS/DRM
+// that is the console: closing a window puts the CRTC back the way SDL found
+// it. SDLDMD itself has no way to show its last frame again, so this keeps a
+// copy, registered with libdmdutil at the same size so it is handed exactly
+// the frames the virtual DMD is.
+class VirtualDmdLastFrame : public DMDUtil::RGB24DMD
+{
+ public:
+  using DMDUtil::RGB24DMD::RGB24DMD;
+
+  // libdmdutil's output thread.
+  void Update(uint8_t* pData, uint16_t width = 0, uint16_t height = 0) override
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    DMDUtil::RGB24DMD::Update(pData, width, height);
+    if (!m_update) return;
+    m_update = false;
+    frame_.assign(m_pData, m_pData + m_length);
+  }
+
+  bool CopyTo(std::vector<uint8_t>* pOut)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (frame_.empty()) return false;
+    *pOut = frame_;
+    return true;
+  }
+
+ private:
+  std::mutex mutex_;
+  std::vector<uint8_t> frame_;
+};
+
+// The virtual DMD's window. libsdldmd does not hand it out, so it is found by
+// the title ppuc gave it.
+static SDL_Window* FindWindowByTitle(const char* title)
+{
+  int count = 0;
+  SDL_Window** windows = SDL_GetWindows(&count);
+  SDL_Window* found = nullptr;
+  for (int i = 0; windows != nullptr && i < count; ++i)
+  {
+    const char* windowTitle = SDL_GetWindowTitle(windows[i]);
+    if (windowTitle != nullptr && strcmp(windowTitle, title) == 0)
+    {
+      found = windows[i];
+      break;
+    }
+  }
+  SDL_free(windows);
+  return found;
+}
+
+// Whether two windows end up on the same pixels.
+//
+// On KMS/DRM there is no compositor. Every window is the whole panel of its
+// display, and a present flips that panel to the window that presented -- so
+// two windows on one display are always in each other's way, wherever SDL
+// believes they are. Elsewhere a fullscreen window covers its display, and
+// two windows otherwise only meet where their rectangles do.
+static bool WindowsShareScreen(SDL_Window* a, SDL_Window* b)
+{
+  if (a == nullptr || b == nullptr || a == b) return false;
+  if (SDL_GetDisplayForWindow(a) != SDL_GetDisplayForWindow(b)) return false;
+
+  const char* driver = SDL_GetCurrentVideoDriver();
+  if (driver != nullptr && strcmp(driver, "kmsdrm") == 0) return true;
+  if ((SDL_GetWindowFlags(a) & SDL_WINDOW_FULLSCREEN) || (SDL_GetWindowFlags(b) & SDL_WINDOW_FULLSCREEN)) return true;
+
+  SDL_Rect ra{}, rb{};
+  if (!SDL_GetWindowPosition(a, &ra.x, &ra.y) || !SDL_GetWindowSize(a, &ra.w, &ra.h) ||
+      !SDL_GetWindowPosition(b, &rb.x, &rb.y) || !SDL_GetWindowSize(b, &rb.w, &rb.h))
+  {
+    // Not knowing is treated as overlapping: a DMD that pauses for a menu it
+    // did not need to is a far smaller fault than a menu that flickers.
+    return true;
+  }
+  return SDL_HasRectIntersection(&ra, &rb);
+}
+
+// The window the tools menu and the monitor are drawn into this pass: the
+// backglass when the media host has one up, which draws the overlay into its
+// own frame, otherwise the translite window or the one the overlay opened.
+static SDL_Window* OverlayHostWindow()
+{
+  if (pMediaPluginHost != nullptr && pMediaPluginHost->HasBackglass())
+  {
+    return pMediaPluginHost->BackglassWindow();
+  }
+  return pTransliteRenderer != nullptr ? pTransliteWindow : nullptr;
+}
+
+// Whether the virtual DMD must stop presenting because a service tool owns its
+// screen.
+//
+// Both present full frames on their own schedule: the DMD at its frame rate,
+// the overlay at 10 Hz (or the backglass at its own). Where both land on the
+// same panel the screen shows whichever presented last, which on Dirty Harry
+// -- virtual DMD and menu on one KMS/DRM display -- is the menu flickering
+// through a running DMD. Only the tools count, not the slideshow or the song
+// chooser: without a tool open nothing changes.
+static bool VirtualDmdYieldsToOverlay(SDL_Window* dmdWindow)
+{
+  return g_overlay != OverlayScreen::None && WindowsShareScreen(dmdWindow, OverlayHostWindow());
+}
+#endif
+
 int main(int argc, char** argv)
 {
   // Line-buffered even into a pipe. On a cabinet stdout is always one: the
@@ -7267,6 +7382,8 @@ int main(int argc, char** argv)
   DMDUtil::KMSDMD* pVirtualDMD = nullptr;
 #else
   DMDUtil::SDLDMD* pVirtualDMD = nullptr;
+  // Owned by libdmdutil once added; destroyed through it, before pDmd.
+  VirtualDmdLastFrame* pVirtualDmdLastFrame = nullptr;
 #endif
 
   for (int i = 1; i < argc; ++i)
@@ -9014,6 +9131,9 @@ int main(int argc, char** argv)
       printf("SDL couldn't create virtual DMD window/renderer: %s\n", SDL_GetError());
       return SDL_APP_FAILURE;
     }
+
+    pVirtualDmdLastFrame = new VirtualDmdLastFrame(opt_virtual_dmd_hd ? 256 : 128, opt_virtual_dmd_hd ? 64 : 32);
+    pDmd->AddRGB24DMD(pVirtualDmdLastFrame);
 #endif
   }
 
@@ -9688,6 +9808,16 @@ int main(int argc, char** argv)
         stallWatch.Phase("media");
       }
 
+      // While a tool is open in the translite window, the translite is not
+      // drawn there: it would present the bare image over the menu or the
+      // monitor until their next repaint, a tenth of a second later, and a
+      // game changing state behind the menu made it flash. The requests stay
+      // queued and are drawn once the tool closes, which also asks for one.
+      // With a backglass up the tool is drawn there instead, and this window
+      // is not in its way.
+      const bool toolOwnsTranslite = g_overlay != OverlayScreen::None && ServiceScreenWanted() &&
+                                     (pMediaPluginHost == nullptr || !pMediaPluginHost->HasBackglass());
+      if (!toolOwnsTranslite)
       {  // Needs to be a separate scope for the lock_guard
         // Process any pending render requests
         std::lock_guard<std::mutex> lock(renderMutex);
@@ -9817,9 +9947,56 @@ int main(int argc, char** argv)
       // to this one: drawing there failed silently on the Pi's KMS/DRM backend,
       // and the boot splash stayed on the screen for the whole game. Returns at
       // once when no new frame is waiting.
+      //
+      // Not while a tool owns the screen the DMD is on. Two windows that both
+      // present to one KMS/DRM panel take turns on it, and the DMD presents
+      // far more often than the menu does, so the menu only flashed through.
+      // Its frames keep arriving and only the newest is kept; when the tool
+      // closes the DMD is raised back above it (on a desktop) and shows the
+      // current picture at once -- the last one again if none came meanwhile.
       if (pVirtualDMD)
       {
-        pVirtualDMD->Render();
+        static SDL_Window* virtualDmdWindow = nullptr;
+        static bool virtualDmdYielding = false;
+        if (virtualDmdWindow == nullptr)
+        {
+          virtualDmdWindow = FindWindowByTitle("PPUC DMD");
+        }
+
+        const bool yield = VirtualDmdYieldsToOverlay(virtualDmdWindow);
+        if (yield)
+        {
+          if (!virtualDmdYielding)
+          {
+            // On a desktop the DMD window may sit above the one the tool is
+            // drawn in. KMS/DRM has no stacking, and not presenting is enough.
+            if (SDL_Window* overlayWindow = OverlayHostWindow())
+            {
+              SDL_RaiseWindow(overlayWindow);
+            }
+          }
+        }
+        else if (virtualDmdYielding)
+        {
+          if (virtualDmdWindow != nullptr)
+          {
+            SDL_RaiseWindow(virtualDmdWindow);
+          }
+          if (!pVirtualDMD->Render())
+          {
+            static std::vector<uint8_t> lastFrame;
+            if (pVirtualDmdLastFrame != nullptr && pVirtualDmdLastFrame->CopyTo(&lastFrame))
+            {
+              pVirtualDMD->Update(lastFrame.data(), opt_virtual_dmd_hd ? 256 : 128, opt_virtual_dmd_hd ? 64 : 32);
+              pVirtualDMD->Render();
+            }
+          }
+        }
+        else
+        {
+          pVirtualDMD->Render();
+        }
+        virtualDmdYielding = yield;
       }
 
       SDL_Event event;
@@ -10024,6 +10201,8 @@ int main(int argc, char** argv)
 #ifdef PPUC_USE_KMSDMD
     if (pDmd) DMDUtil::DestroyKMSDMD(*pDmd, pVirtualDMD);
 #else
+    if (pDmd && pVirtualDmdLastFrame) pDmd->DestroyRGB24DMD(pVirtualDmdLastFrame);
+    pVirtualDmdLastFrame = nullptr;
     if (pDmd) DMDUtil::DestroySDLDMD(*pDmd, pVirtualDMD);
 #endif
     pVirtualDMD = nullptr;

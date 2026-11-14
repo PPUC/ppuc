@@ -473,6 +473,7 @@ public:
   void QueueEvent(char source, int id, int value);
   void SetOverlayDraw(MediaPluginHost::OverlayDraw draw) { overlayDraw_ = std::move(draw); }
   bool HasBackglass() const { return backglassRenderer_ != nullptr; }
+  SDL_Window* BackglassWindow() const { return backglassRenderer_ != nullptr ? backglassWindow_ : nullptr; }
   void QueueSegmentDisplay(int digit, int value);
   void QueuePlayerScore(int player, int score);
   void QueueDmdTrigger(uint16_t id);
@@ -1787,6 +1788,8 @@ void MediaPluginHost::QueueEvent(char source, int id, int value)
 void MediaPluginHost::SetOverlayDraw(OverlayDraw draw) { impl_->SetOverlayDraw(std::move(draw)); }
 
 bool MediaPluginHost::HasBackglass() const { return impl_->HasBackglass(); }
+
+SDL_Window* MediaPluginHost::BackglassWindow() const { return impl_->BackglassWindow(); }
 
 void MediaPluginHost::QueueSegmentDisplay(int digit, int value)
 {
