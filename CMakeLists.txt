@@ -39,6 +39,43 @@ set(VERSION_PATCH "${CMAKE_MATCH_1}")
 project(ppuc_executable VERSION "${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_PATCH}"
    DESCRIPTION "Pinball Power-Up Controller (PPUC)")
 
+# The commit this build is made from, printed at startup and so in every log. A
+# packaged build passes the commit it fetched (the buildroot recipe does);
+# otherwise it is read from git here, at configure time, marked -dirty when the
+# tree has uncommitted changes.
+set(PPUC_GIT_SHA "" CACHE STRING "Commit ppuc is built from; read from git when empty")
+if(PPUC_GIT_SHA STREQUAL "")
+   find_package(Git QUIET)
+   if(GIT_FOUND)
+      # Only this project's own checkout. Unpacked inside another repository,
+      # as buildroot does inside the image's, git would answer for that one.
+      execute_process(COMMAND "${GIT_EXECUTABLE}" -C "${CMAKE_CURRENT_SOURCE_DIR}" rev-parse --show-toplevel
+         OUTPUT_VARIABLE _ppuc_toplevel OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+      file(REAL_PATH "${CMAKE_CURRENT_SOURCE_DIR}" _ppuc_source_real)
+      if(_ppuc_toplevel)
+         file(REAL_PATH "${_ppuc_toplevel}" _ppuc_toplevel)
+      endif()
+      execute_process(COMMAND "${GIT_EXECUTABLE}" -C "${CMAKE_CURRENT_SOURCE_DIR}" rev-parse HEAD
+         OUTPUT_VARIABLE _ppuc_sha OUTPUT_STRIP_TRAILING_WHITESPACE
+         RESULT_VARIABLE _ppuc_sha_result ERROR_QUIET)
+      if(_ppuc_sha_result EQUAL 0 AND "${_ppuc_toplevel}" STREQUAL "${_ppuc_source_real}")
+         set(_ppuc_effective_sha "${_ppuc_sha}")
+         execute_process(COMMAND "${GIT_EXECUTABLE}" -C "${CMAKE_CURRENT_SOURCE_DIR}" diff --quiet HEAD
+            RESULT_VARIABLE _ppuc_dirty ERROR_QUIET)
+         if(NOT _ppuc_dirty EQUAL 0)
+            string(APPEND _ppuc_effective_sha "-dirty")
+         endif()
+      endif()
+   endif()
+else()
+   set(_ppuc_effective_sha "${PPUC_GIT_SHA}")
+endif()
+if(NOT _ppuc_effective_sha)
+   set(_ppuc_effective_sha "unknown")
+endif()
+message(STATUS "PPUC_GIT_SHA: ${_ppuc_effective_sha}")
+add_compile_definitions(PPUC_EXECUTABLE_SHA="${_ppuc_effective_sha}")
+
 if(PLATFORM STREQUAL "win")
    if(ARCH STREQUAL "x86")
       add_compile_definitions(WIN32)

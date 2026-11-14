@@ -7323,8 +7323,12 @@ int main(int argc, char** argv)
   DebugTimestampMs();
 
   // version info
+  // Versions and commits first, so every log says what produced it. The
+  // boards' firmware follows once they have answered.
   printf("PPUC Version: %s\n", PPUC_EXECUTABLE_VERSION);
   printf("Commit SHA: %s\n", PPUC_EXECUTABLE_SHA);
+  printf("libppuc Version: %s\n", PPUC::GetLibraryVersion());
+  printf("libppuc Commit SHA: %s\n", PPUC::GetLibraryCommit());
 
   // Setup signal handlers to allow graceful termination
   signal(SIGINT, signal_handler_graceful);
