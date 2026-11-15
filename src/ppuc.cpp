@@ -539,6 +539,11 @@ const char* opt_pup_folder = NULL;
 const char* opt_altsound_folder = NULL;
 bool opt_console_display = false;
 bool opt_hard_reset = false;
+// [Runtime] NvramSave. Off, ppuc never saves NVRAM by itself: not at game over,
+// not after the coin door, not on the timer, not before the Serum shutdown.
+// Every save stops the emulation for as long as the write to the stick takes.
+// What PinMAME writes when it is stopped cleanly is its own and stays.
+bool opt_nvram_save = true;
 const char* opt_virtual_dmd_renderer = "dots";
 const char* opt_pinmame_path = NULL;
 const char* opt_rom = NULL;
@@ -5102,7 +5107,9 @@ static void ReportBusHealth()
 // was a factory reset. So the moments that matter are also saved outright,
 // whatever NVRAM is doing:
 //
-// - When a game ends: g_gameInProgress going false. That is the ROM's own
+// All of them in attract mode only; see ServiceNvramSave.
+//
+// - A few seconds after a game ends: g_gameInProgress going false. That is the ROM's own
 //   game_over flag wherever the NVRAM map has one, and deliberately not the
 //   game-on solenoid, which on a Fliptronic or later WPC is the flipper enable
 //   and drops at every drained ball. A save stalls the emulation for as long as
@@ -5123,7 +5130,13 @@ static const uint64_t kNvramGameOverFollowUpMs = 120000;
 static const uint64_t kNvramCoinDoorDelayMs = 10000;
 static uint64_t g_nextNvramSaveMs = 0;
 static bool g_nvramSawGameRunning = false;
-static bool g_nvramGameOverSaveDue = false;
+// When the save for a game that has just ended is due. 0 for none.
+static uint64_t g_nvramGameOverSaveAtMs = 0;
+// A game ending is the ROM writing its audits and high scores, each area with
+// its own checksum. Saved in the middle of that, an area is half written, and
+// the ROM resets it at the next power-up. A few seconds into attract mode it
+// has finished.
+static const uint64_t kNvramGameOverSettleMs = 5000;
 static uint64_t g_nvramFollowUpSaveAtMs = 0;
 static uint64_t g_nvramCoinDoorSaveAtMs = 0;
 static int g_nvramCoinDoorState = -1;
@@ -5168,20 +5181,39 @@ static void ServiceNvramSave(GameEngine* pEngine)
     g_nvramSawGameRunning = gameRunning;
     if (gameRunning)
     {
-      // A new game before the follow-up: the initials are in, or were never
-      // going to be, and this game's own end schedules the next one.
+      // A new game before the saves of the last one: its result is in memory
+      // and is written when this game ends. The initials are in, or were never
+      // going to be.
+      g_nvramGameOverSaveAtMs = 0;
       g_nvramFollowUpSaveAtMs = 0;
     }
     else
     {
-      g_nvramGameOverSaveDue = true;
+      g_nvramGameOverSaveAtMs = nowMs + kNvramGameOverSettleMs;
       g_nvramFollowUpSaveAtMs = nowMs + kNvramGameOverFollowUpMs;
     }
   }
 
-  if (g_nvramGameOverSaveDue)
+  // Attract mode only, every one of them.
+  //
+  // A save stops the emulation for as long as the write to the stick takes,
+  // and in a game that is coils firing late or not at all. And a save taken
+  // while the ROM is in the middle of something can catch a checksummed area
+  // half written. Nothing is lost by waiting: what a game changes is written
+  // when it ends, and the same memory holds whatever the service menu changed.
+  if (gameRunning)
   {
-    g_nvramGameOverSaveDue = false;
+    if (g_nvramCoinDoorSaveAtMs != 0 && nowMs >= g_nvramCoinDoorSaveAtMs)
+    {
+      g_nvramCoinDoorSaveAtMs = 0;
+      printf("PPUC: NVRAM save for the closed coin door skipped, a game is running; it is saved after game over\n");
+    }
+    return;
+  }
+
+  if (g_nvramGameOverSaveAtMs != 0 && nowMs >= g_nvramGameOverSaveAtMs)
+  {
+    g_nvramGameOverSaveAtMs = 0;
     SaveNvramNow(pEngine, "game over");
   }
   if (g_nvramFollowUpSaveAtMs != 0 && nowMs >= g_nvramFollowUpSaveAtMs)
@@ -5192,19 +5224,7 @@ static void ServiceNvramSave(GameEngine* pEngine)
   if (g_nvramCoinDoorSaveAtMs != 0 && nowMs >= g_nvramCoinDoorSaveAtMs)
   {
     g_nvramCoinDoorSaveAtMs = 0;
-    // Not in a game. A save stops the emulation for as long as the write to
-    // the stick takes, and in a game that is coils firing late or not at all
-    // -- the door is opened mid-game to clear a stuck ball as often as for
-    // the service menu. Whatever the menu changed is written with the game's
-    // end, which saves the same memory.
-    if (gameRunning)
-    {
-      printf("PPUC: NVRAM save for the closed coin door skipped, a game is running; it is saved at game over\n");
-    }
-    else
-    {
-      SaveNvramNow(pEngine, "coin door closed");
-    }
+    SaveNvramNow(pEngine, "coin door closed");
   }
 
   if (nowMs < g_nextNvramSaveMs)
@@ -7690,6 +7710,8 @@ int main(int argc, char** argv)
           opt_close_coin_door = ParseIniBool(value);
         else if (key == "HardReset")
           opt_hard_reset = ParseIniBool(value);
+        else if (key == "NvramSave")
+          opt_nvram_save = ParseIniBool(value);
       }
       else if (section == "Speech")
       {
@@ -8745,6 +8767,10 @@ int main(int argc, char** argv)
   pPpuc->SetDebug(opt_debug);
   pPpuc->SetDebugErrors(opt_debug_errors);
   pPpuc->SetForceHardReset(opt_hard_reset);
+  if (!opt_nvram_save)
+  {
+    printf("NVRAM: ppuc does not save it (NvramSave=false); high scores and settings are kept only when PinMAME stops cleanly\n");
+  }
   pPpuc->SetSkippedBoardsCsv(opt_skip_boards);
   pPpuc->SetCoilHoldFrames(opt_coil_hold_frames);
   pPpuc->SetSwitchReplyDelayUs(opt_switch_reply_delay_us);
@@ -9723,7 +9749,10 @@ int main(int argc, char** argv)
       ServiceBallSearchRunner(pPpuc, ballSearchRunner, g_ballInPlay.load(std::memory_order_acquire),
                               opt_ball_search_delay_ms, opt_ball_search_round_delay_ms);
       ServiceBallTroughWatch(pEngine.get());
-      ServiceNvramSave(pEngine.get());
+      if (opt_nvram_save)
+      {
+        ServiceNvramSave(pEngine.get());
+      }
       stallWatch.Phase("switches");
 
       // Runs in both loop phases, before the readiness gate: the engine has its
@@ -10152,7 +10181,10 @@ int main(int argc, char** argv)
       // cpu_run() never runs. Before this, choosing Serum meant choosing to lose
       // the session's high scores on every clean shutdown as well as on a power
       // cut. 0 for the idle window: there is no later.
-      pEngine->SaveNvram(0);
+      if (opt_nvram_save)
+      {
+        pEngine->SaveNvram(0);
+      }
       CancelActiveBallSearch(pPpuc, ballSearchRunner);
       pPpuc->StopUpdates();
       if (!opt_no_serial)
