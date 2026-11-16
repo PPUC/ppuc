@@ -59,6 +59,12 @@ likely; leave them unless a measurement says otherwise.
 | `RS485_COMM_SERIAL_READ_TIMEOUT` | 5 ms | `libppuc/src/RS485Comm.h` | Floor of a single blocking read inside the window. |
 | `RS485_COMM_SERIAL_WRITE_TIMEOUT` | 20 ms | `libppuc/src/RS485Comm.h` | Blocking write of one frame. |
 | `RS485_COMM_SWITCH_REPLY_MISS_THRESHOLD` | 3 | `libppuc/src/RS485Comm.h` | Consecutive missed chains before a session resync. |
+| `SwitchBoardSuspension::kMissesToSuspend` / `kProbeInterval` | 3 / 1000 ms | `libppuc/src/BusRecovery.h` | Silent tokens in a row before a board is passed over, and how often a passed-over board is asked again. |
+| `RS485_COMM_SUSPENDED_BOARD_GUARD_US` | 3 ms | `libppuc/src/RS485Comm.h` | Listen before passing over a suspended board, in case it answers after all. |
+| `ResyncBackoff` | 0 → 0.5 s … 8 s | `libppuc/src/BusRecovery.h` | Wait before a resync that follows the last within 5 s; doubles each time. |
+| `RS485_COMM_RESYNC_MAPPING_SPACING_US` / `_STARTUP_` | 1 ms / 5 ms | `libppuc/src/RS485Comm.h` | Gap between mapping frames in a runtime resync / at startup. |
+| `RS485_COMM_RESYNC_SETUP_SETTLE_MS` | 20 ms | `libppuc/src/RS485Comm.h` | After the setup frame of a runtime resync (100 ms at startup). |
+| `RS485_COMM_RESYNC_POLL_HOLD_MS` | 50 ms | `libppuc/src/RS485Comm.h` | No switch polling after a runtime resync (250 ms at startup). |
 | `FrameWireTimeUs()` guard | wire time + 25 % + 200 µs | `io-boards/src/EventDispatcher/EventDispatcher.cpp` | Board-side read deadline; derived from `kBaudRate`, scales with it. |
 | `kReadTimeoutSlackUs` | 500 µs | same | Extra allowance before a partial frame is abandoned. |
 | Watchdog: loop stalled | 1000 ms | `io-boards/src/main.cpp` | High-power outputs off. |
