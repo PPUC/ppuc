@@ -429,51 +429,13 @@ void PluginEngine::PollThreadMain()
   uint64_t fetches = 0;
   uint64_t worstLateUs = 0;
   uint64_t nextReportMs = NowMs() + 1000;
-
-  // PinMAME's time fence, moved forward from here on every tick.
-  //
-  // Left to itself, libpinmame paces the emulation one video frame at a time:
-  // it runs ~16 ms of machine time as fast as it can, then sleeps until the wall
-  // clock catches up. Everything the host does lands in that rhythm. A switch
-  // closed and opened again while the emulation sleeps is never seen by the
-  // ROM -- a ball glancing off a standup target closes it for a few ms -- and a
-  // switch the ROM must answer quickly, like a ramp opto in front of a diverter,
-  // waits up to a frame before the CPU even looks at it. VPinMAME on Windows
-  // softens this with its low-latency throttle; libpinmame has no such option.
-  //
-  // The fence is what VPX uses to keep the emulation in step with its physics:
-  // the emulated CPU may run up to the fence and parks there until it moves.
-  // Moving it every tick turns the 16 ms bursts into ~1 ms steps, and the coil
-  // states this thread reads are published each time the emulation parks.
-  //
-  // The fence is relative: libpinmame aligns its own clock to the first value
-  // and re-aligns when it finds itself a second or more ahead. Starting at 1 s
-  // keeps the value clear of 0, which means "no fence". The clock does not move
-  // while the emulation is paused, or it would come back from a pause with a
-  // backlog and run through it at full speed.
-  const double fenceLeadS = static_cast<double>(m_options.timeFenceLeadUs) / 1000000.0;
-  double fenceClockS = 1.0;
-  auto lastFenceTick = std::chrono::steady_clock::now();
+  uint64_t nextStallReportMs = 0;
+  constexpr uint64_t kPollStallReportUs = 50000;
 
   while (!m_stopRequested.load(std::memory_order_acquire))
   {
     deadline += period;
     ++ticks;
-
-    if (m_timeFenceEnabled)
-    {
-      const auto fenceNow = std::chrono::steady_clock::now();
-      if (!m_paused.load(std::memory_order_acquire))
-      {
-        fenceClockS += std::chrono::duration<double>(fenceNow - lastFenceTick).count();
-      }
-      lastFenceTick = fenceNow;
-      // A read-only lookup on the controller, as the main thread's calls are;
-      // the object itself is only released in Stop(), after this thread joined.
-      ScriptVariant fence{};
-      fence.vDouble = fenceClockS + fenceLeadS;
-      m_controller.Call("TimeFence", {"double"}, &fence);
-    }
 
     // --- fetch phase: inside the gate, touching provider memory ---
     m_gateActive.fetch_add(1, std::memory_order_seq_cst);
@@ -584,6 +546,22 @@ void PluginEngine::PollThreadMain()
       const auto lateUs =
           static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(now - deadline).count());
       worstLateUs = std::max(worstLateUs, lateUs);
+      // Something the host does with a coil change held this thread up. The
+      // emulation runs on regardless, so coil reports were late, and a pulse
+      // that began and ended meanwhile was never seen. Always reported, at most
+      // every few seconds: it is what to look for when a coil did not fire.
+      if (lateUs >= kPollStallReportUs)
+      {
+        const uint64_t nowMs = NowMs();
+        if (nowMs >= nextStallReportMs)
+        {
+          nextStallReportMs = nowMs + 5000;
+          std::printf("PluginEngine: coil poll thread stalled %llu ms; coil changes in that time were reported late\n",
+                      static_cast<unsigned long long>(lateUs / 1000));
+        }
+        // Start over from now rather than running a burst of ticks to catch up.
+        deadline = now;
+      }
     }
     if (m_options.debugCoils)
     {
@@ -602,15 +580,77 @@ void PluginEngine::PollThreadMain()
 
     std::this_thread::sleep_until(deadline);
   }
+}
 
-  if (m_timeFenceEnabled)
+// PinMAME's time fence, on a thread that does nothing else.
+//
+// It used to be moved by the coil poll thread, at the top of every tick. That
+// thread also hands every coil change to the host: the Lua rules under their
+// mutex, the media plugins, the debug output on a line-buffered stdout. Any of
+// them blocking stopped the fence, and with it the emulated CPU, which parks at
+// the fence - and past 250 ms PinMAME pauses itself, sound and all. Before the
+// fence, the same stall only delayed the coils. The playfield does not stop
+// while the host is busy, so neither should the game: here nothing waits on
+// anything but the clock, and a stall in the poll thread delays coil reports
+// again rather than freezing the machine.
+void PluginEngine::FenceThreadMain()
+{
+  const auto period = std::chrono::microseconds(1000000 / std::max(1, m_options.coilPollHz));
+  auto deadline = std::chrono::steady_clock::now();
+
+  // PinMAME's time fence, moved forward from here on every tick.
+  //
+  // Left to itself, libpinmame paces the emulation one video frame at a time:
+  // it runs ~16 ms of machine time as fast as it can, then sleeps until the wall
+  // clock catches up. Everything the host does lands in that rhythm. A switch
+  // closed and opened again while the emulation sleeps is never seen by the
+  // ROM -- a ball glancing off a standup target closes it for a few ms -- and a
+  // switch the ROM must answer quickly, like a ramp opto in front of a diverter,
+  // waits up to a frame before the CPU even looks at it. VPinMAME on Windows
+  // softens this with its low-latency throttle; libpinmame has no such option.
+  //
+  // The fence is what VPX uses to keep the emulation in step with its physics:
+  // the emulated CPU may run up to the fence and parks there until it moves.
+  // Moving it every tick turns the 16 ms bursts into ~1 ms steps, and the coil
+  // states this thread reads are published each time the emulation parks.
+  //
+  // The fence is relative: libpinmame aligns its own clock to the first value
+  // and re-aligns when it finds itself a second or more ahead. Starting at 1 s
+  // keeps the value clear of 0, which means "no fence". The clock does not move
+  // while the emulation is paused, or it would come back from a pause with a
+  // backlog and run through it at full speed.
+  const double fenceLeadS = static_cast<double>(m_options.timeFenceLeadUs) / 1000000.0;
+  double fenceClockS = 1.0;
+  auto lastFenceTick = std::chrono::steady_clock::now();
+
+  while (!m_stopRequested.load(std::memory_order_acquire))
   {
-    // Release the emulation before Stop() tears it down: with nobody moving
-    // the fence any more it would otherwise park and wait for one.
+    deadline += period;
+    const auto fenceNow = std::chrono::steady_clock::now();
+    if (!m_paused.load(std::memory_order_acquire))
+    {
+      fenceClockS += std::chrono::duration<double>(fenceNow - lastFenceTick).count();
+    }
+    lastFenceTick = fenceNow;
+    // A read-only lookup on the controller, as the main thread's calls are;
+    // the object itself is only released in Stop(), after this thread joined.
     ScriptVariant fence{};
-    fence.vDouble = 0.0;
+    fence.vDouble = fenceClockS + fenceLeadS;
     m_controller.Call("TimeFence", {"double"}, &fence);
+    // Behind after a stall of this thread itself: catch up with the clock
+    // rather than firing a burst of ticks.
+    if (std::chrono::steady_clock::now() > deadline + period)
+    {
+      deadline = std::chrono::steady_clock::now();
+    }
+    std::this_thread::sleep_until(deadline);
   }
+
+  // Release the emulation before Stop() tears it down: with nobody moving the
+  // fence any more it would otherwise park and wait for one.
+  ScriptVariant fence{};
+  fence.vDouble = 0.0;
+  m_controller.Call("TimeFence", {"double"}, &fence);
 }
 
 // ---- Main-thread sampling ------------------------------------------------
@@ -1303,6 +1343,10 @@ bool PluginEngine::Start(std::string& error)
   // Spawned with the gate shut: it idles until OnStateSrcChanged publishes a
   // plan, which happens once the game has actually come up.
   m_pollThread = std::thread(&PluginEngine::PollThreadMain, this);
+  if (m_timeFenceEnabled)
+  {
+    m_fenceThread = std::thread(&PluginEngine::FenceThreadMain, this);
+  }
   return true;
 }
 
@@ -1322,6 +1366,10 @@ void PluginEngine::Stop()
   if (m_pollThread.joinable())
   {
     m_pollThread.join();
+  }
+  if (m_fenceThread.joinable())
+  {
+    m_fenceThread.join();
   }
 
   if (m_controller.IsValid())

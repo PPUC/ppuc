@@ -63,8 +63,9 @@ class PluginEngine final : public GameEngine
     int coilPollHz = 1000;
     int outputPollHz = 120;
     // How far ahead of the wall clock the emulation may run, in microseconds.
-    // The poll thread moves PinMAME's time fence forward on every tick, so the
-    // emulated CPU advances in steps of one tick instead of one video frame.
+    // A thread of its own moves PinMAME's time fence forward every coil poll
+    // period, so the emulated CPU advances in steps of one tick instead of one
+    // video frame.
     // 0 leaves the emulation to its own per-frame throttle.
     int timeFenceLeadUs = 1000;
   };
@@ -125,6 +126,7 @@ class PluginEngine final : public GameEngine
   void ReportDmdRate();
   void OnControllersChanged();
   void PollThreadMain();
+  void FenceThreadMain();
   void SetUpRomSpeedMechs();
   void SampleRomSpeeds(uint64_t nowMs);
   void SampleOutputs();
@@ -217,6 +219,8 @@ class PluginEngine final : public GameEngine
   std::atomic<unsigned> m_gateActive{0};
   std::atomic<bool> m_stopRequested{false};
   std::thread m_pollThread;
+  // Moves PinMAME's time fence and does nothing else. See FenceThreadMain().
+  std::thread m_fenceThread;
   // Decided once in Start(): the option is on and the controller has the
   // TimeFence property. Read by the poll thread only after it is spawned.
   bool m_timeFenceEnabled = false;
