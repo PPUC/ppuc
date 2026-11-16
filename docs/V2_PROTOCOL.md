@@ -200,7 +200,7 @@ Reported by boards in the 4-byte status prefix of both switch reply variants:
 |---|---|---|
 | `0x01` | `kStatusInSync` | Board believes it is in session with the host. |
 | `0x02` | `kStatusNeedsSetup` | No valid `SetupFrame` seen this session. |
-| `0x04` | `kStatusMappingIncomplete` | Device mapping not fully received. |
+| `0x04` | `kStatusMappingIncomplete` | Device mapping not fully received: not every position has been named. Since firmware 0.5.4 the board drives no coil while this is set. |
 | `0x08` | `kStatusSequenceGap` | A gap was observed in the host's sequence. |
 | `0x10` | `kStatusParserResynced` | The parser had to hunt for sync. |
 | `0x20` | `kStatusSwitchOverflow` | Switch events were dropped. |

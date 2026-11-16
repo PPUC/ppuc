@@ -113,6 +113,11 @@ Cases:
 optional `eosSwitch: <number>`; severity is **warn**, to become an error once
 game configs have been re-exported.
 
+**Superseded for `eosSwitch`** (2026-11-16): `stopSwitches` (2026-08-10) is the
+field the board acts on, and `eosSwitch` was never read by anything. config-tool
+no longer has `field_eos_switch`, libppuc reports an `eosSwitch` as unused, and
+a `dualWinding` coil with `stopSwitches` is refused.
+
 Implemented in `libppuc`: the two fields are accepted, and a solenoid with
 `maxPulseTime: 0`, no engaging hold power and no `dualWinding` is reported on
 stdout with its path, description and YAML location. The `KNOWN GAP` test has

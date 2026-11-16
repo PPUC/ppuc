@@ -5067,6 +5067,7 @@ static void ReportBusHealth()
   printf(
       "PPUC: bus health: %u switch reply chains, %u clean, %u missed, "
       "%u session resync(s) (%u after missed chains), %u lost frame(s) left to the next snapshot, "
+      "%u stale switch repl(ies) dropped, "
       "%u config ack retries, %u config ack timeouts, "
       "%u serial write failures, %u CRC errors\n",
       health.switchReplyChains, health.switchReplyChainsClean, health.switchReplyMisses,
@@ -5074,7 +5075,7 @@ static void ReportBusHealth()
       // is about 0.4 s without lamp or coil updates, and the smaller number hid
       // hundreds of them per game.
       health.sessionResyncsStarted, health.sessionResyncs, health.framesLostTolerated,
-      health.configAckRetries, health.configAckTimeouts, health.serialWriteFailures, health.frameCrcErrors);
+      health.staleSwitchReplies, health.configAckRetries, health.configAckTimeouts, health.serialWriteFailures, health.frameCrcErrors);
 
   // Recorded in RAM rather than logged: the target has a read-only root and
   // no console. If this run was started by hand over ssh, this is where the
