@@ -165,7 +165,7 @@ Linux targets), `ENABLE_SANITIZERS`.
   high-power outputs on stalled polling.
 - `src/EventDispatcher/*`: v2 framing/parsing, mapping tables, switch token
   chain, bridging of v2 bitmaps into internal `Event`/`ConfigEvent` objects,
-  `MultiCoreCrossLink` between cores, `V2DBG` counters.
+  `MultiCoreCrossLink` between cores, stats and diagnostics reports over the bus.
 - `src/IOBoardController.*`: board address from the analog DIP/resistor ladder
   on GPIO 28, local device registration, config topic handling.
 - `src/IODevices/*`: dedicated switches (PIO), switch matrix (PIO), PWM outputs

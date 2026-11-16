@@ -5975,6 +5975,34 @@ static void ReportBoardStats(PPUC* pPpuc, const char* when)
   }
 }
 
+// Prints what each board counted about itself.
+//
+// This is what the boards' USB debug mode was for, read over the bus instead,
+// after the run: nothing on the board changes while it is counting. loopMaxUs
+// is since the last query, everything else since the board started. Firmware
+// before 0.5.7 does not answer.
+static void ReportBoardDiagnostics(PPUC* pPpuc, const char* when)
+{
+  const std::vector<PPUCBoardDiagnostics> diagnostics = pPpuc->QueryBoardDiagnostics();
+  printf("PPUC: board diagnostics (%s)\n", when);
+  for (const PPUCBoardDiagnostics& d : diagnostics)
+  {
+    if (!d.responded)
+    {
+      printf("PPUC:   board %u did not answer the diagnostics query (firmware before 0.5.7?)\n", d.board);
+      continue;
+    }
+    std::string line = "PPUC:   board " + std::to_string(d.board) + ":";
+    for (uint8_t i = 0; i < d.count; ++i)
+    {
+      line += " ";
+      line += PPUC::DiagnosticsFieldName(i);
+      line += "=" + std::to_string(d.values[i]);
+    }
+    printf("%s\n", line.c_str());
+  }
+}
+
 // Compares what each board says it is with what the configuration says it is.
 //
 // A port in the game YAML is a GPIO number, and what a GPIO is depends on the
@@ -8912,6 +8940,7 @@ int main(int argc, char** argv)
     }
     pPpuc->StopUpdates();
     ReportBoardStats(pPpuc, "after bench test");
+    ReportBoardDiagnostics(pPpuc, "after bench test");
     pPpuc->Disconnect();
 
     return 0;
@@ -9609,6 +9638,7 @@ int main(int argc, char** argv)
           // and the chain is what was failing. Every board says itself why it
           // last started, and how many frames it has seen since.
           ReportBoardStats(pPpuc, "after a board restarted");
+          ReportBoardDiagnostics(pPpuc, "after a board restarted");
           running = false;
           shutdown_requested = 1;
           break;
@@ -10209,6 +10239,7 @@ int main(int argc, char** argv)
       if (!opt_no_serial)
       {
         ReportBusHealth();
+        ReportBoardDiagnostics(pPpuc, "at exit");
         pPpuc->Disconnect();
       }
       fflush(stdout);
@@ -10230,6 +10261,7 @@ int main(int argc, char** argv)
   if (!opt_no_serial)
   {
     ReportBusHealth();
+    ReportBoardDiagnostics(pPpuc, "at exit");
 
     // Close the serial device
     pPpuc->Disconnect();

@@ -435,6 +435,12 @@ frequency survives the summarising.
 
 ### 4.2b Non-intrusive runtime diagnostics (`io-boards`)
 
+**Status (2026-11-16, firmware 0.5.7):** done the other way round. The runtime
+USB debug mode is gone - it is a `PPUC_USB_DEBUG` bench build - and the board
+counts its diagnostics in RAM and reports them over the bus for
+`kAdminDiagnosticsQuery`, read by ppuc after a run. The ring buffer below is not
+built; counters answered the questions this week raised.
+
 **The project cannot currently observe runtime health without changing it.**
 Enabling the debug DIP switch:
 
