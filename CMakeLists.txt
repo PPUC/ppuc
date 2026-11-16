@@ -858,6 +858,7 @@ if(PPUC_BUILD_TESTS)
       tests/test_dmd_source_select.cpp
       tests/test_dmd_pacing.cpp
       tests/test_game_tilt.cpp
+      tests/test_board_flipper_gate.cpp
       tests/test_playfield_assist.cpp
       tests/test_lua_game_api.cpp
       tests/test_flash_multiball.cpp

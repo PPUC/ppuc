@@ -50,6 +50,7 @@
 #endif
 #include "AttractSlides.h"
 #include "BallTroughWatch.h"
+#include "BoardFlipperGate.h"
 #include "SwitchHold.h"
 #include "LedStringWalk.h"
 #include "LedStringWalkYaml.h"
@@ -556,6 +557,20 @@ std::atomic<bool> g_gameInProgress{false};
 // search, the trough watch, the playfield assist and anything that needs high
 // power up follow this.
 std::atomic<bool> g_ballInPlay{false};
+// When the board flippers are live: a game running and a ball in play. See
+// BoardFlipperGate.h.
+BoardFlipperGate g_boardFlipperGate;
+
+uint32_t BoardFlipperGateNowMs() { return static_cast<uint32_t>(SDL_GetTicks()); }
+
+void ApplyBoardFlipperChange(PPUC* ppuc, BoardFlipperGate::Change change)
+{
+  if (ppuc == nullptr || change == BoardFlipperGate::Change::None)
+  {
+    return;
+  }
+  ppuc->SetFlippersEnabled(change == BoardFlipperGate::Change::On);
+}
 // Held off by a rule for as long as the machine is deliberately waiting: a
 // multiball start leaves a ball in the shooter lane and another in a kickout
 // hole, and nothing is lost -- a search would fire coils under balls that are
@@ -6898,15 +6913,9 @@ struct PpucEngineHost final : GameEngineHost
   void OnGameRunningChanged(bool gameRunning) override
   {
     g_gameInProgress.store(gameRunning, std::memory_order_release);
-    // Board flippers: on for the whole game, off at game over. Deliberately not
-    // the game-on solenoid, which drops between balls and is what the boards
-    // stop listening to in this mode. Where the NVRAM map has no game_over flag,
-    // a game running is that solenoid after all, and the flippers then go off
-    // between balls as before.
-    if (pPpuc != nullptr)
-    {
-      pPpuc->SetFlippersEnabled(gameRunning);
-    }
+    // Board flippers: on while a game is running and a ball is in play, off at
+    // game over at once. See BoardFlipperGate.h for why the ball counts too.
+    ApplyBoardFlipperChange(pPpuc, g_boardFlipperGate.SetGameRunning(gameRunning, BoardFlipperGateNowMs()));
     if (pAudioOutput != nullptr)
     {
       pAudioOutput->SetMusicEnabled(gameRunning);
@@ -6955,6 +6964,9 @@ struct PpucEngineHost final : GameEngineHost
   void OnBallInPlayChanged(bool inPlay) override
   {
     g_ballInPlay.store(inPlay, std::memory_order_release);
+    // On at once; off once the ball has stayed ended for a moment, which the
+    // main loop's Update() delivers.
+    ApplyBoardFlipperChange(pPpuc, g_boardFlipperGate.SetBallInPlay(inPlay, BoardFlipperGateNowMs()));
     if (g_playfieldAssistEnabled)
     {
       // Neither feature should act in attract, nor while the ROM has the
@@ -9746,6 +9758,7 @@ int main(int argc, char** argv)
         delete switchState;
       }
 
+      ApplyBoardFlipperChange(pPpuc, g_boardFlipperGate.Update(BoardFlipperGateNowMs()));
       ServiceBallSearchRunner(pPpuc, ballSearchRunner, g_ballInPlay.load(std::memory_order_acquire),
                               opt_ball_search_delay_ms, opt_ball_search_round_delay_ms);
       ServiceBallTroughWatch(pEngine.get());
