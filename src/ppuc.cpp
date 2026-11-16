@@ -167,7 +167,7 @@ public:
   }
 
 private:
-  static constexpr size_t kMaxPhases = 8;
+  static constexpr size_t kMaxPhases = 12;
   struct PhaseTime
   {
     const char* name = nullptr;
@@ -10028,6 +10028,7 @@ int main(int argc, char** argv)
       // Its frames keep arriving and only the newest is kept; when the tool
       // closes the DMD is raised back above it (on a desktop) and shows the
       // current picture at once -- the last one again if none came meanwhile.
+      stallWatch.Phase("screens");
       if (pVirtualDMD)
       {
         static SDL_Window* virtualDmdWindow = nullptr;
@@ -10072,6 +10073,10 @@ int main(int argc, char** argv)
         }
         virtualDmdYielding = yield;
       }
+      // On its own: it presents a window, which can wait for a page flip, and
+      // until libsdldmd drew dots through a mask it was the most expensive thing
+      // this loop did.
+      stallWatch.Phase("dmd");
 
       SDL_Event event;
       // Drained rather than one per pass: a key held down repeats, and a
