@@ -345,6 +345,32 @@ Button switch activity does not postpone switch refresh or ball search. A held
 button does suppress ball search, so a player can hold a ball on a raised
 flipper without the host firing search coils.
 
+### Health log
+
+A pinball machine is switched off rather than shut down, so ppuc writes what
+it would report at exit - the bus health, recent unexpected conditions, and
+every board's stats and diagnostics - to a log file while it runs, synced to
+the card each time:
+
+- when the coin door is opened (at most every 30 s),
+- every 3 minutes in attract mode, never at game over itself, where the ROM may
+  be taking initials, offering a buy-in or running its end-of-game show,
+- at once when a minute brings `HealthErrorsPerMinute` bus errors or more -
+  CRC errors, missed chains, resyncs, stale replies, board suspensions, write
+  failures, boards that restarted - in a game or not, at most every 5 minutes.
+  This one also shows "TOO MANY BUS ERRORS" and the log's path on the backbox
+  screen for 5 seconds.
+
+```ini
+[Runtime]
+HealthLog =                 ; empty: <game folder>/logs/health.log, "off": none
+HealthErrorsPerMinute = 20  ; 0: never forced
+```
+
+Reading the boards holds the switch chain for a few milliseconds per board,
+which is why a snapshot in a game is only taken for the coin door or a bus that
+is already in trouble. The file moves to `health.log.1` past 512 KB.
+
 Host-side ball search is separate from switch refresh and is disabled by
 default. Enable it only for older ROMs that do not perform their own ball
 search:

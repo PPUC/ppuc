@@ -335,6 +335,7 @@ endif()
 add_executable(ppuc-pinmame
    src/AttractSlides.cpp
    src/BallTroughWatch.cpp
+   src/HealthLog.cpp
    src/SwitchHold.cpp
    src/LedStringWalk.cpp
    src/LedStringWalkYaml.cpp
@@ -831,6 +832,7 @@ if(PPUC_BUILD_TESTS)
    # part of this target.
    add_executable(ppuc_tests
       src/RomSpeedTracker.cpp
+      src/HealthLog.cpp
       src/AttractSlides.cpp
       src/BallTroughWatch.cpp
       src/SwitchHold.cpp
@@ -859,6 +861,7 @@ if(PPUC_BUILD_TESTS)
       tests/test_dmd_pacing.cpp
       tests/test_game_tilt.cpp
       tests/test_board_flipper_gate.cpp
+      tests/test_health_log.cpp
       tests/test_playfield_assist.cpp
       tests/test_lua_game_api.cpp
       tests/test_flash_multiball.cpp

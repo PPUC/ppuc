@@ -10,6 +10,7 @@
 #include <ctype.h>
 #include <dirent.h>
 #include <inttypes.h>
+#include <stdarg.h>
 #include <stdlib.h>
 
 #include <algorithm>
@@ -51,6 +52,7 @@
 #include "AttractSlides.h"
 #include "BallTroughWatch.h"
 #include "BoardFlipperGate.h"
+#include "HealthLog.h"
 #include "SwitchHold.h"
 #include "LedStringWalk.h"
 #include "LedStringWalkYaml.h"
@@ -545,6 +547,12 @@ bool opt_hard_reset = false;
 // Every save stops the emulation for as long as the write to the stick takes.
 // What PinMAME writes when it is stopped cleanly is its own and stays.
 bool opt_nvram_save = true;
+// [Runtime] HealthLog: where health snapshots are appended and synced. Empty
+// means <game folder>/logs/health.log, "off" none at all.
+const char* opt_health_log = NULL;
+// [Runtime] HealthErrorsPerMinute: bus recovery events in a minute that force a
+// snapshot, game or not, and put a notice on the backbox screen. 0 turns it off.
+uint32_t opt_health_errors_per_minute = 20;
 const char* opt_virtual_dmd_renderer = "dots";
 const char* opt_pinmame_path = NULL;
 const char* opt_rom = NULL;
@@ -2251,6 +2259,20 @@ enum class OverlayScreen
 };
 
 static OverlayScreen g_overlay = OverlayScreen::None;
+
+// Shown on the backbox screen for a few seconds after too many bus errors
+// forced a health snapshot, so that somebody at the machine knows a log was
+// written and where. Main loop only.
+struct HealthNotice
+{
+  uint64_t untilMs = 0;
+  std::string detail;
+  std::string path;
+};
+static HealthNotice g_healthNotice;
+static constexpr uint64_t kHealthNoticeMs = 5000;
+
+static bool HealthNoticeActive() { return g_healthNotice.untilMs != 0 && SDL_GetTicks() < g_healthNotice.untilMs; }
 // When the service screen was last repainted. Out here with g_overlay for the
 // same reason: the main loop decides when to repaint on either graphics path.
 static uint64_t g_switchMonitorLastRenderMs = 0;
@@ -5055,40 +5077,71 @@ static const uint64_t kTroughRepresentGapMs = 80;
 // went wrong on it. Printed on every way out that still has a bus, including
 // the emergency exit a signal takes while Serum is loaded: that is how a
 // machine is normally stopped over ssh, and it used to leave without a word.
-static void ReportBusHealth()
+static std::string FormatLine(const char* format, ...)
 {
-  // Report how often the bus needed its recovery mechanisms before tearing
-  // it down. Several host-side timeouts and retries were tuned by trial
-  // against a bus that misbehaved for reasons since addressed, and there was
-  // no way to tell which of them still earn their keep. A session that ends
-  // with zeros here is evidence one can be tightened or removed; anything
-  // non-zero says it is still load-bearing, and where to look next.
+  char buffer[1024];
+  va_list args;
+  va_start(args, format);
+  vsnprintf(buffer, sizeof(buffer), format, args);
+  va_end(args);
+  return buffer;
+}
+
+static void PrintLines(const std::vector<std::string>& lines)
+{
+  for (const std::string& line : lines)
+  {
+    printf("%s\n", line.c_str());
+  }
+}
+
+// How often the bus needed its recovery mechanisms, and the last things that
+// went wrong on it, as lines for the log.
+static std::vector<std::string> BusHealthLines()
+{
+  // How often the bus needed its recovery mechanisms. Several host-side
+  // timeouts and retries were tuned by trial against a bus that misbehaved for
+  // reasons since addressed, and there was no way to tell which of them still
+  // earn their keep. Zeros here are evidence one can be tightened or removed;
+  // anything non-zero says it is still load-bearing, and where to look next.
+  std::vector<std::string> lines;
   const PPUCBusHealth health = pPpuc->GetBusHealth();
-  printf(
+  lines.push_back(FormatLine(
       "PPUC: bus health: %u switch reply chains, %u clean, %u missed, "
       "%u session resync(s) (%u after missed chains), %u lost frame(s) left to the next snapshot, "
       "%u stale switch repl(ies) dropped, %u board suspension(s), "
       "%u config ack retries, %u config ack timeouts, "
-      "%u serial write failures, %u CRC errors\n",
+      "%u serial write failures, %u CRC errors",
       health.switchReplyChains, health.switchReplyChainsClean, health.switchReplyMisses,
       // Every resync, not only those a streak of missed chains asked for: each
-      // is about 0.4 s without lamp or coil updates, and the smaller number hid
+      // is a stretch without lamp or coil updates, and the smaller number hid
       // hundreds of them per game.
-      health.sessionResyncsStarted, health.sessionResyncs, health.framesLostTolerated,
-      health.staleSwitchReplies, health.switchBoardSuspensions, health.configAckRetries, health.configAckTimeouts, health.serialWriteFailures, health.frameCrcErrors);
+      health.sessionResyncsStarted, health.sessionResyncs, health.framesLostTolerated, health.staleSwitchReplies,
+      health.switchBoardSuspensions, health.configAckRetries, health.configAckTimeouts, health.serialWriteFailures,
+      health.frameCrcErrors));
 
-  // Recorded in RAM rather than logged: the target has a read-only root and
-  // no console. If this run was started by hand over ssh, this is where the
-  // detail of anything that went wrong comes out.
+  // Recorded in RAM by libppuc, and only seen when somebody prints them.
   const std::vector<std::string> anomalies = pPpuc->GetRecentAnomalies();
   if (!anomalies.empty())
   {
-    printf("PPUC: last %zu unexpected condition(s):\n", anomalies.size());
+    lines.push_back(FormatLine("PPUC: last %zu unexpected condition(s):", anomalies.size()));
     for (const std::string& line : anomalies)
     {
-      printf("PPUC:   %s\n", line.c_str());
+      lines.push_back("PPUC:   " + line);
     }
   }
+  return lines;
+}
+
+static void ReportBusHealth() { PrintLines(BusHealthLines()); }
+
+// Every bus recovery event so far, for the health log's error rate. Lost frames
+// that the next snapshot put right are left out: they are routine on a busy
+// host, and counting them would make every game "too many errors".
+static uint64_t BusErrorCount(const PPUCBusHealth& h)
+{
+  return static_cast<uint64_t>(h.frameCrcErrors) + h.switchReplyMisses + h.sessionResyncsStarted +
+         h.staleSwitchReplies + h.switchBoardSuspensions + h.serialWriteFailures + h.boardsLostConfiguration;
 }
 
 // Give the ROM the edge it missed.
@@ -5621,11 +5674,56 @@ static void DrawSongPickerInto(SDL_Renderer* renderer, int w, int h)
 // monitor is diagnosing a machine, and slides appearing over that would be a
 // fault in their own right -- so the slideshow is what happens when no tool is
 // open, not something layered with one.
+static void DrawHealthNoticeInto(SDL_Renderer* renderer, int w, int h, bool clearFirst)
+{
+    g_uiRenderer = renderer;
+    EnsureFirmwareFont();
+    if (clearFirst)
+    {
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+        SDL_RenderClear(renderer);
+        SDL_Texture* behind = g_gameInProgress.load(std::memory_order_acquire) ? pTransliteTexture
+                                                                                  : pTransliteAttractTexture;
+        if (behind == nullptr)
+        {
+            behind = pTransliteTexture;
+        }
+        if (behind)
+        {
+            SDL_RenderTexture(renderer, behind, nullptr, nullptr);
+        }
+    }
+
+    const SDL_Color white{235, 235, 235, 255};
+    const SDL_Color amber{255, 200, 70, 255};
+    int widest = 0;
+    int lineW = 0;
+    int lineH = 0;
+    if (pFirmwareFontSmall &&
+        TTF_GetStringSize(pFirmwareFontSmall, g_healthNotice.path.c_str(), 0, &lineW, &lineH))
+    {
+        widest = lineW;
+    }
+    const SDL_FRect panel =
+        DrawOverlayPanel(w, h, 2, "TOO MANY BUS ERRORS", static_cast<float>(widest) + 64.0f);
+    int y = static_cast<int>(panel.y) + kOverlayPanelTop;
+    DrawFirmwareText(g_healthNotice.detail.c_str(), pFirmwareFontLarge, w / 2, y, amber);
+    y += kOverlayRowHeight;
+    DrawFirmwareText(g_healthNotice.path.c_str(), pFirmwareFontSmall, w / 2, y + 6, white);
+}
+
 static void DrawServiceScreenInto(SDL_Renderer* renderer, int w, int h, bool clearFirst)
 {
     if (g_overlay != OverlayScreen::None)
     {
         DrawOverlayInto(renderer, w, h, clearFirst);
+        return;
+    }
+
+    // Over the song picker and the slides, below any tool somebody opened.
+    if (HealthNoticeActive())
+    {
+        DrawHealthNoticeInto(renderer, w, h, clearFirst);
         return;
     }
 
@@ -5670,7 +5768,8 @@ static bool ServiceScreenWanted()
     {
         return false;
     }
-    return g_overlay != OverlayScreen::None || g_songPicker.active || (g_attractSlides && g_attractSlides->Visible());
+    return g_overlay != OverlayScreen::None || HealthNoticeActive() || g_songPicker.active ||
+           (g_attractSlides && g_attractSlides->Visible());
 }
 
 // The own-window path, for a machine whose backglass nothing else is drawing:
@@ -5950,46 +6049,51 @@ static size_t PerformFirmwareUpdates(PPUC* pPpuc, const std::vector<PPUCBoardVer
 // received the frame selecting it and one that received it and did not transmit
 // are indistinguishable from this end. These are the board's own view, read out
 // of band once the run is over.
-static void ReportBoardStats(PPUC* pPpuc, const char* when)
+static std::vector<std::string> BoardStatsLines(PPUC* pPpuc, const char* when, bool settleBus = true)
 {
-  const std::vector<PPUCBoardStats> stats = pPpuc->QueryBoardStats();
-  printf("PPUC: board transport counters (%s)\n", when);
+  std::vector<std::string> lines;
+  const std::vector<PPUCBoardStats> stats = pPpuc->QueryBoardStats(settleBus);
+  lines.push_back(FormatLine("PPUC: board transport counters (%s)", when));
   for (const PPUCBoardStats& s : stats)
   {
     if (!s.responded)
     {
-      printf("PPUC:   board %u did not answer the stats query\n", s.board);
+      lines.push_back(FormatLine("PPUC:   board %u did not answer the stats query", s.board));
       continue;
     }
     // The reset cause says why the board last started; rxFrames how long ago,
     // roughly: a board that has just come back has seen a handful of frames
     // where the others have seen hundreds of thousands.
-    printf("PPUC:   board %u: selected=%u txFrames=%u missedReplies=%d versionQueries=%u versionReplies=%u gate=%s%s gameOn=%u doorSw=%u rxFrames=%u rxCrcFail=%u lastStart=%s\n",
-           s.board, s.selected, s.txFrames,
-           static_cast<int>(s.selected) - static_cast<int>(s.txFrames),
-           s.versionQueries, s.versionReplies,
-           (s.highPowerGate & 1) ? "powerOn " : "powerOFF ",
-           (s.highPowerGate & 2) ? "doorClosed" : "doorOPEN",
-           (s.highPowerGate >> 8) & 0xFF, (s.highPowerGate >> 16) & 0xFF,
-           s.rxFrames, s.rxCrcFail, PPUC::ResetCauseName(s.resetCause));
+    lines.push_back(FormatLine(
+        "PPUC:   board %u: selected=%u txFrames=%u missedReplies=%d versionQueries=%u versionReplies=%u gate=%s%s "
+        "gameOn=%u doorSw=%u rxFrames=%u rxCrcFail=%u lastStart=%s",
+        s.board, s.selected, s.txFrames, static_cast<int>(s.selected) - static_cast<int>(s.txFrames),
+        s.versionQueries, s.versionReplies, (s.highPowerGate & 1) ? "powerOn " : "powerOFF ",
+        (s.highPowerGate & 2) ? "doorClosed" : "doorOPEN", (s.highPowerGate >> 8) & 0xFF,
+        (s.highPowerGate >> 16) & 0xFF, s.rxFrames, s.rxCrcFail, PPUC::ResetCauseName(s.resetCause)));
   }
+  return lines;
 }
 
-// Prints what each board counted about itself.
+static void ReportBoardStats(PPUC* pPpuc, const char* when) { PrintLines(BoardStatsLines(pPpuc, when)); }
+
+// What each board counted about itself.
 //
-// This is what the boards' USB debug mode was for, read over the bus instead,
-// after the run: nothing on the board changes while it is counting. loopMaxUs
-// is since the last query, everything else since the board started. Firmware
-// before 0.5.7 does not answer.
-static void ReportBoardDiagnostics(PPUC* pPpuc, const char* when)
+// This is what the boards' USB debug mode was for, read over the bus instead:
+// nothing on the board changes while it is counting. loopMaxUs is since the
+// last query, everything else since the board started. Firmware before 0.5.7
+// does not answer.
+static std::vector<std::string> BoardDiagnosticsLines(PPUC* pPpuc, const char* when, bool settleBus = true)
 {
-  const std::vector<PPUCBoardDiagnostics> diagnostics = pPpuc->QueryBoardDiagnostics();
-  printf("PPUC: board diagnostics (%s)\n", when);
+  std::vector<std::string> lines;
+  const std::vector<PPUCBoardDiagnostics> diagnostics = pPpuc->QueryBoardDiagnostics(settleBus);
+  lines.push_back(FormatLine("PPUC: board diagnostics (%s)", when));
   for (const PPUCBoardDiagnostics& d : diagnostics)
   {
     if (!d.responded)
     {
-      printf("PPUC:   board %u did not answer the diagnostics query (firmware before 0.5.7?)\n", d.board);
+      lines.push_back(
+          FormatLine("PPUC:   board %u did not answer the diagnostics query (firmware before 0.5.7?)", d.board));
       continue;
     }
     std::string line = "PPUC:   board " + std::to_string(d.board) + ":";
@@ -5999,7 +6103,156 @@ static void ReportBoardDiagnostics(PPUC* pPpuc, const char* when)
       line += PPUC::DiagnosticsFieldName(i);
       line += "=" + std::to_string(d.values[i]);
     }
-    printf("%s\n", line.c_str());
+    lines.push_back(line);
+  }
+  return lines;
+}
+
+static void ReportBoardDiagnostics(PPUC* pPpuc, const char* when)
+{
+  PrintLines(BoardDiagnosticsLines(pPpuc, when));
+}
+
+// Health snapshots, see HealthLog.h. Set up once the game folder is known.
+static std::unique_ptr<HealthLog> g_healthLog;
+static std::unique_ptr<HealthSchedule> g_healthSchedule;
+static int g_healthCoinDoorState = -1;
+
+static void SetUpHealthLog()
+{
+  if (opt_health_log != NULL && strcmp(opt_health_log, "off") == 0)
+  {
+    return;
+  }
+  std::filesystem::path path;
+  if (opt_health_log != NULL && opt_health_log[0] != '\0')
+  {
+    path = opt_health_log;
+  }
+  else if (opt_game_folder != NULL)
+  {
+    path = std::filesystem::path(opt_game_folder) / "logs" / "health.log";
+  }
+  else
+  {
+    return;
+  }
+  g_healthLog = std::make_unique<HealthLog>(path);
+  g_healthSchedule = std::make_unique<HealthSchedule>(opt_health_errors_per_minute);
+  printf("PPUC: health snapshots go to %s\n", path.string().c_str());
+}
+
+// Called for every switch change from the boards; the door opening is the
+// closed switch opening. -1 until the first report, as for the NVRAM save.
+static void NoteHealthCoinDoorSwitch(int number, uint8_t state)
+{
+  const uint8_t coinDoorSwitch = pPpuc != nullptr ? pPpuc->GetCoinDoorClosedSwitch() : 0;
+  if (!g_healthSchedule || coinDoorSwitch == 0 || number != coinDoorSwitch)
+  {
+    return;
+  }
+  if (state == 0 && g_healthCoinDoorState == 1)
+  {
+    g_healthSchedule->NoteCoinDoorOpened();
+  }
+  g_healthCoinDoorState = state != 0 ? 1 : 0;
+}
+
+static const char* HealthReasonName(HealthSchedule::Reason reason)
+{
+  switch (reason)
+  {
+    case HealthSchedule::Reason::CoinDoorOpened:
+      return "coin door opened";
+    case HealthSchedule::Reason::Attract:
+      return "attract mode";
+    case HealthSchedule::Reason::TooManyErrors:
+      return "too many bus errors";
+    default:
+      return "?";
+  }
+}
+
+// Writes one snapshot to the health log: a header, the bus health, and every
+// board's stats and diagnostics. Returns whether it reached the file.
+static bool TakeHealthSnapshot(const char* why, bool busUp, bool settleBus)
+{
+  if (!g_healthLog)
+  {
+    return false;
+  }
+  const uint64_t nowMs = SDL_GetTicks();
+  const bool gameRunning = g_gameInProgress.load(std::memory_order_acquire);
+  std::vector<std::string> lines;
+  const time_t now = time(nullptr);
+  char stamp[32];
+  strftime(stamp, sizeof(stamp), "%Y-%m-%d %H:%M:%S", localtime(&now));
+  lines.push_back(FormatLine("=== %s  %s  uptime=%llus  %s  busErrorsLastMinute=%llu  ppuc=%s libppuc=%s", stamp, why,
+                             static_cast<unsigned long long>(nowMs / 1000), gameRunning ? "game" : "attract",
+                             static_cast<unsigned long long>(g_healthSchedule ? g_healthSchedule->ErrorsInWindow() : 0),
+                             PPUC_EXECUTABLE_SHA, PPUC::GetLibraryCommit()));
+  if (busUp)
+  {
+    for (const std::string& line : BusHealthLines())
+    {
+      lines.push_back(line);
+    }
+    for (const std::string& line : BoardStatsLines(pPpuc, why, settleBus))
+    {
+      lines.push_back(line);
+    }
+    for (const std::string& line : BoardDiagnosticsLines(pPpuc, why, settleBus))
+    {
+      lines.push_back(line);
+    }
+  }
+  const bool written = g_healthLog->Write(lines);
+  printf("PPUC: health snapshot (%s) %s %s\n", why, written ? "written to" : "could not be written to",
+         g_healthLog->Path().string().c_str());
+  return written;
+}
+
+// Takes a snapshot when HealthSchedule says so. Reading the boards holds the
+// switch chain for a few milliseconds per board, which is why this happens in
+// a game only when the bus is already in trouble or the coin door is open.
+static void ServiceHealthLog(bool busUp)
+{
+  if (!g_healthLog || !g_healthSchedule)
+  {
+    return;
+  }
+  const uint64_t nowMs = SDL_GetTicks();
+  if (g_healthNotice.untilMs != 0 && nowMs >= g_healthNotice.untilMs)
+  {
+    // The notice drew over the translite; put the right one back.
+    g_healthNotice.untilMs = 0;
+    QueueTransliteRender(g_gameInProgress.load(std::memory_order_acquire) ? RenderCommand::RENDER_GAME
+                                                                          : RenderCommand::RENDER_ATTRACT);
+  }
+
+  // The loop runs every few microseconds; nothing here needs that.
+  static uint64_t nextPollMs = 0;
+  if (nowMs < nextPollMs)
+  {
+    return;
+  }
+  nextPollMs = nowMs + 250;
+
+  const bool gameRunning = g_gameInProgress.load(std::memory_order_acquire);
+  const uint64_t errors = busUp ? BusErrorCount(pPpuc->GetBusHealth()) : 0;
+  const HealthSchedule::Reason reason = g_healthSchedule->Poll(nowMs, gameRunning, errors);
+  if (reason == HealthSchedule::Reason::None)
+  {
+    return;
+  }
+
+  TakeHealthSnapshot(HealthReasonName(reason), busUp, /*settleBus*/ false);
+
+  if (reason == HealthSchedule::Reason::TooManyErrors)
+  {
+    g_healthNotice.untilMs = nowMs + kHealthNoticeMs;
+    g_healthNotice.detail = std::to_string(g_healthSchedule->ErrorsInWindow()) + " in the last minute";
+    g_healthNotice.path = "Check " + g_healthLog->Path().string();
   }
 }
 
@@ -7753,6 +8006,10 @@ int main(int argc, char** argv)
           opt_hard_reset = ParseIniBool(value);
         else if (key == "NvramSave")
           opt_nvram_save = ParseIniBool(value);
+        else if (key == "HealthLog")
+          opt_health_log = DuplicateOptionalIniString(value);
+        else if (key == "HealthErrorsPerMinute")
+          opt_health_errors_per_minute = static_cast<uint32_t>(atoi(value.c_str()));
       }
       else if (section == "Speech")
       {
@@ -9575,6 +9832,7 @@ int main(int argc, char** argv)
 
     g_gameInProgress.store(false, std::memory_order_release);
     g_ballInPlay.store(false, std::memory_order_release);
+    SetUpHealthLog();
 
     // Draw the attract translite now that everything else has finished taking
     // the display.
@@ -9639,6 +9897,7 @@ int main(int argc, char** argv)
           // last started, and how many frames it has seen since.
           ReportBoardStats(pPpuc, "after a board restarted");
           ReportBoardDiagnostics(pPpuc, "after a board restarted");
+          TakeHealthSnapshot("a board restarted", true, true);
           running = false;
           shutdown_requested = 1;
           break;
@@ -9678,6 +9937,7 @@ int main(int argc, char** argv)
         // doing, not what the engine was told about it.
         NoteSwitchMonitorState(switchState->number, newSwitchState);
         NoteNvramCoinDoorSwitch(switchState->number, newSwitchState);
+        NoteHealthCoinDoorSwitch(switchState->number, newSwitchState);
         // The slideshow. The two navigation buttons steer it; the other
         // buttons take it down.
         //
@@ -9797,6 +10057,7 @@ int main(int argc, char** argv)
       {
         ServiceNvramSave(pEngine.get());
       }
+      ServiceHealthLog(!opt_no_serial);
       stallWatch.Phase("switches");
 
       // Runs in both loop phases, before the readiness gate: the engine has its
