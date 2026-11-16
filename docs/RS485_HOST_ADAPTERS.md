@@ -155,8 +155,16 @@ On the host side two things still use the delay:
 - For virtualized boards, which the host answers itself, libppuc still sleeps
   the delay before every virtual reply.
 
-Admin replies (version reports, update acknowledgements) have their own fixed
-2 ms turnaround, `kAdminReplyDelayUs`, and do not use this setting.
+Admin replies (version reports, update acknowledgements, stats and
+diagnostics) and, since firmware 0.5.8, config acknowledgements have their own
+fixed 2 ms turnaround, `kAdminReplyDelayUs`, and do not use this setting.
+
+Config acks were the one reply to the host that went without it. They answer
+every config frame at startup, before `SwitchReplyDelayUs` has even reached the
+board, so on a Pi an ack could collide with the end of the host's frame. Losing
+all three attempts at any one config frame fails the start ("Unable to open
+serial communication"), which is why a Pi could need several power cycles to
+come up where a USB adapter never did.
 
 ## Checking a setup
 

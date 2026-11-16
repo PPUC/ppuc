@@ -86,7 +86,7 @@ Listed so nobody hunts them for a runtime problem.
 | `RS485_COMM_EFFECT_EVENT_SPACING_US` | 1 ms per effect event | `libppuc/src/RS485Comm.h` |
 | `RS485_COMM_ADMIN_FRAME_ASSEMBLY_MS`, `RS485_COMM_ADMIN_SETTLE_MS` | 50 ms, 60 ms | `libppuc/src/RS485Comm.h` |
 | `RS485_COMM_UPDATE_BEGIN_TIMEOUT_MS` | 30 s | `libppuc/src/RS485Comm.h` |
-| `kAdminReplyDelayUs` | 2000 µs | `io-boards/src/EventDispatcher/EventDispatcher.cpp` |
+| `kAdminReplyDelayUs` (admin replies and, since 0.5.8, config acks) | 2000 µs | `io-boards/src/EventDispatcher/EventDispatcher.cpp` |
 | `kBoardBootWaitMs` | 2000 ms | `ppuc/src/ppuc.cpp` |
 | Connect, restart and disconnect sleeps | 10–400 ms | `libppuc/src/RS485Comm.cpp` (`Connect`, `RestartBoards`, `Disconnect`) |
 | `WAIT_FOR_IO_BOARD_RESET` | 5 s | `io-boards/src/PPUCTimings.h` |
