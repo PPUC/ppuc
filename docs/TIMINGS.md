@@ -70,6 +70,7 @@ likely; leave them unless a measurement says otherwise.
 | Watchdog: loop stalled | 1000 ms | `io-boards/src/main.cpp` | High-power outputs off. |
 | Watchdog: no poll | 3000 ms | same | High-power outputs off — what protects a coil with no max pulse time if the host dies. |
 | `WATCHDOG_REBOOT_MS` | 5000 ms | same | Board reboot. |
+| `HARDWARE_WATCHDOG_MS` | 2500 ms | same | The chip's watchdog, fed by the 1 s timer interrupt: reboots the board when that interrupt has stopped (hard fault, interrupts disabled). |
 | `LOOP_STALL_REPORT_US` | 20 ms | `ppuc/src/ppuc.cpp` | Logs a main-loop pass that took longer. |
 
 ## Startup, configuration and administration — never at runtime

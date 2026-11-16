@@ -877,6 +877,13 @@ The watchdog now arms `watchdog_reboot()` when the main loop has not run for 5 s
 host is not running and rebooting for that would loop forever. The outputs are
 already off by then.
 
+That watchdog is itself a timer interrupt, so the case that started this - a
+hang with interrupts disabled - was still not covered, and neither was a hard
+fault. Since firmware 0.5.6 the chip's hardware watchdog is armed at 2.5 s and
+fed by that interrupt, so it fires exactly when the interrupt has stopped, and
+the board reports `kResetCauseHardwareWatchdog`. It is armed at the end of
+`setup()`, so a hang during boot is still only cured by power.
+
 A rebooted board comes back unconfigured and raises `kStatusNeedsSetup`. That is
 **not** recoverable by a session resync: a resync resends setup and mapping
 frames, but the per-device configuration — power, debounce, `maxPulseTime`, stop
