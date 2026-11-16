@@ -352,7 +352,9 @@ report at exit - the bus health, recent unexpected conditions, and every
 board's stats and diagnostics - is written to the log while it runs, as a block
 between `=== PPUC health snapshot` and `=== end of health snapshot` lines. The
 log is ppuc's own output, wherever the launcher sends it; each snapshot is
-flushed, and synced to the card when that output is a file.
+flushed, and made to reach the disk: fsynced when that output is a file, and,
+when it is a pipe such as zedmdos's `tee -a` into the stick's `log.txt`, by a
+`sync()` a second later, once the reader has written it.
 
 - when the coin door is opened (at most every 30 s),
 - every 3 minutes in attract mode, never at game over itself, where the ROM may
@@ -371,8 +373,8 @@ HealthErrorsPerMinute = 20  ; 0: never forced
 
 Reading the boards holds the switch chain for a few milliseconds per board,
 which is why a snapshot in a game is only taken for the coin door or a bus that
-is already in trouble. A log that goes to the systemd journal is not synced by
-ppuc; the journal writes it to disk on its own schedule.
+is already in trouble. The journal counts as a pipe: the same `sync()` writes
+out whatever it has stored by then.
 
 Host-side ball search is separate from switch refresh and is disabled by
 default. Enable it only for older ROMs that do not perform their own ball

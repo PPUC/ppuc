@@ -11,11 +11,29 @@
 // - the bus health, the boards' own counters - ever reached the log. These are
 // snapshots of the same information, taken while the machine runs.
 //
+// Where stdout leads, for deciding how a snapshot is made to survive.
+enum class HealthLogSink
+{
+  File,   // a regular file: fsync it
+  Pipe,   // a pipe or socket - tee, the journal: sync once the reader has it
+  Other,  // a terminal or a device: nothing to sync
+};
+
+HealthLogSink ClassifyHealthLog(int fd);
+
+// How long after a snapshot into a pipe the whole system is synced. The
+// reader - zedmdos runs ppuc through `tee -a` into the USB stick's log - has
+// to have written the lines first, and it holds the file open, so the
+// stick's `flush` mount option, which acts on close, never applies. Without
+// this a snapshot sat in the page cache for up to half a minute, long enough
+// to be lost to the power switch.
+constexpr int64_t kHealthPipeSyncDelayMs = 1000;
+
 // Writes the lines to `out`, each with a newline, and flushes. When `out` is
-// a regular file - stdout redirected by the launcher - it is also synced to
-// the card, since a line in the page cache does not survive the power switch.
-// A pipe or a terminal cannot be synced and is only flushed. Returns false if
-// writing failed.
+// a regular file it is also fsynced; when it is a pipe or socket, sync() runs
+// kHealthPipeSyncDelayMs later on a thread of its own, so the main loop never
+// waits for the card or the stick. A terminal is only flushed. Returns false
+// if writing failed.
 bool WriteHealthLines(std::FILE* out, const std::vector<std::string>& lines);
 
 // When to take a snapshot. No clock or I/O of its own, so it can be tested.

@@ -1,12 +1,84 @@
 #include "HealthLog.h"
 
+#include <atomic>
+#include <chrono>
 #include <cstdio>
+#include <thread>
 
 #ifdef _WIN32
 #include <io.h>
 #else
 #include <sys/stat.h>
 #include <unistd.h>
+#endif
+
+HealthLogSink ClassifyHealthLog(int fd)
+{
+#ifndef _WIN32
+  struct stat info;
+  if (fstat(fd, &info) != 0)
+  {
+    return HealthLogSink::Other;
+  }
+  if (S_ISREG(info.st_mode))
+  {
+    return HealthLogSink::File;
+  }
+  if (S_ISFIFO(info.st_mode) || S_ISSOCK(info.st_mode))
+  {
+    return HealthLogSink::Pipe;
+  }
+  return HealthLogSink::Other;
+#else
+  (void)fd;
+  return HealthLogSink::File;
+#endif
+}
+
+#ifndef _WIN32
+namespace {
+
+// When the pending sync should run, in steady-clock milliseconds; 0 while none
+// is pending. One thread at a time: a snapshot taken while one waits moves its
+// deadline instead of starting another.
+std::atomic<int64_t> g_syncDeadlineMs{0};
+
+int64_t SteadyNowMs()
+{
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+             std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
+
+void RequestDelayedSync()
+{
+  const int64_t deadline = SteadyNowMs() + kHealthPipeSyncDelayMs;
+  if (g_syncDeadlineMs.exchange(deadline) != 0)
+  {
+    return;  // The waiting thread picks up the later deadline.
+  }
+  std::thread(
+      []()
+      {
+        while (true)
+        {
+          const int64_t due = g_syncDeadlineMs.load();
+          const int64_t now = SteadyNowMs();
+          if (now >= due)
+          {
+            break;
+          }
+          std::this_thread::sleep_for(std::chrono::milliseconds(due - now));
+        }
+        // Cleared before syncing, so a snapshot arriving during the sync gets
+        // a sync of its own rather than relying on this one.
+        g_syncDeadlineMs.store(0);
+        sync();
+      })
+      .detach();
+}
+
+}  // namespace
 #endif
 
 bool WriteHealthLines(std::FILE* out, const std::vector<std::string>& lines)
@@ -22,10 +94,16 @@ bool WriteHealthLines(std::FILE* out, const std::vector<std::string>& lines)
   }
   ok = std::fflush(out) == 0 && ok;
 #ifndef _WIN32
-  struct stat info;
-  if (fstat(fileno(out), &info) == 0 && S_ISREG(info.st_mode))
+  switch (ClassifyHealthLog(fileno(out)))
   {
-    fsync(fileno(out));
+    case HealthLogSink::File:
+      fsync(fileno(out));
+      break;
+    case HealthLogSink::Pipe:
+      RequestDelayedSync();
+      break;
+    case HealthLogSink::Other:
+      break;
   }
 #else
   _commit(_fileno(out));

@@ -7,6 +7,10 @@
 #include <cstdio>
 #include <string>
 
+#ifndef _WIN32
+#include <unistd.h>
+#endif
+
 #include "HealthLog.h"
 #include "doctest.h"
 
@@ -117,3 +121,21 @@ TEST_CASE("no log, no write")
 {
   CHECK_FALSE(WriteHealthLines(nullptr, {"lost"}));
 }
+
+#ifndef _WIN32
+TEST_CASE("a redirected log is a file, tee is a pipe")
+{
+  std::FILE* file = std::tmpfile();
+  REQUIRE(file != nullptr);
+  CHECK(ClassifyHealthLog(fileno(file)) == HealthLogSink::File);
+  std::fclose(file);
+
+  int fds[2];
+  REQUIRE(pipe(fds) == 0);
+  CHECK(ClassifyHealthLog(fds[1]) == HealthLogSink::Pipe);
+  close(fds[0]);
+  close(fds[1]);
+
+  CHECK(ClassifyHealthLog(-1) == HealthLogSink::Other);
+}
+#endif
