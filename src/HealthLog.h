@@ -1,34 +1,22 @@
 #pragma once
 
 #include <cstdint>
-#include <filesystem>
+#include <cstdio>
 #include <string>
 #include <vector>
 
-// The machine's health, written where a hard power-off cannot take it.
+// The machine's health, written to the log ppuc already has.
 //
 // A pinball machine is switched off, not shut down, so nothing printed at exit
-// - the bus health, the boards' own counters - ever reached a log. These are
-// snapshots of the same information, taken while the machine runs, appended to
-// a file and synced to the card before the call returns.
-class HealthLog
-{
- public:
-  // A file that grows past maxBytes is moved to "<path>.1", replacing the one
-  // before, and a new one is started. Two files at most, so the card fills with
-  // nothing.
-  explicit HealthLog(std::filesystem::path path, uint64_t maxBytes = 512 * 1024);
-
-  // Appends the lines, each with a newline, and fsyncs. Creates the directory
-  // if needed. Returns false if nothing could be written.
-  bool Write(const std::vector<std::string>& lines);
-
-  const std::filesystem::path& Path() const { return m_path; }
-
- private:
-  std::filesystem::path m_path;
-  uint64_t m_maxBytes;
-};
+// - the bus health, the boards' own counters - ever reached the log. These are
+// snapshots of the same information, taken while the machine runs.
+//
+// Writes the lines to `out`, each with a newline, and flushes. When `out` is
+// a regular file - stdout redirected by the launcher - it is also synced to
+// the card, since a line in the page cache does not survive the power switch.
+// A pipe or a terminal cannot be synced and is only flushed. Returns false if
+// writing failed.
+bool WriteHealthLines(std::FILE* out, const std::vector<std::string>& lines);
 
 // When to take a snapshot. No clock or I/O of its own, so it can be tested.
 //

@@ -1,11 +1,10 @@
-// Health snapshots: when they are taken, and that they reach the file.
+// Health snapshots: when they are taken, and that they reach the log.
 //
 // A pinball machine is switched off, not shut down, so the bus health and the
 // boards' counters printed at exit never reached a log. These are taken while
 // the machine runs instead.
 
-#include <filesystem>
-#include <fstream>
+#include <cstdio>
 #include <string>
 
 #include "HealthLog.h"
@@ -101,29 +100,20 @@ TEST_CASE("a threshold of 0 never forces one")
   CHECK(s.Poll(1000, true, 100000) == Reason::None);
 }
 
-TEST_CASE("the log appends, and starts a new file past its size")
+TEST_CASE("the lines reach the log, flushed")
 {
-  const auto dir = std::filesystem::temp_directory_path() / "ppuc_health_log_test";
-  std::filesystem::remove_all(dir);
-  const auto path = dir / "logs" / "health.log";
-  HealthLog log(path, 64);
+  std::FILE* out = std::tmpfile();
+  REQUIRE(out != nullptr);
+  CHECK(WriteHealthLines(out, {"first", "second"}));
+  CHECK(WriteHealthLines(out, {"third"}));
+  std::rewind(out);
+  char buffer[64] = {0};
+  const size_t read = std::fread(buffer, 1, sizeof(buffer) - 1, out);
+  CHECK(std::string(buffer, read) == "first\nsecond\nthird\n");
+  std::fclose(out);
+}
 
-  REQUIRE(log.Write({"first", "second"}));
-  REQUIRE(log.Write({"third"}));
-  {
-    std::ifstream in(path);
-    std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    CHECK(text == "first\nsecond\nthird\n");
-  }
-
-  REQUIRE(log.Write({std::string(80, 'x')}));
-  // Past 64 bytes now: the next write moves it aside.
-  REQUIRE(log.Write({"fresh"}));
-  std::filesystem::path previous = path;
-  previous += ".1";
-  CHECK(std::filesystem::exists(previous));
-  std::ifstream in(path);
-  std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-  CHECK(text == "fresh\n");
-  std::filesystem::remove_all(dir);
+TEST_CASE("no log, no write")
+{
+  CHECK_FALSE(WriteHealthLines(nullptr, {"lost"}));
 }

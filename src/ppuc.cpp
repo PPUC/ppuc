@@ -547,9 +547,10 @@ bool opt_hard_reset = false;
 // Every save stops the emulation for as long as the write to the stick takes.
 // What PinMAME writes when it is stopped cleanly is its own and stays.
 bool opt_nvram_save = true;
-// [Runtime] HealthLog: where health snapshots are appended and synced. Empty
-// means <game folder>/logs/health.log, "off" none at all.
-const char* opt_health_log = NULL;
+// [Runtime] HealthSnapshots: write the bus and board health to the log while
+// the machine runs, see HealthLog.h. Off, it is only printed at exit - which a
+// machine that is switched off never reaches.
+bool opt_health_snapshots = true;
 // [Runtime] HealthErrorsPerMinute: bus recovery events in a minute that force a
 // snapshot, game or not, and put a notice on the backbox screen. 0 turns it off.
 uint32_t opt_health_errors_per_minute = 20;
@@ -2261,13 +2262,13 @@ enum class OverlayScreen
 static OverlayScreen g_overlay = OverlayScreen::None;
 
 // Shown on the backbox screen for a few seconds after too many bus errors
-// forced a health snapshot, so that somebody at the machine knows a log was
-// written and where. Main loop only.
+// forced a health snapshot, so that somebody at the machine knows to look at
+// the log. Main loop only.
 struct HealthNotice
 {
   uint64_t untilMs = 0;
   std::string detail;
-  std::string path;
+  std::string hint;
 };
 static HealthNotice g_healthNotice;
 static constexpr uint64_t kHealthNoticeMs = 5000;
@@ -5135,7 +5136,7 @@ static std::vector<std::string> BusHealthLines()
 
 static void ReportBusHealth() { PrintLines(BusHealthLines()); }
 
-// Every bus recovery event so far, for the health log's error rate. Lost frames
+// Every bus recovery event so far, for the health snapshots' error rate. Lost frames
 // that the next snapshot put right are left out: they are routine on a busy
 // host, and counting them would make every game "too many errors".
 static uint64_t BusErrorCount(const PPUCBusHealth& h)
@@ -5700,7 +5701,7 @@ static void DrawHealthNoticeInto(SDL_Renderer* renderer, int w, int h, bool clea
     int lineW = 0;
     int lineH = 0;
     if (pFirmwareFontSmall &&
-        TTF_GetStringSize(pFirmwareFontSmall, g_healthNotice.path.c_str(), 0, &lineW, &lineH))
+        TTF_GetStringSize(pFirmwareFontSmall, g_healthNotice.hint.c_str(), 0, &lineW, &lineH))
     {
         widest = lineW;
     }
@@ -5709,7 +5710,7 @@ static void DrawHealthNoticeInto(SDL_Renderer* renderer, int w, int h, bool clea
     int y = static_cast<int>(panel.y) + kOverlayPanelTop;
     DrawFirmwareText(g_healthNotice.detail.c_str(), pFirmwareFontLarge, w / 2, y, amber);
     y += kOverlayRowHeight;
-    DrawFirmwareText(g_healthNotice.path.c_str(), pFirmwareFontSmall, w / 2, y + 6, white);
+    DrawFirmwareText(g_healthNotice.hint.c_str(), pFirmwareFontSmall, w / 2, y + 6, white);
 }
 
 static void DrawServiceScreenInto(SDL_Renderer* renderer, int w, int h, bool clearFirst)
@@ -6113,33 +6114,17 @@ static void ReportBoardDiagnostics(PPUC* pPpuc, const char* when)
   PrintLines(BoardDiagnosticsLines(pPpuc, when));
 }
 
-// Health snapshots, see HealthLog.h. Set up once the game folder is known.
-static std::unique_ptr<HealthLog> g_healthLog;
+// Health snapshots, see HealthLog.h. They go to stdout, which is the log:
+// whatever the launcher does with ppuc's output.
 static std::unique_ptr<HealthSchedule> g_healthSchedule;
 static int g_healthCoinDoorState = -1;
 
 static void SetUpHealthLog()
 {
-  if (opt_health_log != NULL && strcmp(opt_health_log, "off") == 0)
+  if (opt_health_snapshots)
   {
-    return;
+    g_healthSchedule = std::make_unique<HealthSchedule>(opt_health_errors_per_minute);
   }
-  std::filesystem::path path;
-  if (opt_health_log != NULL && opt_health_log[0] != '\0')
-  {
-    path = opt_health_log;
-  }
-  else if (opt_game_folder != NULL)
-  {
-    path = std::filesystem::path(opt_game_folder) / "logs" / "health.log";
-  }
-  else
-  {
-    return;
-  }
-  g_healthLog = std::make_unique<HealthLog>(path);
-  g_healthSchedule = std::make_unique<HealthSchedule>(opt_health_errors_per_minute);
-  printf("PPUC: health snapshots go to %s\n", path.string().c_str());
 }
 
 // Called for every switch change from the boards; the door opening is the
@@ -6173,11 +6158,11 @@ static const char* HealthReasonName(HealthSchedule::Reason reason)
   }
 }
 
-// Writes one snapshot to the health log: a header, the bus health, and every
+// Writes one snapshot to the log: a header, the bus health, and every
 // board's stats and diagnostics. Returns whether it reached the file.
 static bool TakeHealthSnapshot(const char* why, bool busUp, bool settleBus)
 {
-  if (!g_healthLog)
+  if (!g_healthSchedule)
   {
     return false;
   }
@@ -6187,7 +6172,7 @@ static bool TakeHealthSnapshot(const char* why, bool busUp, bool settleBus)
   const time_t now = time(nullptr);
   char stamp[32];
   strftime(stamp, sizeof(stamp), "%Y-%m-%d %H:%M:%S", localtime(&now));
-  lines.push_back(FormatLine("=== %s  %s  uptime=%llus  %s  busErrorsLastMinute=%llu  ppuc=%s libppuc=%s", stamp, why,
+  lines.push_back(FormatLine("=== PPUC health snapshot %s  %s  uptime=%llus  %s  busErrorsLastMinute=%llu  ppuc=%s libppuc=%s", stamp, why,
                              static_cast<unsigned long long>(nowMs / 1000), gameRunning ? "game" : "attract",
                              static_cast<unsigned long long>(g_healthSchedule ? g_healthSchedule->ErrorsInWindow() : 0),
                              PPUC_EXECUTABLE_SHA, PPUC::GetLibraryCommit()));
@@ -6206,10 +6191,8 @@ static bool TakeHealthSnapshot(const char* why, bool busUp, bool settleBus)
       lines.push_back(line);
     }
   }
-  const bool written = g_healthLog->Write(lines);
-  printf("PPUC: health snapshot (%s) %s %s\n", why, written ? "written to" : "could not be written to",
-         g_healthLog->Path().string().c_str());
-  return written;
+  lines.push_back("=== end of health snapshot");
+  return WriteHealthLines(stdout, lines);
 }
 
 // Takes a snapshot when HealthSchedule says so. Reading the boards holds the
@@ -6217,7 +6200,7 @@ static bool TakeHealthSnapshot(const char* why, bool busUp, bool settleBus)
 // a game only when the bus is already in trouble or the coin door is open.
 static void ServiceHealthLog(bool busUp)
 {
-  if (!g_healthLog || !g_healthSchedule)
+  if (!g_healthSchedule)
   {
     return;
   }
@@ -6252,7 +6235,7 @@ static void ServiceHealthLog(bool busUp)
   {
     g_healthNotice.untilMs = nowMs + kHealthNoticeMs;
     g_healthNotice.detail = std::to_string(g_healthSchedule->ErrorsInWindow()) + " in the last minute";
-    g_healthNotice.path = "Check " + g_healthLog->Path().string();
+    g_healthNotice.hint = "Details are in the PPUC log";
   }
 }
 
@@ -8006,8 +7989,8 @@ int main(int argc, char** argv)
           opt_hard_reset = ParseIniBool(value);
         else if (key == "NvramSave")
           opt_nvram_save = ParseIniBool(value);
-        else if (key == "HealthLog")
-          opt_health_log = DuplicateOptionalIniString(value);
+        else if (key == "HealthSnapshots")
+          opt_health_snapshots = ParseIniBool(value);
         else if (key == "HealthErrorsPerMinute")
           opt_health_errors_per_minute = static_cast<uint32_t>(atoi(value.c_str()));
       }

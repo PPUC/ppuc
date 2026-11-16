@@ -1,51 +1,36 @@
 #include "HealthLog.h"
 
 #include <cstdio>
-#include <system_error>
 
 #ifdef _WIN32
 #include <io.h>
 #else
+#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
-HealthLog::HealthLog(std::filesystem::path path, uint64_t maxBytes) : m_path(std::move(path)), m_maxBytes(maxBytes) {}
-
-bool HealthLog::Write(const std::vector<std::string>& lines)
+bool WriteHealthLines(std::FILE* out, const std::vector<std::string>& lines)
 {
-  std::error_code ec;
-  if (m_path.has_parent_path())
-  {
-    std::filesystem::create_directories(m_path.parent_path(), ec);
-  }
-
-  const auto size = std::filesystem::file_size(m_path, ec);
-  if (!ec && size > m_maxBytes)
-  {
-    std::filesystem::path previous = m_path;
-    previous += ".1";
-    std::filesystem::rename(m_path, previous, ec);
-  }
-
-  FILE* file = std::fopen(m_path.string().c_str(), "a");
-  if (file == nullptr)
+  if (out == nullptr)
   {
     return false;
   }
+  bool ok = true;
   for (const std::string& line : lines)
   {
-    std::fputs(line.c_str(), file);
-    std::fputc('\n', file);
+    ok = std::fputs(line.c_str(), out) >= 0 && std::fputc('\n', out) != EOF && ok;
   }
-  std::fflush(file);
-  // The point of the file: the machine is switched off, not shut down, and a
-  // line in the page cache does not survive that.
-#ifdef _WIN32
-  _commit(_fileno(file));
+  ok = std::fflush(out) == 0 && ok;
+#ifndef _WIN32
+  struct stat info;
+  if (fstat(fileno(out), &info) == 0 && S_ISREG(info.st_mode))
+  {
+    fsync(fileno(out));
+  }
 #else
-  fsync(fileno(file));
+  _commit(_fileno(out));
 #endif
-  return std::fclose(file) == 0;
+  return ok;
 }
 
 HealthSchedule::Reason HealthSchedule::Poll(uint64_t nowMs, bool gameRunning, uint64_t errorCount)
