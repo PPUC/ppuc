@@ -135,6 +135,48 @@ end
   }
 }
 
+TEST_CASE("a rule holds a coil on and releases it") {
+  // A diverter, a gate, a motor: on until the rule says off. The board keeps
+  // applying the coil's configured power, hold power and maximum on-time.
+  RulesHarness harness(R"LUA(
+function ppuc.onSwitchChanged(number, state)
+  if number == 38 and state == 1 then
+    ppuc.setCoil(27, true)
+  elseif number == 38 then
+    ppuc.setCoil(27, false)
+  elseif number == 42 then
+    ppuc.setCoil(28, state)
+  end
+end
+)LUA");
+  harness.LoadOrFail();
+
+  harness.engine().ProcessSwitchState(38, 1);
+  harness.engine().ProcessSwitchState(38, 0);
+  harness.engine().ProcessSwitchState(42, 1);
+
+  REQUIRE(harness.actions.size() == 3);
+  CHECK(harness.actions[0].type == RulesActionType::SetCoil);
+  CHECK(harness.actions[0].number == 27);
+  CHECK(harness.actions[0].state == 1);
+  CHECK(harness.actions[1].type == RulesActionType::SetCoil);
+  CHECK(harness.actions[1].state == 0);
+  CHECK(harness.actions[2].number == 28);
+  CHECK(harness.actions[2].state == 1);              // a number works too
+}
+
+TEST_CASE("setCoil without a state is an error naming the call") {
+  RulesHarness harness(R"LUA(
+function ppuc.onSwitchChanged(number, state)
+  ppuc.setCoil(27)
+end
+)LUA");
+  harness.LoadOrFail();
+  harness.engine().ProcessSwitchState(1, 1);
+  CHECK(harness.engine().HasFatalError());
+  CHECK(harness.engine().GetFatalError().find("setCoil") != std::string::npos);
+}
+
 TEST_CASE("a rule can tell a playfield hit from a button press") {
   // The same definition the ball search uses, rather than a second list in the
   // rules that can disagree with the configuration.
@@ -392,6 +434,61 @@ TEST_CASE("without boards to send it to, a GI program is not shown") {
   RulesHarness harness(R"LUA(
 shown = ppuc.setGiProgram(1, "FF0000")
 if shown then error("shown without boards") end
+)LUA");
+  harness.LoadOrFail();
+}
+
+TEST_CASE("a rule sends a sound command to the pack and learns whether it went") {
+  RulesHarness harness(R"LUA(
+results = {}
+function ppuc.onSwitchChanged(number, state)
+  if number == 1 then
+    results[#results + 1] = ppuc.soundCommand(0x03e6)
+  elseif number == 2 then
+    results[#results + 1] = ppuc.soundCommand(0x1000, 1)
+  elseif number == 3 then
+    if results[1] ~= true or results[2] ~= false then
+      error("soundCommand did not return what the host answered")
+    end
+  end
+end
+)LUA");
+  std::vector<std::pair<int, uint32_t>> sent;
+  bool accept = true;
+  harness.engine().SetSoundCommandCallback([&](int board, uint32_t cmd) {
+    sent.emplace_back(board, cmd);
+    return accept;
+  });
+  harness.LoadOrFail();
+
+  harness.engine().ProcessSwitchState(1, 1);
+  accept = false;  // e.g. the generation cannot express the number
+  harness.engine().ProcessSwitchState(2, 1);
+  harness.engine().ProcessSwitchState(3, 1);
+
+  REQUIRE(sent.size() == 2);
+  CHECK(sent[0] == std::make_pair(0, 0x03E6u));
+  CHECK(sent[1] == std::make_pair(1, 0x1000u));
+  CHECK_FALSE(harness.engine().HasFatalError());
+}
+
+TEST_CASE("a sound command out of range is an error naming the call") {
+  for (const char* call : {
+           "ppuc.soundCommand(0x10000)",
+           "ppuc.soundCommand(-1)",
+           "ppuc.soundCommand(1, 256)",
+           "ppuc.soundCommand('loud')",
+       }) {
+    RulesHarness harness(call);
+    const std::string error = harness.Load();
+    CAPTURE(call);
+    CHECK(error.find("soundCommand") != std::string::npos);
+  }
+}
+
+TEST_CASE("without AltSound's host a sound command is not sent") {
+  RulesHarness harness(R"LUA(
+if ppuc.soundCommand(0x0015) then error("sent without a host") end
 )LUA");
   harness.LoadOrFail();
 }

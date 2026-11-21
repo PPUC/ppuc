@@ -127,6 +127,12 @@ void LuaRulesEngine::SetSerumSceneCallback(SerumSceneCallback callback)
   m_serumSceneCallback = std::move(callback);
 }
 
+void LuaRulesEngine::SetSoundCommandCallback(SoundCommandCallback callback)
+{
+  std::lock_guard<std::recursive_mutex> lock(m_mutex);
+  m_soundCommandCallback = std::move(callback);
+}
+
 void LuaRulesEngine::SetSpeechCallback(SpeechCallback callback)
 {
   std::lock_guard<std::recursive_mutex> lock(m_mutex);
@@ -209,12 +215,14 @@ void LuaRulesEngine::RegisterApi()
 
   SetPpucFunction(m_lua, this, "pupTrigger", LuaPupTrigger);
   SetPpucFunction(m_lua, this, "serumScene", LuaSerumScene);
+  SetPpucFunction(m_lua, this, "soundCommand", LuaSoundCommand);
   SetPpucFunction(m_lua, this, "speech", LuaSpeech);
   SetPpucFunction(m_lua, this, "playSound", LuaPlaySound);
   SetPpucFunction(m_lua, this, "effectTrigger", LuaEffectTrigger);
   SetPpucFunction(m_lua, this, "suppressSwitch", LuaSuppressSwitch);
   SetPpucFunction(m_lua, this, "sendSwitchToCpu", LuaSendSwitchToCpu);
   SetPpucFunction(m_lua, this, "pulseCoil", LuaPulseCoil);
+  SetPpucFunction(m_lua, this, "setCoil", LuaSetCoil);
   SetPpucFunction(m_lua, this, "blinkLamp", LuaBlinkLamp);
   SetPpucFunction(m_lua, this, "stopBlinkLamp", LuaStopBlinkLamp);
   SetPpucFunction(m_lua, this, "ballSave", LuaBallSave);
@@ -993,6 +1001,36 @@ int LuaRulesEngine::LuaSerumScene(lua_State* L)
   return 0;
 }
 
+// ppuc.soundCommand(cmd [, board]) -- send sound command `cmd` to the AltSound
+// pack, exactly as if the CPU board had sent it to sound board `board`
+// (default 0). `cmd` is the number the pack is keyed by: on WPC DCS / WPC-S the
+// 16-bit command, which the host splits into the two bytes the ROM would write.
+// Works under both engines; with a ROM it comes on top of the ROM's own
+// commands. Returns whether the command was handed over: false without
+// AltSound's host, or when the game's hardware generation has no way to say
+// that number (the host logs why).
+//
+// Out-of-range arguments are errors rather than a false: a command past 16 bits
+// is a typo in the script, not a state of the machine.
+int LuaRulesEngine::LuaSoundCommand(lua_State* L)
+{
+  auto* engine = FromLua(L);
+  const lua_Integer cmd = luaL_checkinteger(L, 1);
+  const lua_Integer board = luaL_optinteger(L, 2, 0);
+  if (cmd < 0 || cmd > 0xFFFF)
+  {
+    return luaL_error(L, "ppuc.soundCommand: command %d is not 0x0000-0xFFFF", static_cast<int>(cmd));
+  }
+  if (board < 0 || board > 0xFF)
+  {
+    return luaL_error(L, "ppuc.soundCommand: board %d is not 0-255", static_cast<int>(board));
+  }
+  const bool sent = engine->m_soundCommandCallback &&
+                    engine->m_soundCommandCallback(static_cast<int>(board), static_cast<uint32_t>(cmd));
+  lua_pushboolean(L, sent ? 1 : 0);
+  return 1;
+}
+
 int LuaRulesEngine::LuaEffectTrigger(lua_State* L)
 {
   auto* engine = FromLua(L);
@@ -1183,6 +1221,33 @@ int LuaRulesEngine::LuaPulseCoil(lua_State* L)
                                          static_cast<uint32_t>(luaL_checkinteger(L, 2)),
                                          0,
                                          0});
+  }
+  return 0;
+}
+
+// ppuc.setCoil(number, on) -- hold a coil on until ppuc.setCoil(number, false).
+//
+// `on` is a boolean or a number (0 = off). For coils a rule keeps on for a
+// while: a diverter, a gate, a motor. How the copper is driven while it is
+// held -- power, hold power, maximum on-time -- stays the coil's configuration,
+// which the board enforces.
+int LuaRulesEngine::LuaSetCoil(lua_State* L)
+{
+  auto* engine = FromLua(L);
+  const int number = static_cast<int>(luaL_checkinteger(L, 1));
+  bool on;
+  if (lua_isboolean(L, 2))
+  {
+    on = lua_toboolean(L, 2) != 0;
+  }
+  else
+  {
+    on = luaL_checkinteger(L, 2) != 0;
+  }
+  if (engine->m_actionCallback)
+  {
+    engine->m_actionCallback(RulesAction{RulesActionType::SetCoil, number,
+                                         on ? static_cast<uint8_t>(1) : static_cast<uint8_t>(0), 0, 0, 0});
   }
   return 0;
 }

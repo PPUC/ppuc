@@ -139,7 +139,7 @@ bool ScriptEngine::TryGetIdentity(Identity* pIdentity) const
   }
   pIdentity->name = m_options.gameId;
   pIdentity->description = "GameCore (ROM-less)";
-  pIdentity->hardwareGen = 0;
+  pIdentity->hardwareGen = m_options.hardwareGen;
   return true;
 }
 

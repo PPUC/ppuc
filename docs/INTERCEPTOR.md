@@ -39,6 +39,7 @@ Useful functions:
 - `ppuc.suppressSwitch(number)`
 - `ppuc.sendSwitchToCpu(number, state)`
 - `ppuc.pulseCoil(number, durationMs)`
+- `ppuc.setCoil(number, on)`
 - `ppuc.blinkLamp(number, onMs, offMs)`
 - `ppuc.stopBlinkLamp(number)`
 
@@ -62,6 +63,9 @@ temporarily override a single output number:
 
 - `ppuc.pulseCoil(...)` forces the coil on until the pulse timer expires, then
   restores the latest PinMAME coil state for that coil.
+- `ppuc.setCoil(number, true)` forces the coil on until `ppuc.setCoil(number,
+  false)`, which ends a running pulse too and restores the latest PinMAME coil
+  state. A pulse that expires while the coil is held leaves it on.
 - `ppuc.blinkLamp(...)` forces a lamp blink until `ppuc.stopBlinkLamp(...)`,
   then restores the latest PinMAME lamp state for that lamp.
 

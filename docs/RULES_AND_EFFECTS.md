@@ -16,6 +16,7 @@ behavior:
 
 - send PUP pack triggers with `ppuc.pupTrigger(...)`
 - play a Serum colorization scene with `ppuc.serumScene(...)`
+- play AltSound pack sounds with `ppuc.soundCommand(...)`
 - trigger board-local effects with `ppuc.effectTrigger(...)`
 - color the GI strings with `ppuc.setGiProgram(...)`
 - speak text with `ppuc.speech(...)`
@@ -83,6 +84,7 @@ Outputs and integrations:
 ppuc.after(delayMs, function() ... end)
 ppuc.pupTrigger(source, id, value)
 ppuc.serumScene(id)
+ppuc.soundCommand(cmd [, board])
 ppuc.speech(text)
 ppuc.playSound(file)
 ppuc.effectTrigger(id, value)
@@ -90,15 +92,26 @@ ppuc.effectTrigger(name, value)
 ppuc.suppressSwitch(number)
 ppuc.sendSwitchToCpu(number, state)
 ppuc.pulseCoil(number, durationMs)
+ppuc.setCoil(number, on)
 ppuc.blinkLamp(number, onMs, offMs)
 ppuc.stopBlinkLamp(number)
 ppuc.ballSave(durationMs)
 ppuc.setGiProgram(string, colors, effect, periodMs)
 ```
 
+`ppuc.setCoil(number, true)` holds a coil on until `ppuc.setCoil(number,
+false)`: a diverter, a gate, a motor. `on` may also be a number (0 = off).
+Releasing ends a running `ppuc.pulseCoil` on the same coil too, and the coil
+returns to what the engine wants (off under `engine: script` unless GameCore
+drives it). The rule only says on and off: power, hold power and the maximum
+on-time stay the coil's configuration (config-tool), which the board
+enforces, so a rule that forgets to release cannot cook a coil beyond what
+its configuration allows.
+
 `ppuc.ballSave` works under both engines: ball save lives in the switch path
-ahead of the engine, not inside it. So does `ppuc.setGiProgram`, see
-[GI Colors](#gi-colors). Under `engine: script` a further
+ahead of the engine, not inside it. So do `ppuc.setGiProgram`, see
+[GI Colors](#gi-colors), and `ppuc.soundCommand`, see
+[AltSound Commands](#altsound-commands). Under `engine: script` a further
 `ppuc.game.*` and `ppuc.dmd.*` API is available; see [`EM_GAMES.md`](EM_GAMES.md).
 
 Handlers:
@@ -253,6 +266,57 @@ coil: gi[,gi...] = onBrightness/offBrightness
 ```
 
 Brightness values are clamped to the PPUC GI range `0..8`.
+
+## AltSound Commands
+
+```lua
+ppuc.soundCommand(cmd [, board])
+```
+
+Hands sound command `cmd` to the AltSound plugin exactly as if the CPU board had
+sent it to sound board `board` (default `0`). `cmd` is the number the pack's
+CSV is keyed by -- on WPC DCS / WPC-S / WPC95 the 16-bit DCS command, e.g.
+`0x03e6`. Returns whether the command was handed over: `false` when AltSound
+is not running through the plugin host, or when the hardware generation cannot
+express the number (the log says why). A command outside `0x0000..0xFFFF` or a
+board outside `0..255` is a script error.
+
+Under the `pinmame` engine the commands come on top of the ROM's own. Under
+`engine: script` they are the only ones; this is how a ROM-less
+reimplementation of a game plays the original sounds, by sending the commands
+the ROM sends at the same moments. A custom game adds sounds as new numbers
+(e.g. `0x1000` and up) with rows of their own in the pack.
+
+**Why the hardware generation matters.** libaltsound is not given commands; it
+is given the bytes the CPU board wrote to the sound board, one at a time, and
+reassembles commands from them by rules that differ per generation. A DCS ROM
+writes every command as two bytes, high byte first, so `ppuc.soundCommand`
+splits `0x03e6` into `0x03`, `0xe6`. With a ROM, PinMAME reports the
+generation. Without one, `[Game] AltSoundHardware` names it (`wpcs`, `wpcdcs`,
+`wpc95`, `wpcdmd`, `s11c`, `de`, `ws`, ...); left at `none`, every command
+reaches the pack whole, which plays plain commands too but skips DCS's own
+volume sequences (`0x55aa` and the like), which a script may send on purpose.
+
+Per generation:
+
+| Generation | Accepted `cmd` | Sent as |
+|---|---|---|
+| `wpcdcs`, `wpcs`, `wpc95dcs`, `wpc95` | `0x0000..0xFFFF` | high byte, low byte |
+| `wpcalpha2`, `wpcdmd`, `wpcfliptronic` | one byte except `0x7A`, or `0x7Axx` | one byte, or `0x7A` and the low byte |
+| `wpcalpha1`, `s11`, `s11x`, `s11b2`, `s11c` | `0x00..0xFF`; a second board's `0x01xx` is its low byte with `board = 1` | one byte |
+| `de`, `dedmd16/32/64` | `0x01..0xFE` | one byte |
+| `ws`, `ws1`, `ws2` | `0xFC00..0xFFFF` | high byte, low byte |
+| `gts80` | anything but `0` | whole |
+| `none`, `by17`, `by35` | anything | whole |
+
+**Timing against the ROM.** The ROM's bytes reach AltSound one by one through
+the main loop, so a ROM's pair can be half delivered when a rule's command is
+sent. A rule's pair waits until the ROM's pair is complete -- at most 100 ms,
+which is how long the DCS board itself keeps a half-received command.
+
+`DebugSoundCommands` (or `--debug-sound-commands`) logs every rule command as
+`Lua sound command: board=0 hex=0x03E6`, next to the ROM's own
+`PinMAME sound command` lines.
 
 ## GI Colors
 

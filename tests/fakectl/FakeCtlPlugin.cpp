@@ -33,6 +33,7 @@ namespace
 const MsgPluginAPI* g_api = nullptr;
 uint32_t g_endpointId = 0;
 unsigned int g_onAudioCmdId = 0;
+unsigned int g_getMachineStateId = 0;
 unsigned int g_onStateChangeId = 0;
 unsigned int g_onDmdTriggerId = 0;
 std::unique_ptr<CtrlItemConsumer<ControllerDef>> g_controllers;
@@ -90,6 +91,14 @@ void OnControllersChanged()
   const std::string gameId = std::string(controller.gameId).substr(prefix.length());
   Observe("controller endpoint=%u gameId=%s game=%s count=%zu", controller.endpointId, controller.gameId,
           gameId.c_str(), count);
+
+  // AltSound asks this next, and reads every later command by the answer.
+  PinMAMEMachineStateMsg state{};
+  state.version = 1;
+  state.hardwareGen = 0;
+  g_api->BroadcastMsg(g_endpointId, g_getMachineStateId, &state);
+  Observe("machine-state game=%s hardwareGen=0x%llX", state.game ? state.game : "(none)",
+          static_cast<unsigned long long>(state.hardwareGen));
 }
 
 void MSGPIAPI OnAudioCmd(const unsigned int, void*, void* msgData)
@@ -164,6 +173,7 @@ MSGPI_EXPORT void MSGPIAPI FakeCtlPluginLoad(const uint32_t sessionId, const Msg
        .target = CTLPI_AUDIO_TARGET_BACKGLASS},
   });
 
+  g_getMachineStateId = g_api->GetMsgID(PMPI_NAMESPACE, PMPI_GET_MACHINE_STATE);
   g_onAudioCmdId = g_api->GetMsgID(PMPI_NAMESPACE, PMPI_EVT_ON_AUDIO_CMD);
   g_api->SubscribeMsg(g_endpointId, g_onAudioCmdId, OnAudioCmd, nullptr);
 
@@ -186,5 +196,6 @@ MSGPI_EXPORT void MSGPIAPI FakeCtlPluginUnload()
   g_api->ReleaseMsgID(g_onStateChangeId);
   g_api->UnsubscribeMsg(g_onAudioCmdId, OnAudioCmd, nullptr);
   g_api->ReleaseMsgID(g_onAudioCmdId);
+  g_api->ReleaseMsgID(g_getMachineStateId);
   g_api = nullptr;
 }

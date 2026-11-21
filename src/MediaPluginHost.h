@@ -94,7 +94,15 @@ class MediaPluginHost
   void QueueDmdTrigger(uint16_t id);
   // Asks a Serum colorizer to play a scene, on its own message.
   void TriggerSerumScene(uint16_t id);
+  // One raw byte from a sound board, passed on to AltSound as it is.
   void OnSoundCommand(int boardNo, int cmd);
+  // A whole sound command from a rule (ppuc.soundCommand), with the number a
+  // pack is keyed by. It is split into the bytes a ROM of the game's hardware
+  // generation would write -- two for WPC DCS / WPC-S / WPC95 -- so AltSound
+  // reassembles exactly that number. With a ROM running, a rule's pair waits
+  // while the ROM is between the two bytes of its own. Returns false, with the
+  // reason, when the generation cannot express the number.
+  bool SendSoundCommand(int boardNo, uint32_t cmd, std::string* error);
   void Process();
 
  private:

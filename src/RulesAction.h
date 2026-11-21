@@ -6,6 +6,11 @@ enum class RulesActionType
 {
   SendSwitchToCpu,
   PulseCoil,
+  // Holds a coil on (`state` 1) until the rules release it (`state` 0), for
+  // diverters, gates and motors. Overrides the engine like a pulse does;
+  // releasing returns the coil to what the engine wants. The board still
+  // applies the coil's configured power, hold power and maximum on-time.
+  SetCoil,
   StartBlinkLamp,
   StopBlinkLamp,
   // Starts or extends a ball save for durationMs. Works under either engine:

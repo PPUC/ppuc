@@ -158,6 +158,11 @@ Dedicated command-line options override values from the game folder and INI.
 * --altsound
     * enable AltSound through the plugin host
     * optional
+* --altsound-hardware VALUE
+    * the sound hardware AltSound reads a ROM-less game's sound commands by: `wpcdcs`, `wpcs`, `wpc95`, `wpcdmd`, `s11c`, `de`, `ws`, `none`, ... or a PinMAME `GEN_*` number
+    * only for `--engine script`; with a ROM, PinMAME reports the hardware and the value is ignored
+    * default: `none`, every command reaches the pack whole
+    * optional; INI `[Game] AltSoundHardware`
 * --music-files csv
     * comma-separated MP3 playlist for gameplay background music
     * explicit override for the default `<game>/music` directory
@@ -266,6 +271,26 @@ game-folder translite defaults are ignored so the B2S plugin owns the
 backglass.
 
 AltSound lives under `<game>/pinmame/altsound/<rom>/`.
+
+A ROM-less game (`Engine = script`) plays an AltSound pack too: Lua rules send
+it the ROM's sound commands with `ppuc.soundCommand(cmd)`. The pack is found by
+`[Game] Rom` like any other media, so `Rom` must be set. Because there is no ROM
+to say how commands are built, `[Game] AltSoundHardware` names the generation
+the pack was recorded from, e.g. `wpcs` for Dirty Harry:
+
+```ini
+[Game]
+Rom = dh_lx2
+Engine = script
+AltSoundHardware = wpcs
+
+[Runtime]
+AltSound = true
+Rules = true
+```
+
+A custom game adds sounds as new command numbers (e.g. `0x1000` and up) with
+rows of their own in the pack's CSV.
 
 AltColor files live under `<game>/pinmame/altcolor/<rom>/`, for example:
 
@@ -492,11 +517,18 @@ Outputs and integrations:
 * `ppuc.serumScene(id)` plays a scene in the Serum colorization. Separate from
   `pupTrigger`: Serum takes scenes on its own message, so a game that wants both
   a pack video and a scene asks for both. Scene ids are 50000..62000.
+* `ppuc.soundCommand(cmd [, board])` sends a sound command to the AltSound
+  pack as if the CPU board had sent it to sound board `board` (default 0), under
+  either engine; see
+  [`docs/RULES_AND_EFFECTS.md`](docs/RULES_AND_EFFECTS.md#altsound-commands)
 * `ppuc.speech(text)`
 * `ppuc.effectTrigger(id, value)` or `ppuc.effectTrigger(name, value)`
 * `ppuc.suppressSwitch(number)`
 * `ppuc.sendSwitchToCpu(number, state)`
 * `ppuc.pulseCoil(number, durationMs)`
+* `ppuc.setCoil(number, on)` holds a coil (diverter, gate, motor) on until
+  `ppuc.setCoil(number, false)`; the board keeps applying the coil's
+  configured power, hold power and maximum on-time
 * `ppuc.blinkLamp(number, onMs, offMs)` and `ppuc.stopBlinkLamp(number)`
 * `ppuc.setGiProgram(string, colors, effect, periodMs)` colors a GI string
   (`static`, `cycle`, `fade`, or `default` for the configured colors); the

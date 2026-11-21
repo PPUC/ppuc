@@ -15,6 +15,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "AudioLanes.h"
@@ -80,21 +81,34 @@ int main(int argc, char** argv)
   MediaPluginHost::Options options;
   options.pluginDir = pluginDir.c_str();
   options.gameId = "emdemo";
+  // A ROM-less game configured with AltSoundHardware = wpcs.
+  options.hardwareGen = 0x20;
   if (!host.Initialize(options, &error))
   {
     std::fprintf(stderr, "media host init failed: %s\n", error.c_str());
     return 2;
   }
 
-  host.SetGameInfo("emdemo", 0);
+  host.SetGameInfo("emdemo", 0x20);
   host.OnGameStart();
   host.OnSoundCommand(1, 42);
+  std::string soundError;
+  Check(host.SendSoundCommand(0, 0x03E6, &soundError), "a rule's sound command is accepted on WPC-S");
   host.QueueEvent('W', 207, 1);
   for (int i = 0; i < 4; ++i)
   {
     bus.Process();
     host.Process();
   }
+
+  // The raw byte above left the count odd: to the host a ROM is half way
+  // through a DCS pair, and the rule's pair must not land in the middle of it.
+  Check(ReadAll(logPath).find("audio-cmd board=0") == std::string::npos,
+        "a rule's DCS pair waits while a ROM pair is half sent");
+  // The DCS board drops a half command after 100 ms; so does the wait.
+  std::this_thread::sleep_for(std::chrono::milliseconds(120));
+  bus.Process();
+  host.Process();
 
   const std::string log = ReadAll(logPath);
   Check(log.find("loaded endpoint=") != std::string::npos, "FakeCtl loaded and reached the bus");
@@ -104,6 +118,10 @@ int main(int argc, char** argv)
         "exactly one endpoint claims the game: items.front() has nothing to get wrong");
   Check(log.find("game=emdemo") != std::string::npos, "stripping the prefix yields the ROM name AltSound looks up");
   Check(log.find("audio-cmd board=1 cmd=42") != std::string::npos, "sound commands arrive on PMPI_EVT_ON_AUDIO_CMD");
+  Check(log.find("machine-state game=emdemo hardwareGen=0x20") != std::string::npos,
+        "a ROM-less game tells AltSound its configured hardware generation");
+  Check(log.find("audio-cmd board=0 cmd=3\naudio-cmd board=0 cmd=230\n") != std::string::npos,
+        "a rule's DCS command arrives as the ROM's two bytes, high first");
   Check(log.find("state-change type=W index=207 value=1") != std::string::npos,
         "injected state arrives on B2S/OnStateChange:1");
 

@@ -31,6 +31,11 @@ class LuaRulesEngine
   // without the other, so a script has to be able to ask for one without the
   // other.
   using SerumSceneCallback = std::function<void(uint16_t id)>;
+  // A sound command for the AltSound pack, as if the CPU board had sent it to
+  // sound board `board`. The command is the number the pack is keyed by (the
+  // 16-bit DCS command on WPC DCS / WPC-S); splitting it into the bytes the
+  // ROM would write is the host's job. Returns whether it was handed over.
+  using SoundCommandCallback = std::function<bool(int board, uint32_t cmd)>;
   using ActionCallback = std::function<void(const RulesAction& action)>;
   // The color program of one GI string, from ppuc.setGiProgram. The arguments
   // are checked already: string 1-5, colors 0xRRGGBB, effect one of
@@ -73,6 +78,7 @@ class LuaRulesEngine
   void SetSpeechCallback(SpeechCallback callback);
   void SetSoundCallback(SoundCallback callback);
   void SetSerumSceneCallback(SerumSceneCallback callback);
+  void SetSoundCommandCallback(SoundCommandCallback callback);
   void SetActionCallback(ActionCallback callback);
   void SetGiProgramCallback(GiProgramCallback callback);
   // Overrides the clock. Passing an empty function restores the default.
@@ -199,6 +205,7 @@ class LuaRulesEngine
   static int LuaSpeech(lua_State* L);
   static int LuaPlaySound(lua_State* L);
   static int LuaSerumScene(lua_State* L);
+  static int LuaSoundCommand(lua_State* L);
   static int LuaEffectTrigger(lua_State* L);
   static int LuaSuppressSwitch(lua_State* L);
   static int LuaSuppressCoil(lua_State* L);
@@ -206,6 +213,7 @@ class LuaRulesEngine
   static int LuaHoldBallSearch(lua_State* L);
   static int LuaSendSwitchToCpu(lua_State* L);
   static int LuaPulseCoil(lua_State* L);
+  static int LuaSetCoil(lua_State* L);
   static int LuaBlinkLamp(lua_State* L);
   static int LuaStopBlinkLamp(lua_State* L);
   static int LuaBallSave(lua_State* L);
@@ -228,6 +236,7 @@ class LuaRulesEngine
   SpeechCallback m_speechCallback;
   SoundCallback m_soundCallback;
   SerumSceneCallback m_serumSceneCallback;
+  SoundCommandCallback m_soundCommandCallback;
   ActionCallback m_actionCallback;
   GiProgramCallback m_giProgramCallback;
   ClockFn m_clock;
