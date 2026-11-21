@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <cstring>
 #include <utility>
 
 extern "C"
@@ -114,6 +115,12 @@ void LuaRulesEngine::SetTriggerCallback(TriggerCallback callback)
   m_triggerCallback = std::move(callback);
 }
 
+void LuaRulesEngine::SetGiProgramCallback(GiProgramCallback callback)
+{
+  std::lock_guard<std::recursive_mutex> lock(m_mutex);
+  m_giProgramCallback = std::move(callback);
+}
+
 void LuaRulesEngine::SetSerumSceneCallback(SerumSceneCallback callback)
 {
   std::lock_guard<std::recursive_mutex> lock(m_mutex);
@@ -214,6 +221,7 @@ void LuaRulesEngine::RegisterApi()
   SetPpucFunction(m_lua, this, "suppressCoil", LuaSuppressCoil);
   SetPpucFunction(m_lua, this, "isButtonSwitch", LuaIsButtonSwitch);
   SetPpucFunction(m_lua, this, "holdBallSearch", LuaHoldBallSearch);
+  SetPpucFunction(m_lua, this, "setGiProgram", LuaSetGiProgram);
 
   // Registered only when the ROM-less game is running, so `ppuc.game == nil` is
   // a reliable feature test for a script that must work under either engine.
@@ -1004,6 +1012,102 @@ int LuaRulesEngine::LuaEffectTrigger(lua_State* L)
   }
   engine->RecordTriggerLocked(id, engine->GetNowMs());
   return 0;
+}
+
+namespace
+{
+// "RRGGBB" or "#RRGGBB", or a number 0xRRGGBB.
+uint32_t CheckGiColor(lua_State* L, int index)
+{
+  if (lua_type(L, index) == LUA_TNUMBER)
+  {
+    const lua_Integer value = luaL_checkinteger(L, index);
+    if (value < 0 || value > 0xFFFFFF)
+    {
+      luaL_error(L, "ppuc.setGiProgram: color %d is not 0xRRGGBB", static_cast<int>(value));
+    }
+    return static_cast<uint32_t>(value);
+  }
+  const char* text = luaL_checkstring(L, index);
+  const char* hex = text[0] == '#' ? text + 1 : text;
+  uint32_t color = 0;
+  bool ok = std::strlen(hex) == 6;
+  for (int i = 0; ok && i < 6; ++i)
+  {
+    const char c = hex[i];
+    uint32_t nibble = 0;
+    if (c >= '0' && c <= '9')
+      nibble = static_cast<uint32_t>(c - '0');
+    else if (c >= 'a' && c <= 'f')
+      nibble = static_cast<uint32_t>(c - 'a' + 10);
+    else if (c >= 'A' && c <= 'F')
+      nibble = static_cast<uint32_t>(c - 'A' + 10);
+    else
+      ok = false;
+    color = (color << 4) | nibble;
+  }
+  if (!ok)
+  {
+    luaL_error(L, "ppuc.setGiProgram: color '%s' is not RRGGBB", text);
+  }
+  return color;
+}
+}  // namespace
+
+// ppuc.setGiProgram(string, colors, effect, periodMs) -- the color of a GI
+// string while custom modes run. colors is a list of "RRGGBB" (or a single
+// one), highest priority first; effect "static" (default), "cycle", "fade" or
+// "default"; periodMs the time per color for cycle and fade. The boards run
+// the program themselves, so this is sent once, not per step. Returns false
+// when the boards cannot show it (no boards, or firmware before 0.5.9).
+int LuaRulesEngine::LuaSetGiProgram(lua_State* L)
+{
+  auto* engine = FromLua(L);
+  const lua_Integer string = luaL_checkinteger(L, 1);
+  if (string < 1 || string > 5)
+  {
+    return luaL_error(L, "ppuc.setGiProgram: GI string %d is not 1-5", static_cast<int>(string));
+  }
+
+  std::vector<uint32_t> colors;
+  if (lua_istable(L, 2))
+  {
+    const lua_Integer count = static_cast<lua_Integer>(lua_rawlen(L, 2));
+    for (lua_Integer i = 1; i <= count; ++i)
+    {
+      lua_rawgeti(L, 2, i);
+      colors.push_back(CheckGiColor(L, lua_gettop(L)));
+      lua_pop(L, 1);
+    }
+  }
+  else if (!lua_isnoneornil(L, 2))
+  {
+    colors.push_back(CheckGiColor(L, 2));
+  }
+
+  const std::string effect = luaL_optstring(L, 3, "static");
+  if (effect != "default" && effect != "static" && effect != "cycle" && effect != "fade")
+  {
+    return luaL_error(L, "ppuc.setGiProgram: effect '%s' is not default, static, cycle or fade", effect.c_str());
+  }
+
+  lua_Integer period = luaL_optinteger(L, 4, 0);
+  if (period < 0)
+  {
+    period = 0;
+  }
+  if (period > 0xFFFF)
+  {
+    period = 0xFFFF;
+  }
+
+  bool accepted = false;
+  if (engine->m_giProgramCallback)
+  {
+    accepted = engine->m_giProgramCallback(static_cast<int>(string), colors, effect, static_cast<uint16_t>(period));
+  }
+  lua_pushboolean(L, accepted ? 1 : 0);
+  return 1;
 }
 
 int LuaRulesEngine::LuaSuppressSwitch(lua_State* L)

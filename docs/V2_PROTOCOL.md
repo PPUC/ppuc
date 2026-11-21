@@ -313,6 +313,21 @@ the frame.
 The update commands reuse only the first two bytes and then carry a body of
 their own size, so an `AdminFrame` and an update frame are not the same length.
 
+**`GiProgram` body — 16 bytes**, behind the admin prefix of a `kAdminGiProgram`
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 1 | `string` — GI string, 1…5 |
+| 1 | 1 | high nibble: color count 0…4, low nibble: `effect` |
+| 2 | 2 | `periodMs` — time per color for cycle and fade |
+| 4 | 12 | 4 × R, G, B; colors past the count are zero |
+
+Effects: `0x0` `kGiEffectDefault` (the configured per-LED colors, needs no
+color), `0x1` `kGiEffectStatic`, `0x2` `kGiEffectCycle`, `0x3` `kGiEffectFade`.
+A frame is `5 + 2 + 16 + 2 = 25` bytes (`kGiProgramFrameBytes`), 1.0 ms on the
+wire at 250000 baud. Encoded by `BuildGiProgramFrame()`, decoded by
+`ReadGiProgram()`, checked by `IsValidGiProgram()`.
+
 **`OutputPayload`**
 
 Coil bitmap, then lamp bitmap, then 3 GI bytes. Only
@@ -352,6 +367,15 @@ exists — that is exactly when the host needs to know what it is talking to.
 | `0x08` | `kAdminUpdateResult` | board → host | 14 |
 | `0x09` | `kAdminStatsQuery` | host → board | 9 |
 | `0x0A` | `kAdminStatsReport` | board → host | 37 |
+| `0x0B` | `kAdminDiagnosticsQuery` | host → board | 9 |
+| `0x0C` | `kAdminDiagnosticsReport` | board → host | 49 |
+| `0x0D` | `kAdminGiProgram` | host → boards, broadcast | 25 |
+
+`kAdminGiProgram` is the exception to everything this section says about
+admin frames: it is runtime, not administration, and lives in the envelope only
+because the type nibble has no room. It is sent with `boardId` `kNoBoard` to
+every board, never answered, and gated on the session like a trigger. See
+[GI color programs](#gi-color-programs).
 
 The chunk frame at 271 bytes is by a wide margin the largest frame on this bus;
 the next largest is an output frame at maximum device counts, 50 bytes.
@@ -570,6 +594,44 @@ The host broadcasts `OutputStateFrame` with the full coil, lamp and GI state,
 every `kDefaultOutputFrameIntervalMs` (4 ms) by default. State is **snapshot
 driven**: each frame is authoritative, so a lost frame is corrected by the next
 one rather than needing retransmission.
+
+### GI color programs
+
+The output frame carries a GI string's brightness (0…8) and nothing about its
+color, which the LED configuration fixes. Custom games color the GI with their
+modes, including cycling and cross-fading between several mode colors, and
+streaming those colors would cost an output-sized frame per fade step. Instead
+the host sends a **program** once per change, as `kAdminGiProgram` (since
+firmware 0.5.9), and the board renders it:
+
+- Every GI LED of the string shows the program's color, scaled by the GI level
+  that keeps arriving in the output frame, through heat-up and afterglow as
+  before. `kGiEffectDefault` puts each LED's configured color back.
+- `cycle` shows color *n* for `periodMs`, then the next; `fade` cross-fades
+  from color *n* to *n+1* over `periodMs`, the last back into the first. A
+  program with one color or a period of 0 shows its first color.
+- A board given the program it already runs keeps running it, without
+  restarting the fade. That is what lets the host repeat a program safely.
+- On the board, core 0 receives it and hands it to core 1, which drives the
+  LEDs, as a run of board-internal config events under `CONFIG_TOPIC_GI_PROGRAM`
+  (118); that topic never appears in a `kFrameConfig` from the host.
+
+Host side (`libppuc`): `PPUC::SetGiColorProgram()` keeps one program per
+string and the run loop sends a program only when it changed, between the
+trigger events and the next output frame. A program the host sent while a
+board was out of step is dropped by that board's epoch gate, so after every
+session resync each string that has been given a program is sent again. A
+board restart loses it along with the rest of its configuration, which ends the
+game anyway ([§12](#a-hung-board-could-not-recover-itself)).
+
+Firmware before 0.5.9 does not know the command; like any unknown admin
+command it cannot be sized, so the board resyncs its parser and reports
+`kStatusParserResynced`. The host therefore sends no programs unless every
+board that answered the version query runs 0.5.9 or later.
+
+A GI string is expected to be one LED segment on one board. The frame reaches
+every board, so LEDs of one string on two boards both follow it, but each board
+runs the fade on its own clock.
 
 ### Switches, boards → host
 
@@ -949,6 +1011,16 @@ to update it over the bus, and is flashed over USB once.
 `kMaxCoilBits` is 64 while lamps and switches allow 256. Coils are the scarcest
 resource on a board, so this is defensible, but it is worth knowing before
 designing a game that wants more than 64 coil numbers across the whole machine.
+
+### GI color programs are sent once and not acknowledged
+
+A `kAdminGiProgram` is edge-triggered: it goes out when the program changes,
+not with every output frame. A frame lost to a CRC failure leaves that string
+in its previous color until the next change or the next session resync, which
+resends every program. This is the trade made for bus time; a periodic resend
+would cost 25 bytes per string per period for a fault that has not been seen.
+If it shows up in practice, resending each non-default program every few
+seconds is cheap and safe, since a board ignores a program it already runs.
 
 ### Output frames are unacknowledged
 

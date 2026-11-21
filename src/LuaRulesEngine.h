@@ -32,6 +32,12 @@ class LuaRulesEngine
   // other.
   using SerumSceneCallback = std::function<void(uint16_t id)>;
   using ActionCallback = std::function<void(const RulesAction& action)>;
+  // The color program of one GI string, from ppuc.setGiProgram. The arguments
+  // are checked already: string 1-5, colors 0xRRGGBB, effect one of
+  // "default", "static", "cycle", "fade". Returns whether the boards will show
+  // it, which the script gets back.
+  using GiProgramCallback = std::function<bool(int string, const std::vector<uint32_t>& colors,
+                                               const std::string& effect, uint16_t periodMs)>;
 
   // Source of the millisecond timestamp used for named-state expiry, trigger
   // history windows, onlyOnceEvery and ppuc.after scheduling. Defaults to a
@@ -68,6 +74,7 @@ class LuaRulesEngine
   void SetSoundCallback(SoundCallback callback);
   void SetSerumSceneCallback(SerumSceneCallback callback);
   void SetActionCallback(ActionCallback callback);
+  void SetGiProgramCallback(GiProgramCallback callback);
   // Overrides the clock. Passing an empty function restores the default.
   void SetClock(ClockFn clock);
   void SetSwitchGroups(const std::unordered_map<std::string, std::vector<uint16_t>>& switchGroups);
@@ -202,6 +209,7 @@ class LuaRulesEngine
   static int LuaBlinkLamp(lua_State* L);
   static int LuaStopBlinkLamp(lua_State* L);
   static int LuaBallSave(lua_State* L);
+  static int LuaSetGiProgram(lua_State* L);
 
   lua_State* m_lua = nullptr;
   std::unordered_map<int, uint8_t> m_switchStates;
@@ -221,6 +229,7 @@ class LuaRulesEngine
   SoundCallback m_soundCallback;
   SerumSceneCallback m_serumSceneCallback;
   ActionCallback m_actionCallback;
+  GiProgramCallback m_giProgramCallback;
   ClockFn m_clock;
   uint8_t m_currentBall = 0;
   uint8_t m_currentPlayer = 0;

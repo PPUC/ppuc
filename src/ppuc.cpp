@@ -9249,6 +9249,23 @@ int main(int argc, char** argv)
             pSpeechService->SpeakText(text);
           }
         });
+    // Mode colors of a custom game, under either engine: the boards render
+    // the program, libppuc sends it once per change.
+    pLuaRulesEngine->SetGiProgramCallback(
+        [](int string, const std::vector<uint32_t>& colors, const std::string& effect, uint16_t periodMs) -> bool
+        {
+          if (opt_debug || opt_debug_effects)
+          {
+            printf("[%10.3f] GI program: string=%d effect=%s colors=%zu period=%u\n", DebugTimestampMs(), string,
+                   effect.c_str(), colors.size(), static_cast<unsigned>(periodMs));
+          }
+          const int code = PPUC::GiEffectFromName(effect);
+          if (pPpuc == nullptr || code < 0)
+          {
+            return false;
+          }
+          return pPpuc->SetGiColorProgram(string, colors, static_cast<uint8_t>(code), periodMs);
+        });
     pLuaRulesEngine->SetTriggerCallback(
         [](const char source, const uint16_t id, const uint8_t value)
         {
