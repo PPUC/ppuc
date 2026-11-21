@@ -346,6 +346,7 @@ add_executable(ppuc-pinmame
    src/Uf2Image.cpp
    src/LuaGameApi.cpp
    src/LuaRulesEngine.cpp
+   src/AltSoundCommand.cpp
    src/MediaPluginHost.cpp
    src/PluginDir.cpp
    src/DmdSourceSelect.cpp
@@ -799,6 +800,7 @@ if(PPUC_BUILD_TESTS)
       src/AudioLanes.cpp
       src/AudioMixer.cpp
       src/AudioOutput.cpp
+      src/AltSoundCommand.cpp
       src/MediaPluginHost.cpp
       src/PluginDir.cpp
       src/ScriptObject.cpp
@@ -851,6 +853,7 @@ if(PPUC_BUILD_TESTS)
       src/AudioMixer.cpp
       src/LuaGameApi.cpp
       src/LuaRulesEngine.cpp
+      src/AltSoundCommand.cpp
       src/PinmameNvramTracking.cpp
       src/DmdSourceSelect.cpp
       src/ScriptObject.cpp
@@ -876,6 +879,7 @@ if(PPUC_BUILD_TESTS)
       tests/test_lua_game_api.cpp
       tests/test_flash_multiball.cpp
       tests/test_lua_rules_engine.cpp
+      tests/test_altsound_command.cpp
       tests/test_lua_rules_timing.cpp
       tests/test_pinmame_nvram_tracking.cpp
       tests/test_attract_slides.cpp

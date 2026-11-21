@@ -49,6 +49,7 @@
 #else
 #include "SDLDMD/SDLDMD.h"
 #endif
+#include "AltSoundCommand.h"
 #include "AttractSlides.h"
 #include "BallTroughWatch.h"
 #include "BoardFlipperGate.h"
@@ -434,6 +435,9 @@ std::vector<std::string> opt_plugin_settings;
 // opt-in because it infers "the pack has nothing for this command" from silence
 // and that inference is not always right.
 int opt_altsound_mode = 0;
+// The hardware generation AltSound reads a ROM-less game's sound commands by,
+// e.g. "wpcs" for a WPC-S DCS pack. With a ROM, PinMAME reports it.
+const char* opt_altsound_hardware = NULL;
 // 32 or 64 forces the Serum plugin to produce only that height. Left at 0 it
 // produces both, which is what a host that does not know its panel wants -- and
 // is wasted work on one that does.
@@ -6982,6 +6986,11 @@ static struct cag_option options[] = {
      .access_name = "altsound-mode",
      .value_name = "VALUE",
      .description = "0 = AltSound replaces ROM sound (default), 1 = ROM sound where the pack is silent"},
+    {.identifier = '\x04',
+     .access_name = "altsound-hardware",
+     .value_name = "VALUE",
+     .description = "Hardware generation AltSound reads ROM-less sound commands by: wpcdcs, wpcs, wpc95, s11c, none, ... "
+                    "(optional, Engine=script only, default none)"},
     {.identifier = '0', .access_name = "switch-test", .value_name = NULL, .description = "Run switch test"},
     {.identifier = '1', .access_name = "coil-test", .value_name = NULL, .description = "Run coil test"},
     {.identifier = '2', .access_name = "lamp-test", .value_name = NULL, .description = "Run lamp test"},
@@ -7806,6 +7815,8 @@ int main(int argc, char** argv)
           opt_rom = DuplicateOptionalIniString(value);
         else if (key == "Engine")
           opt_engine = DuplicateIniString(value);
+        else if (key == "AltSoundHardware")
+          opt_altsound_hardware = DuplicateOptionalIniString(value);
       }
       else if (section == "Paths")
       {
@@ -8325,6 +8336,9 @@ int main(int argc, char** argv)
       case '<':
         opt_altsound_mode = atoi(cag_option_get_value(&cag_context));
         break;
+      case '\x04':
+        opt_altsound_hardware = cag_option_get_value(&cag_context);
+        break;
       case '0':
         opt_switch_test = true;
         break;
@@ -8528,6 +8542,25 @@ int main(int argc, char** argv)
   {
     printf("Unknown engine '%s'. Valid values are 'pinmame' and 'script'.\n", opt_engine ? opt_engine : "(null)");
     return 1;
+  }
+
+  // Under PinMAME the ROM's driver knows its sound hardware and tells AltSound
+  // itself; a configured value could only contradict it, so it is ignored.
+  uint64_t altSoundHardwareGen = AltSoundCommand::kGenNone;
+  if (HasOptionValue(opt_altsound_hardware))
+  {
+    if (!AltSoundCommand::ParseHardware(opt_altsound_hardware, &altSoundHardwareGen))
+    {
+      printf("Unknown AltSound hardware '%s'. Use e.g. wpcdcs, wpcs, wpc95, wpcdmd, s11c, de, ws or none.\n",
+             opt_altsound_hardware);
+      return 1;
+    }
+    if (!useScriptEngine)
+    {
+      printf("AltSoundHardware=%s ignored: with a ROM, PinMAME reports the sound hardware.\n",
+             opt_altsound_hardware);
+      altSoundHardwareGen = AltSoundCommand::kGenNone;
+    }
   }
 
   pPpuc = new PPUC();
@@ -8864,6 +8897,7 @@ int main(int argc, char** argv)
     }
     mediaOptions.prefPath = getenv("HOME");
     mediaOptions.gameId = opt_rom;
+    mediaOptions.hardwareGen = useScriptEngine ? altSoundHardwareGen : 0;
     mediaOptions.backglassWidth = opt_translite_width > 0 ? opt_translite_width : 1920;
     mediaOptions.backglassHeight = opt_translite_height > 0 ? opt_translite_height : 1080;
     mediaOptions.backglassScreen = opt_translite_screen;
@@ -9311,6 +9345,29 @@ int main(int argc, char** argv)
           }
         });
 
+    // ppuc.soundCommand(cmd [, board]): a sound command for the AltSound pack,
+    // as if the CPU board had sent it. Same path under both engines; with a ROM
+    // the plugin hears the ROM's commands and these side by side.
+    pLuaRulesEngine->SetSoundCommandCallback(
+        [&](int board, uint32_t cmd)
+        {
+          if (opt_debug_sound_commands)
+          {
+            printf("Lua sound command: board=%d hex=0x%04X\n", board, cmd);
+          }
+          if (!pMediaPluginHost)
+          {
+            return false;
+          }
+          std::string soundError;
+          if (!pMediaPluginHost->SendSoundCommand(board, cmd, &soundError))
+          {
+            printf("ppuc.soundCommand(0x%04X, %d) not sent: %s\n", cmd, board, soundError.c_str());
+            return false;
+          }
+          return true;
+        });
+
     std::vector<std::string> ruleScripts;
     std::string error;
     if (!CollectRulesScripts(opt_rules, ruleScripts, error))
@@ -9599,6 +9656,7 @@ int main(int argc, char** argv)
   {
     ScriptEngine::Options scriptOptions;
     scriptOptions.gameId = opt_rom ? opt_rom : "";
+    scriptOptions.hardwareGen = altSoundHardwareGen;
     scriptOptions.dmdWidth = opt_virtual_dmd_hd ? 256 : 128;
     scriptOptions.dmdHeight = opt_virtual_dmd_hd ? 64 : 32;
     scriptOptions.debug = opt_debug;

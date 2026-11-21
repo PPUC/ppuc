@@ -27,6 +27,10 @@ class ScriptEngine final : public GameEngine
   struct Options
   {
     std::string gameId;   // asset namespace; the game folder name when no ROM
+    // PinMAME GEN_* value reported as the identity's hardwareGen. Nothing
+    // emulates that hardware; it tells AltSound how the game's sound commands
+    // are built (AltSoundHardware).
+    uint64_t hardwareGen = 0;
     uint16_t dmdWidth = 128;
     uint16_t dmdHeight = 32;
     uint8_t dmdColorR = 255;

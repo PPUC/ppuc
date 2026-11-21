@@ -237,8 +237,8 @@ Capability groups (see `README.md` / `docs/RULES_AND_EFFECTS.md` for the full AP
 - named states, history, sequences, switch groups: `setState`, `clearState`,
   `stateActive`, `triggerHistory`, `triggerSequence`, `onlyOnceEvery`,
   `switchGroupState/Closing/Opening`
-- outputs: `pupTrigger`, `serumScene`, `speech`, `effectTrigger`, `pulseCoil`, `blinkLamp`,
-  `stopBlinkLamp`, `setGiProgram`
+- outputs: `pupTrigger`, `serumScene`, `soundCommand`, `speech`, `effectTrigger`, `pulseCoil`,
+  `blinkLamp`, `stopBlinkLamp`, `setGiProgram`
 - interceptor: `suppressSwitch`, `sendSwitchToCpu`
 - scheduling: `after(delayMs, fn)` — does not sleep inside the PinMAME loop; the
   callback runs from the normal rules update tick
@@ -247,6 +247,12 @@ Capability groups (see `README.md` / `docs/RULES_AND_EFFECTS.md` for the full AP
 runtime event with source `EVENT_SOURCE_EFFECT`, transported as a v2
 `kFrameTrigger`. The game YAML effect block must declare a matching
 `trigger.source: F` plus `trigger.name` or `trigger.number`.
+
+`ppuc.soundCommand(cmd [, board])` (under either engine) goes to
+`MediaPluginHost::SendSoundCommand`, which splits the pack's command number into
+the bytes a ROM of the game's hardware generation writes (`src/AltSoundCommand.*`)
+and broadcasts them on `PMPI_EVT_ON_AUDIO_CMD`. For a ROM-less game the host also
+answers AltSound's `PMPI_GET_MACHINE_STATE` with `[Game] AltSoundHardware`.
 
 `ppuc.setGiProgram(...)` (GI mode colors of custom games, under either engine)
 goes to `PPUC::SetGiColorProgram` in libppuc, which sends io-boards'

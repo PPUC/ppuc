@@ -1,5 +1,7 @@
 #include "MediaPluginHost.h"
 
+#include "AltSoundCommand.h"
+
 #include "PluginDir.h"
 #include "vpxhost/PluginBus.h"
 #include "ScriptObject.h"
@@ -479,6 +481,7 @@ public:
   void QueueDmdTrigger(uint16_t id);
   void TriggerSerumScene(uint16_t id);
   void OnSoundCommand(int boardNo, int cmd);
+  bool SendSoundCommand(int boardNo, uint32_t cmd, std::string* error);
   void Process();
 
 private:
@@ -490,8 +493,11 @@ private:
   static void MSGPIAPI OnAudioUpdate(unsigned int, void*, void* msgData);
   static void MSGPIAPI OnGetBackglassRenderer(unsigned int, void*,
                                               void* msgData);
+  static void MSGPIAPI OnGetMachineState(unsigned int, void*, void* msgData);
+  static void MSGPIAPI OnAudioCmdSeen(unsigned int, void*, void* msgData);
 
   void OnAudioSrcChanged();
+  void DispatchRuleSoundCommands();
 
 
 
@@ -559,6 +565,22 @@ private:
   std::vector<B2SSegmentDigitMsg> pendingB2SSegmentDigits_;
   std::vector<B2SPlayerScoreMsg> pendingB2SPlayerScores_;
   std::vector<std::pair<int, int>> pendingSoundCommands_;
+  // Rule commands already split into the bytes the ROM would have written.
+  // Queued separately from the ROM's own, because they may have to wait for a
+  // ROM byte pair to complete; held_ is only touched on the main thread.
+  struct RuleSoundCommand
+  {
+    int boardNo = 0;
+    std::vector<uint32_t> bytes;
+  };
+  std::vector<RuleSoundCommand> pendingRuleSoundCommands_;
+  std::vector<RuleSoundCommand> heldRuleSoundCommands_;
+  uint64_t heldRuleSoundSinceMs_ = 0;
+  // Every byte any sender put on PMPI_EVT_ON_AUDIO_CMD, the host included,
+  // and when the last one came. Rule commands are whole pairs, so the parity
+  // says whether a ROM is between the two bytes of a command.
+  uint64_t audioCmdBytesSeen_ = 0;
+  uint64_t lastAudioCmdMs_ = 0;
   std::unordered_map<int, int> debugLastB2SSegmentDigit_;
   Options options_;
   std::string pluginDir_;
@@ -587,6 +609,8 @@ private:
   unsigned int getAuxRendererId_ = 0;
   unsigned int onVpxGameEndId_ = 0;
   unsigned int onAudioCmdId_ = 0;
+  unsigned int getMachineStateId_ = 0;
+  bool answersMachineState_ = false;
   std::unique_ptr<PinballPlugin::Controller::CtrlItemProvider<ControllerDef>> controllerProvider_;
   std::unique_ptr<PinballPlugin::Controller::CtrlItemConsumer<AudioSrcId>> audioSources_;
   std::string controllerGameId_;
@@ -659,6 +683,20 @@ bool MediaPluginHost::Impl::Initialize(const Options& options,
   getAuxRendererId_ = api.GetMsgID(VPXPI_NAMESPACE, VPXPI_MSG_GET_AUX_RENDERER);
   onVpxGameEndId_ = api.GetMsgID(VPXPI_NAMESPACE, VPXPI_EVT_ON_GAME_END);
   onAudioCmdId_ = api.GetMsgID(PMPI_NAMESPACE, PMPI_EVT_ON_AUDIO_CMD);
+  api.SubscribeMsg(bus_.HostEndpointId(), onAudioCmdId_, OnAudioCmdSeen, this);
+
+  // AltSound asks for the hardware generation before it reads a single sound
+  // command: libaltsound reassembles commands from bytes by rules that differ
+  // per generation. libpinmame answers when a ROM runs. For a ROM-less game
+  // nobody did, the generation stayed 0, and a DCS pack heard every byte as a
+  // command of its own. Answered only by the controller's owner, so a ROM's
+  // own answer is never contradicted.
+  if (options.provideController)
+  {
+    getMachineStateId_ = api.GetMsgID(PMPI_NAMESPACE, PMPI_GET_MACHINE_STATE);
+    api.SubscribeMsg(bus_.HostEndpointId(), getMachineStateId_, OnGetMachineState, this);
+    answersMachineState_ = true;
+  }
 
   if (options.provideController)
   {
@@ -801,9 +839,21 @@ void MediaPluginHost::Impl::Shutdown()
   }
   if (onAudioCmdId_ != 0)
   {
+    api.UnsubscribeMsg(onAudioCmdId_, OnAudioCmdSeen, this);
     api.ReleaseMsgID(onAudioCmdId_);
     onAudioCmdId_ = 0;
   }
+  if (getMachineStateId_ != 0)
+  {
+    if (answersMachineState_)
+    {
+      api.UnsubscribeMsg(getMachineStateId_, OnGetMachineState, this);
+      answersMachineState_ = false;
+    }
+    api.ReleaseMsgID(getMachineStateId_);
+    getMachineStateId_ = 0;
+  }
+  heldRuleSoundCommands_.clear();
   if (onVpxGameEndId_ != 0)
   {
     api.ReleaseMsgID(onVpxGameEndId_);
@@ -945,6 +995,105 @@ void MediaPluginHost::Impl::OnSoundCommand(int boardNo, int cmd)
   }
 }
 
+bool MediaPluginHost::Impl::SendSoundCommand(int boardNo, uint32_t cmd, std::string* error)
+{
+  if (!initialized_ || onAudioCmdId_ == 0)
+  {
+    if (error != nullptr)
+    {
+      *error = "no plugin host";
+    }
+    return false;
+  }
+  RuleSoundCommand command;
+  command.boardNo = boardNo;
+  if (!AltSoundCommand::Encode(options_.hardwareGen, cmd, &command.bytes, error))
+  {
+    return false;
+  }
+  std::lock_guard<std::mutex> lock(pendingMutex_);
+  if (pendingRuleSoundCommands_.size() >= 1024)
+  {
+    if (error != nullptr)
+    {
+      *error = "sound command queue full";
+    }
+    return false;
+  }
+  pendingRuleSoundCommands_.push_back(std::move(command));
+  return true;
+}
+
+// The ROM's bytes come off the emulation thread through RunOnMainThread, one
+// callback each, so a ROM pair can straddle two bus drains -- and this runs in
+// between. Sending a rule's pair there would make libaltsound pair the ROM's
+// high byte with the rule's, and the rule's low byte with the ROM's: two wrong
+// samples instead of two right ones. So while the byte count is odd the rule
+// commands wait. The DCS board itself drops a half-received command after
+// 100 ms, which bounds the wait: a ROM that really left a byte dangling does
+// not hold rule sounds back for good.
+void MediaPluginHost::Impl::DispatchRuleSoundCommands()
+{
+  if (heldRuleSoundCommands_.empty())
+  {
+    return;
+  }
+  const uint64_t nowMs = SDL_GetTicks();
+  if (AltSoundCommand::SendsBytePairs(options_.hardwareGen) && (audioCmdBytesSeen_ & 1) != 0)
+  {
+    if (heldRuleSoundSinceMs_ == 0)
+    {
+      heldRuleSoundSinceMs_ = nowMs;
+    }
+    if (nowMs - heldRuleSoundSinceMs_ < 100 && nowMs - lastAudioCmdMs_ < 100)
+    {
+      return;
+    }
+    // Realign: whatever libaltsound does with the dangling byte, the rule's
+    // pairs are counted from here.
+    ++audioCmdBytesSeen_;
+  }
+  heldRuleSoundSinceMs_ = 0;
+  std::vector<RuleSoundCommand> commands;
+  commands.swap(heldRuleSoundCommands_);
+  for (const RuleSoundCommand& command : commands)
+  {
+    for (const uint32_t byte : command.bytes)
+    {
+      PinMAMEChildBoardEventMsg msg{
+          .boardNo = static_cast<uint32_t>(command.boardNo),
+          .cmd = byte,
+      };
+      bus_.Api().BroadcastMsg(bus_.HostEndpointId(), onAudioCmdId_, &msg);
+    }
+  }
+}
+
+void MediaPluginHost::Impl::OnGetMachineState(unsigned int, void* userData, void* msgData)
+{
+  auto* self = static_cast<Impl*>(userData);
+  auto* msg = static_cast<PinMAMEMachineStateMsg*>(msgData);
+  if (self == nullptr || msg == nullptr || self->gameId_.empty())
+  {
+    return;
+  }
+  msg->version = 1;
+  msg->game = self->gameId_.c_str();
+  msg->rom = self->gameId_.c_str();
+  msg->hardwareGen = self->options_.hardwareGen;
+}
+
+void MediaPluginHost::Impl::OnAudioCmdSeen(unsigned int, void* userData, void*)
+{
+  auto* self = static_cast<Impl*>(userData);
+  if (self == nullptr)
+  {
+    return;
+  }
+  ++self->audioCmdBytesSeen_;
+  self->lastAudioCmdMs_ = SDL_GetTicks();
+}
+
 void MediaPluginHost::Impl::Process()
 {
   if (!initialized_)
@@ -971,6 +1120,10 @@ void MediaPluginHost::Impl::Process()
   std::vector<std::pair<int, int>> soundCommands;
   {
     std::lock_guard<std::mutex> lock(pendingMutex_);
+    heldRuleSoundCommands_.insert(heldRuleSoundCommands_.end(),
+                                  std::make_move_iterator(pendingRuleSoundCommands_.begin()),
+                                  std::make_move_iterator(pendingRuleSoundCommands_.end()));
+    pendingRuleSoundCommands_.clear();
     events.swap(pendingEvents_);
     b2sSegmentDigits.swap(pendingB2SSegmentDigits_);
     b2sPlayerScores.swap(pendingB2SPlayerScores_);
@@ -1002,6 +1155,7 @@ void MediaPluginHost::Impl::Process()
     };
     bus_.Api().BroadcastMsg(bus_.HostEndpointId(), onAudioCmdId_, &msg);
   }
+  DispatchRuleSoundCommands();
   // PluginBus::Process() drains async callbacks once per main-loop tick.
 
   if (!options_.enablePup && !options_.enableB2S)
@@ -1814,6 +1968,11 @@ void MediaPluginHost::QueueDmdTrigger(uint16_t id)
 void MediaPluginHost::OnSoundCommand(int boardNo, int cmd)
 {
   impl_->OnSoundCommand(boardNo, cmd);
+}
+
+bool MediaPluginHost::SendSoundCommand(int boardNo, uint32_t cmd, std::string* error)
+{
+  return impl_->SendSoundCommand(boardNo, cmd, error);
 }
 
 void MediaPluginHost::Process() { impl_->Process(); }

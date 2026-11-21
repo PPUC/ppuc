@@ -395,3 +395,58 @@ if shown then error("shown without boards") end
 )LUA");
   harness.LoadOrFail();
 }
+
+TEST_CASE("a rule sends a sound command to the pack and learns whether it went") {
+  RulesHarness harness(R"LUA(
+results = {}
+function ppuc.onSwitchChanged(number, state)
+  if number == 1 then
+    results[#results + 1] = ppuc.soundCommand(0x03e6)
+  elseif number == 2 then
+    results[#results + 1] = ppuc.soundCommand(0x1000, 1)
+  elseif number == 3 then
+    if results[1] ~= true or results[2] ~= false then
+      error("soundCommand did not return what the host answered")
+    end
+  end
+end
+)LUA");
+  std::vector<std::pair<int, uint32_t>> sent;
+  bool accept = true;
+  harness.engine().SetSoundCommandCallback([&](int board, uint32_t cmd) {
+    sent.emplace_back(board, cmd);
+    return accept;
+  });
+  harness.LoadOrFail();
+
+  harness.engine().ProcessSwitchState(1, 1);
+  accept = false;  // e.g. the generation cannot express the number
+  harness.engine().ProcessSwitchState(2, 1);
+  harness.engine().ProcessSwitchState(3, 1);
+
+  REQUIRE(sent.size() == 2);
+  CHECK(sent[0] == std::make_pair(0, 0x03E6u));
+  CHECK(sent[1] == std::make_pair(1, 0x1000u));
+  CHECK_FALSE(harness.engine().HasFatalError());
+}
+
+TEST_CASE("a sound command out of range is an error naming the call") {
+  for (const char* call : {
+           "ppuc.soundCommand(0x10000)",
+           "ppuc.soundCommand(-1)",
+           "ppuc.soundCommand(1, 256)",
+           "ppuc.soundCommand('loud')",
+       }) {
+    RulesHarness harness(call);
+    const std::string error = harness.Load();
+    CAPTURE(call);
+    CHECK(error.find("soundCommand") != std::string::npos);
+  }
+}
+
+TEST_CASE("without AltSound's host a sound command is not sent") {
+  RulesHarness harness(R"LUA(
+if ppuc.soundCommand(0x0015) then error("sent without a host") end
+)LUA");
+  harness.LoadOrFail();
+}

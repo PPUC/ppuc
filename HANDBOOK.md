@@ -176,6 +176,7 @@ and can be left out.
 [Game]
 Rom=flash_l1
 Engine=pinmame          ; or `script` for a game with no ROM
+AltSoundHardware=wpcs   ; Engine=script only: see "AltSound packs" below
 
 [Paths]
 Translite=translite-on.png
@@ -250,6 +251,27 @@ tool, **Music in game** — 29% of its normal level by default.
 That is the knob to reach for when the music cannot be heard during a game.
 Turning *Music* up instead makes it loud in every quiet moment as well, which
 is how a service test that silences the ROM ends up hurting somebody's ears.
+
+### AltSound packs
+
+An AltSound pack replaces the game's own sound with recorded samples. It lives
+in `pinmame/altsound/<Rom>/` in the game folder and is switched on with
+`AltSound=true` in `[Runtime]`.
+
+A game with no ROM (`Engine=script`) plays a pack too: its rules send the sound
+commands the original ROM would have sent. Two things have to be in `ppuc.ini`
+for that:
+
+- `Rom=` names the pack folder, as for every other media file of the game, e.g.
+  `Rom=dh_lx2` for `pinmame/altsound/dh_lx2/`.
+- `AltSoundHardware=` names the sound hardware the pack was recorded from:
+  `wpcs` for WPC-S games such as Dirty Harry, `wpcdcs` for the first DCS games,
+  `wpc95` for WPC-95. With the wrong value most sounds play wrong or not at all.
+  With a ROM, leave it out: PinMAME knows the hardware, and the value is ignored.
+
+If the pack is silent, run once with `DebugSoundCommands=true` in `[Runtime]`:
+every command a rule sends is logged as `Lua sound command: ...`, and a command
+the hardware cannot express says `ppuc.soundCommand(...) not sent` and why.
 
 ### The playlist
 
@@ -556,7 +578,8 @@ never finds out.
 
 Rules can watch switches and coils, suppress either, send switches to the ROM
 that no board reported, fire coils, trigger LED effects, speech and Serum
-scenes, hold off the ball search, and color the GI: on a playfield with RGB GI,
+scenes, play sounds from the AltSound pack, hold off the ball search, and color
+the GI: on a playfield with RGB GI,
 a custom game gives a mode a color and the GI takes it while the mode runs,
 cycling or fading when several colored modes run at once. GI dimming keeps
 working on top of the color. This needs board firmware 0.5.9 or later on every

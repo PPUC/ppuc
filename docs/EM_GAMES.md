@@ -292,6 +292,18 @@ ppuc-pinmame --game ppuc_games/emdemo --serial /dev/ttyUSB0
 See [`ppuc_games/emdemo`](../../ppuc_games/emdemo/README.md) for a complete
 reference machine.
 
+### Sound from an AltSound pack
+
+A ROM-less game plays an AltSound pack the same way a ROM does: rules send the
+pack's sound commands with `ppuc.soundCommand(cmd)` (see
+[`RULES_AND_EFFECTS.md`](RULES_AND_EFFECTS.md#altsound-commands)). The pack is
+`<game>/pinmame/altsound/<Rom>/`, so `[Game] Rom` must be set, and
+`[Runtime] AltSound = true` enables it. A pack recorded from a ROM needs that
+ROM's sound hardware, which there is no ROM to report: `[Game]
+AltSoundHardware = wpcs` for a WPC-S machine such as Dirty Harry. PPUC answers
+AltSound's machine-state question with it, and splits each command into the
+bytes that ROM would write.
+
 ## Lua API
 
 A machine is fully playable from its `emGame:` block with no Lua at all. Rules
