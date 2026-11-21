@@ -17,6 +17,7 @@ behavior:
 - send PUP pack triggers with `ppuc.pupTrigger(...)`
 - play a Serum colorization scene with `ppuc.serumScene(...)`
 - trigger board-local effects with `ppuc.effectTrigger(...)`
+- color the GI strings with `ppuc.setGiProgram(...)`
 - speak text with `ppuc.speech(...)`
 - play an audio file from the game folder with `ppuc.playSound(...)`
 - delay work without blocking with `ppuc.after(...)`
@@ -92,10 +93,12 @@ ppuc.pulseCoil(number, durationMs)
 ppuc.blinkLamp(number, onMs, offMs)
 ppuc.stopBlinkLamp(number)
 ppuc.ballSave(durationMs)
+ppuc.setGiProgram(string, colors, effect, periodMs)
 ```
 
 `ppuc.ballSave` works under both engines: ball save lives in the switch path
-ahead of the engine, not inside it. Under `engine: script` a further
+ahead of the engine, not inside it. So does `ppuc.setGiProgram`, see
+[GI Colors](#gi-colors). Under `engine: script` a further
 `ppuc.game.*` and `ppuc.dmd.*` API is available; see [`EM_GAMES.md`](EM_GAMES.md).
 
 Handlers:
@@ -250,6 +253,60 @@ coil: gi[,gi...] = onBrightness/offBrightness
 ```
 
 Brightness values are clamped to the PPUC GI range `0..8`.
+
+## GI Colors
+
+On a playfield whose GI is RGB LEDs (WS2812 on the IO boards), a rule can give a
+GI string another color than the one its LEDs are configured with. Custom games
+use it for mode colors: while a mode runs, the GI takes its color, and with
+several colored modes it cycles or cross-fades between them.
+
+```lua
+ppuc.setGiProgram(string, colors, effect, periodMs)
+```
+
+- `string`: the GI string, `1`-`5`.
+- `colors`: a list of `"RRGGBB"` (a leading `#` is fine, numbers like
+  `0xFF3000` too), highest priority first, or a single color. The boards hold
+  four; further colors are dropped.
+- `effect`: `"static"` (the default) shows the first color, `"cycle"` switches
+  hard to the next color every `periodMs`, `"fade"` cross-fades to the next one
+  over each `periodMs`, the last back into the first. `"default"` puts back the
+  colors the LEDs are configured with.
+- `periodMs`: time per color for `cycle` and `fade`, up to 65535.
+
+Brightness is not part of it. GI dimming keeps working as before, from the ROM
+or from the game, and the color follows it, through afterglow and heat-up too.
+
+Returns `true` when the boards will show the program, `false` when they cannot:
+no IO boards, or a board on firmware older than 0.5.9 (logged once at the first
+call). A string number, color or effect it cannot take is an error naming the
+line.
+
+```lua
+-- Car chase is red on strings 1 and 2; back to normal when it ends.
+ppuc.setGiProgram(1, {"FF3000"})
+ppuc.setGiProgram(2, {"FF3000"})
+...
+ppuc.setGiProgram(1, nil, "default")
+
+-- Two colored modes at once.
+ppuc.setGiProgram(1, {"FF3000", "0040FF"}, "fade", 2000)
+```
+
+Calling it with the color a string is configured with and `"static"` is the
+same as `"default"`: that is what a game says when no colored mode runs, and the
+board then restores every LED's own color, so a string with a differently
+colored accent LED gets its accent back. On a string of mixed colors any of its
+configured colors counts. A program the boards already show is not sent again,
+so a rule may set the same program on every update.
+
+How it works, and what it costs: the boards run the program themselves. The
+host sends one 25-byte frame per change of program, not a frame per color step,
+and sends it again after a bus resync. A GI string is meant to be wired as one
+LED segment on one board. Every LED assigned to the string takes the color
+wherever it is, since the frame goes to all boards, but a fade split across two
+boards runs on two clocks and is only roughly in step.
 
 ## Board Effect Triggers
 

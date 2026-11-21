@@ -498,6 +498,10 @@ Outputs and integrations:
 * `ppuc.sendSwitchToCpu(number, state)`
 * `ppuc.pulseCoil(number, durationMs)`
 * `ppuc.blinkLamp(number, onMs, offMs)` and `ppuc.stopBlinkLamp(number)`
+* `ppuc.setGiProgram(string, colors, effect, periodMs)` colors a GI string
+  (`static`, `cycle`, `fade`, or `default` for the configured colors); the
+  boards render it. Needs board firmware 0.5.9; see
+  [`docs/RULES_AND_EFFECTS.md`](docs/RULES_AND_EFFECTS.md#gi-colors)
 
 `ppuc.after(...)` does not sleep inside the PinMAME loop. It stores the callback
 and runs it from the normal rules update tick after the requested delay:

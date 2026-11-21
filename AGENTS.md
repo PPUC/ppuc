@@ -238,7 +238,7 @@ Capability groups (see `README.md` / `docs/RULES_AND_EFFECTS.md` for the full AP
   `stateActive`, `triggerHistory`, `triggerSequence`, `onlyOnceEvery`,
   `switchGroupState/Closing/Opening`
 - outputs: `pupTrigger`, `serumScene`, `speech`, `effectTrigger`, `pulseCoil`, `blinkLamp`,
-  `stopBlinkLamp`
+  `stopBlinkLamp`, `setGiProgram`
 - interceptor: `suppressSwitch`, `sendSwitchToCpu`
 - scheduling: `after(delayMs, fn)` — does not sleep inside the PinMAME loop; the
   callback runs from the normal rules update tick
@@ -247,6 +247,10 @@ Capability groups (see `README.md` / `docs/RULES_AND_EFFECTS.md` for the full AP
 runtime event with source `EVENT_SOURCE_EFFECT`, transported as a v2
 `kFrameTrigger`. The game YAML effect block must declare a matching
 `trigger.source: F` plus `trigger.name` or `trigger.number`.
+
+`ppuc.setGiProgram(...)` (GI mode colors of custom games, under either engine)
+goes to `PPUC::SetGiColorProgram` in libppuc, which sends io-boards'
+`kAdminGiProgram` once per change; the boards render cycle and fade themselves.
 
 The original ROM still owns scoring, lamp logic, solenoid timing, switch matrix
 behavior, ball flow, and attract/game mode. Rules add presentation and extra

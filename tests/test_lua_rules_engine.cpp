@@ -308,3 +308,90 @@ end
   CHECK_MESSAGE(harness.speech.empty(),
                 "io/dofile/loadfile must not be reachable from rules");
 }
+
+namespace {
+struct RecordedGiProgram {
+  int string;
+  std::vector<uint32_t> colors;
+  std::string effect;
+  uint16_t periodMs;
+};
+}  // namespace
+
+TEST_CASE("a rule sets a GI color program and learns whether it is shown") {
+  RulesHarness harness(R"LUA(
+results = {}
+function ppuc.onSwitchChanged(number, state)
+  if number == 1 then
+    results[#results + 1] = ppuc.setGiProgram(2, {"FF3000", "#00ff80"}, "fade", 2000)
+  elseif number == 2 then
+    results[#results + 1] = ppuc.setGiProgram(1, "FFE0B0")
+  elseif number == 3 then
+    results[#results + 1] = ppuc.setGiProgram(5, {0x0000FF, 0x00FF00}, "cycle", 70000)
+  elseif number == 4 then
+    results[#results + 1] = ppuc.setGiProgram(3, nil, "default")
+  elseif number == 5 then
+    if results[1] ~= true or results[4] ~= false then
+      error("setGiProgram did not return what the boards answered")
+    end
+  end
+end
+)LUA");
+  std::vector<RecordedGiProgram> programs;
+  bool accept = true;
+  harness.engine().SetGiProgramCallback(
+      [&](int string, const std::vector<uint32_t>& colors, const std::string& effect, uint16_t periodMs) {
+        programs.push_back(RecordedGiProgram{string, colors, effect, periodMs});
+        return accept;
+      });
+  harness.LoadOrFail();
+
+  harness.engine().ProcessSwitchState(1, 1);
+  harness.engine().ProcessSwitchState(2, 1);
+  harness.engine().ProcessSwitchState(3, 1);
+  accept = false;  // the boards cannot show it: the script is told
+  harness.engine().ProcessSwitchState(4, 1);
+
+  REQUIRE(programs.size() == 4);
+  CHECK(programs[0].string == 2);
+  CHECK(programs[0].colors == std::vector<uint32_t>{0xFF3000, 0x00FF80});
+  CHECK(programs[0].effect == "fade");
+  CHECK(programs[0].periodMs == 2000);
+  // A single color, and static when no effect is named.
+  CHECK(programs[1].colors == std::vector<uint32_t>{0xFFE0B0});
+  CHECK(programs[1].effect == "static");
+  CHECK(programs[1].periodMs == 0);
+  // Numbers work as colors; a period past the wire's 16 bits is capped.
+  CHECK(programs[2].colors == std::vector<uint32_t>{0x0000FF, 0x00FF00});
+  CHECK(programs[2].periodMs == 0xFFFF);
+  CHECK(programs[3].colors.empty());
+  CHECK(programs[3].effect == "default");
+
+  harness.engine().ProcessSwitchState(5, 1);
+  CHECK_FALSE(harness.engine().HasFatalError());
+}
+
+TEST_CASE("a GI program the boards cannot take is an error naming the line") {
+  for (const char* call : {
+           "ppuc.setGiProgram(6, 'FF0000')",
+           "ppuc.setGiProgram(0, 'FF0000')",
+           "ppuc.setGiProgram(1, 'FF00')",
+           "ppuc.setGiProgram(1, 'GG0000')",
+           "ppuc.setGiProgram(1, {'FF0000', 'red'})",
+           "ppuc.setGiProgram(1, 'FF0000', 'top')",
+           "ppuc.setGiProgram(1, 0x1000000)",
+       }) {
+    RulesHarness harness(call);
+    const std::string error = harness.Load();
+    CAPTURE(call);
+    CHECK(error.find("ppuc.setGiProgram") != std::string::npos);
+  }
+}
+
+TEST_CASE("without boards to send it to, a GI program is not shown") {
+  RulesHarness harness(R"LUA(
+shown = ppuc.setGiProgram(1, "FF0000")
+if shown then error("shown without boards") end
+)LUA");
+  harness.LoadOrFail();
+}

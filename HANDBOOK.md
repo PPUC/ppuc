@@ -556,7 +556,12 @@ never finds out.
 
 Rules can watch switches and coils, suppress either, send switches to the ROM
 that no board reported, fire coils, trigger LED effects, speech and Serum
-scenes, and hold off the ball search.
+scenes, hold off the ball search, and color the GI: on a playfield with RGB GI,
+a custom game gives a mode a color and the GI takes it while the mode runs,
+cycling or fading when several colored modes run at once. GI dimming keeps
+working on top of the color. This needs board firmware 0.5.9 or later on every
+board (see [section 9](#9-updating-board-firmware)), and each GI string wired as
+one LED segment.
 
 Written up in [`docs/RULES_AND_EFFECTS.md`](docs/RULES_AND_EFFECTS.md) and
 [`docs/INTERCEPTOR.md`](docs/INTERCEPTOR.md). Flash's multiball is documented
@@ -749,6 +754,20 @@ The test also lists, before it starts, any LED assigned beyond the end of its
 string. The board drives only as many LEDs as `amount` in `io-boards.yaml`
 says, so those can never light: either `amount` is too small or the LED number
 is wrong.
+
+**The GI keeps its normal color when a mode should color it.** The log says why
+once, at the first color a game asks for:
+
+```
+PPUC: GI color programs need io-boards firmware 0.5.9 on every board; the GI keeps its configured colors
+```
+
+One board on older firmware is enough, because older firmware does not
+understand the message and would stumble over every one. Update the boards
+([section 9](#9-updating-board-firmware)). Without that line, check that the GI
+LEDs are configured as GI (not as lamps) for the string the game colors. If only
+part of a string changes color, the rest of its LEDs belong to another GI string
+in `io-boards.yaml`.
 
 **The screen flickers between two things.** Something is presenting twice. On a
 machine with a B2S or PUP pack, check you did not also configure a translite.
