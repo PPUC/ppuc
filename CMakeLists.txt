@@ -880,6 +880,7 @@ if(PPUC_BUILD_TESTS)
       tests/test_flash_multiball.cpp
       tests/test_lua_rules_engine.cpp
       tests/test_altsound_command.cpp
+      tests/test_thread_handoff.cpp
       tests/test_lua_rules_timing.cpp
       tests/test_pinmame_nvram_tracking.cpp
       tests/test_attract_slides.cpp

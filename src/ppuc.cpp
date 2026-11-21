@@ -37,6 +37,11 @@
 #include <unordered_set>
 #include <vector>
 
+#if defined(__linux__)
+#include <pthread.h>
+#include <sched.h>
+#endif
+
 #include "BoardTypeCheck.h"
 #include "DMDUtil/Config.h"
 #include "DMDUtil/ConsoleDMD.h"
@@ -55,6 +60,7 @@
 #include "BoardFlipperGate.h"
 #include "HealthLog.h"
 #include "SwitchHold.h"
+#include "ThreadHandoff.h"
 #include "LedStringWalk.h"
 #include "LedStringWalkYaml.h"
 #include "AudioLanes.h"
@@ -94,6 +100,10 @@
 #endif
 
 #define MAIN_LOOP_SLEEP_US 20  // Main loop sleep time in microseconds
+// The switch thread's. libppuc polls the boards every few milliseconds, so a
+// tenth of one adds nothing a player can feel, and on a Pi it is a fifth of the
+// wake-ups the main loop's 20 us costs.
+#define SWITCH_LOOP_SLEEP_US 100
 
 // Main-loop stall reporting, enabled by --debug-audio.
 //
@@ -112,7 +122,7 @@
 class LoopStallWatch
 {
 public:
-  explicit LoopStallWatch(bool enabled) : m_enabled(enabled)
+  explicit LoopStallWatch(bool enabled, const char* name = "Loop") : m_enabled(enabled), m_name(name)
   {
     if (m_enabled)
     {
@@ -149,7 +159,7 @@ public:
     {
       return;
     }
-    std::string out = "Loop: iteration took " + std::to_string(totalUs / 1000) + " ms:";
+    std::string out = std::string(m_name) + ": iteration took " + std::to_string(totalUs / 1000) + " ms:";
     int64_t accountedUs = 0;
     for (size_t i = 0; i < m_phaseCount; ++i)
     {
@@ -171,6 +181,7 @@ public:
   }
 
 private:
+  const char* m_name;
   static constexpr size_t kMaxPhases = 12;
   struct PhaseTime
   {
@@ -614,19 +625,44 @@ static void PrintFlushedLogLine(const char* prefix, const char* message)
 // features it was never written to have.
 PlayfieldAssist g_playfieldAssist;
 bool g_playfieldAssistEnabled = false;
+// PlayfieldAssist has no lock of its own, and is reached from three threads:
+// the switch thread (switches, its tick), the coil poll thread (ball in play)
+// and whichever thread updates the engine (ball and player). A leaf lock: it
+// never calls out, it queues actions and events that are taken out under the
+// lock and acted on after it.
+std::mutex g_playfieldAssistMutex;
 // Non-null only under engine: script. The ROM path needs no back-reference: the
 // tilting bob hit is forwarded to PinMAME like any other switch.
 GameCore* g_pGameCore = nullptr;
 // Collected during option handling, loaded once the engine exists.
 std::vector<std::string> g_ruleScripts;
 
+// Where the switch thread and the main thread meet. See ThreadHandoff.h and
+// RunSwitchThread().
+//
+// Work the rules asked of what only the main thread may touch: the plugin bus,
+// a sound file, libdmdutil's triggers.
+TaskQueue g_mainThreadTasks;
+// Every switch change, once the switch thread has dealt with it, for what it
+// means to the screens and to the coin door the NVRAM save watches.
+struct SwitchUiEvent
+{
+  int number;
+  uint8_t state;
+};
+HandoffQueue<SwitchUiEvent> g_switchUiEvents;
+// Switches the main thread injects (the keyboard), for the switch thread to
+// send: an engine updated on that thread is only ever called from it.
+HandoffQueue<std::pair<int, uint8_t>> g_injectedSwitches(256);
+
 // Arbitrates between what the game engine wants an output to do and what a Lua
 // rule has temporarily overridden it to do. Engine-neutral: "engine" here is
 // PinMAME or the ROM-less game core, and the arbitration is the same either way.
 //
-// THREADING. ApplyEngineCoil runs on the engine's thread (libpinmame has its
-// own), while Service() and the rules actions run on the main loop, so every
-// method that touches the maps takes m_mutex. The lock is never held across a
+// THREADING. ApplyEngineCoil runs on the engine's thread (PinMAME's coil poll
+// thread), ApplyEngineLamp on whichever thread updates the engine, Service()
+// and most rules actions on the switch thread, and the service tests on the
+// main thread, so every method that touches the maps takes m_mutex. The lock is never held across a
 // call into LuaRulesEngine: the path OnCoilChanged -> OnCoilState -> a Lua
 // onCoilChanged handler -> ppuc.pulseCoil -> HandleAction comes straight back in
 // here, and a non-recursive mutex held across that would deadlock.
@@ -820,8 +856,11 @@ struct InterceptorOutputOverrides
         StopBlinkLamp(controller, action.number);
         break;
       case RulesActionType::GrantBallSave:
+      {
+        std::lock_guard<std::mutex> lock(g_playfieldAssistMutex);
         g_playfieldAssist.GrantBallSave(action.durationMs);
         break;
+      }
       case RulesActionType::HoldBallSearch:
         g_ballSearchHeld.store(action.state != 0, std::memory_order_release);
         break;
@@ -7259,12 +7298,13 @@ struct PpucEngineHost final : GameEngineHost
   {
     g_ballInPlay.store(inPlay, std::memory_order_release);
     // On at once; off once the ball has stayed ended for a moment, which the
-    // main loop's Update() delivers.
+    // switch thread's Update() delivers.
     ApplyBoardFlipperChange(pPpuc, g_boardFlipperGate.SetBallInPlay(inPlay, BoardFlipperGateNowMs()));
     if (g_playfieldAssistEnabled)
     {
       // Neither feature should act in attract, nor while the ROM has the
       // flippers off between balls or after a tilt.
+      std::lock_guard<std::mutex> lock(g_playfieldAssistMutex);
       g_playfieldAssist.SetPlayActive(inPlay);
     }
   }
@@ -7374,6 +7414,7 @@ struct PpucEngineHost final : GameEngineHost
     // GameCore from the ball number it owns. Ball 0 means no game in progress.
     if (g_playfieldAssistEnabled)
     {
+      std::lock_guard<std::mutex> lock(g_playfieldAssistMutex);
       if (ball == 0)
       {
         g_playfieldAssist.OnBallEnd();
@@ -7395,6 +7436,7 @@ struct PpucEngineHost final : GameEngineHost
     }
     if (g_playfieldAssistEnabled)
     {
+      std::lock_guard<std::mutex> lock(g_playfieldAssistMutex);
       g_playfieldAssist.SetCurrentPlayer(player);
     }
   }
@@ -7475,9 +7517,16 @@ static void ServicePlayfieldAssist(GameEngine* pEngine)
     return;
   }
 
-  g_playfieldAssist.Update();
+  std::vector<PlayfieldAssist::Action> actions;
+  std::vector<PlayfieldAssist::Event> events;
+  {
+    std::lock_guard<std::mutex> lock(g_playfieldAssistMutex);
+    g_playfieldAssist.Update();
+    actions = g_playfieldAssist.TakeActions();
+    events = g_playfieldAssist.TakeEvents();
+  }
 
-  for (const PlayfieldAssist::Action& action : g_playfieldAssist.TakeActions())
+  for (const PlayfieldAssist::Action& action : actions)
   {
     switch (action.type)
     {
@@ -7490,7 +7539,7 @@ static void ServicePlayfieldAssist(GameEngine* pEngine)
     }
   }
 
-  for (const PlayfieldAssist::Event& event : g_playfieldAssist.TakeEvents())
+  for (const PlayfieldAssist::Event& event : events)
   {
     switch (event.type)
     {
@@ -7643,6 +7692,312 @@ static bool VirtualDmdYieldsToOverlay(SDL_Window* dmdWindow)
   return g_overlay != OverlayScreen::None && WindowsShareScreen(dmdWindow, OverlayHostWindow());
 }
 #endif
+
+// The main thread's half of a switch change: what it means to the screens,
+// the buttons that steer them, and the coin door the NVRAM and the health log
+// watch. The switch thread has already passed the change to the rules and the
+// engine; nothing here can hold that up.
+static void HandleSwitchOnMainThread(int number, uint8_t newSwitchState)
+{
+  // Before any suppression: the screen answers what the machine is
+  // doing, not what the engine was told about it.
+  NoteSwitchMonitorState(number, newSwitchState);
+  NoteNvramCoinDoorSwitch(number, newSwitchState);
+  NoteHealthCoinDoorSwitch(number, newSwitchState);
+  // The slideshow. The two navigation buttons steer it; the other
+  // buttons take it down.
+  //
+  // Only buttons. A machine in attract moves its own ball -- the ball
+  // search fires the release, the jets and the kickers, and the ball
+  // rolls over whatever it rolls over -- and treating that as somebody
+  // walking up meant the show started late, at a different time every
+  // time, and gave up after two or three slides. Nobody was touching the
+  // machine; the machine was touching itself. A person arrives at a
+  // flipper button, a coin slot or the start button, and those are
+  // exactly the switches the configuration marks as buttons.
+  //
+  // Who the two buttons belong to depends on what is on the screen: the
+  // song chooser during a game, the slideshow in attract. The two can
+  // never be up at once, so there is no priority to argue about. Either
+  // way the switch still reaches the engine -- the flippers are the
+  // player's even while they are answering a question.
+  bool steered = false;
+  const bool isNext = opt_slide_next_switch != 0 && number == opt_slide_next_switch;
+  const bool isPrevious = opt_slide_previous_switch != 0 && number == opt_slide_previous_switch;
+  if (isNext || isPrevious)
+  {
+    const int index = isNext ? 0 : 1;
+    // On the close, not the release: a button that acts when it is let go
+    // feels broken to anybody used to a pinball machine. Every close steps,
+    // because libppuc reports changes -- a close it repeats is a close that
+    // really happened -- and nothing here waits for a release it may never
+    // be told about.
+    if (newSwitchState != 0)
+    {
+      const uint64_t nowMs = SDL_GetTicks();
+      const uint64_t acceptedMs = g_slideNavAcceptedAtMs[index];
+      if (acceptedMs != 0 && nowMs - acceptedMs < kSlideNavDebounceMs)
+      {
+        // A bounce of a press already acted on. Still steered: it is these
+        // buttons being used, not somebody walking up to the machine.
+        steered = true;
+      }
+      else
+      {
+        const uint64_t otherMs = g_slideNavClosedAtMs[isNext ? 1 : 0];
+        const bool bothHeld = otherMs != 0 && nowMs - otherMs <= kSlideNavBothWindowMs;
+        g_slideNavClosedAtMs[index] = nowMs;
+        g_slideNavAcceptedAtMs[index] = nowMs;
+
+        const SlideNav direction = isNext ? SlideNav::Next : SlideNav::Previous;
+        steered = HandleSongPickerNav(direction, bothHeld) || HandleSlideNav(direction, bothHeld);
+      }
+    }
+    else
+    {
+      // A release is not activity, or holding a flipper button would end
+      // the show.
+      steered = true;
+    }
+  }
+  if (!steered && g_attractSlides && g_buttonSwitchNumbers.count(number) != 0)
+  {
+    g_attractSlides->NoteActivity(SDL_GetTicks());
+  }
+  // The playfield answering instead of the player closes the chooser.
+  NoteSongPickerSwitch(number, newSwitchState);
+}
+
+// The switch thread's half of a switch change: tilt and ball save, the rules,
+// the engine, the ball search and the trough watch.
+static void HandleSwitchOnSwitchThread(GameEngine* pEngine, BallSearchRunner& ballSearchRunner,
+                                       uint32_t ballSearchDelayMs, int number, uint8_t newSwitchState)
+{
+  // Raw board state, before any rule can suppress it: what is being timed
+  // is a ball physically sitting there.
+  if (opt_ball_trough_switch != 0 && number == opt_ball_trough_switch)
+  {
+    BallTroughWatch::NoteSwitch(g_troughWatch, newSwitchState != 0, SDL_GetTicks());
+  }
+  NoteBallSearchSwitchUpdate(pPpuc, ballSearchRunner, number, newSwitchState, ballSearchDelayMs);
+
+  // Tilt warnings and ball save decide first: a warning hit and a saved
+  // drain must never reach the engine at all, under either engine.
+  PlayfieldAssist::SwitchDecision assistDecision;
+  if (g_playfieldAssistEnabled)
+  {
+    std::lock_guard<std::mutex> lock(g_playfieldAssistMutex);
+    assistDecision = g_playfieldAssist.ProcessSwitch(number, newSwitchState);
+  }
+
+  LuaRulesEngine::SwitchProcessResult switchProcess;
+  if (pLuaRulesEngine)
+  {
+    switchProcess = pLuaRulesEngine->ProcessSwitchState(number, newSwitchState);
+    if (pLuaRulesEngine->HasFatalError())
+    {
+      printf("Lua rules error: %s\n", pLuaRulesEngine->GetFatalError().c_str());
+      running = false;
+    }
+  }
+
+  // Switches between 200 and 240 are custom switches within the io-boards which should not be sent to
+  // pinmame. Switches above 240 will become negative values, for example 243 => -3.
+  if (assistDecision.forwardToEngine && switchProcess.forwardToCpu && (number < 200 || number > 241))
+  {
+    SendSwitchToEngine(pEngine, number, newSwitchState);
+  }
+
+  if (opt_debug || opt_debug_switches)
+  {
+    printf("[%10.3f] Switch updated: #%d, %d\n", DebugTimestampMs(), number, newSwitchState);
+  }
+
+  if (pMediaPluginHost != nullptr)
+  {
+    pMediaPluginHost->QueueEvent('W', number, newSwitchState);
+  }
+}
+
+// Lamps and GI as the engine changed them, to the boards, the rules and the
+// media. Called from whichever thread updates the engine.
+static void PollEngineOutputs(GameEngine* pEngine, std::vector<GameEngineOutputChange>& lampChanges,
+                              std::vector<GameEngineOutputChange>& giChanges, bool pollGis)
+{
+  pEngine->PollChangedLamps(lampChanges);
+  for (const GameEngineOutputChange& change : lampChanges)
+  {
+    const uint16_t lampNo = change.number;
+    const uint8_t lampState = change.value == 0 ? 0 : 1;
+
+    if (opt_debug || opt_debug_lamps)
+    {
+      printf("[%10.3f] Lamp updated: #%d, %d\n", DebugTimestampMs(), lampNo, lampState);
+    }
+
+    if (pMediaPluginHost != nullptr)
+    {
+      pMediaPluginHost->QueueEvent('L', lampNo, lampState);
+    }
+
+    g_interceptorOutputs.ApplyEngineLamp(pPpuc, static_cast<int>(lampNo), lampState);
+
+    if (pLuaRulesEngine)
+    {
+      pLuaRulesEngine->OnLampState(static_cast<int>(lampNo), lampState);
+      if (pLuaRulesEngine->HasFatalError())
+      {
+        printf("Lua rules error: %s\n", pLuaRulesEngine->GetFatalError().c_str());
+        running = false;
+      }
+    }
+  }
+
+  if (pollGis)
+  {
+    pEngine->PollChangedGis(giChanges);
+    for (const GameEngineOutputChange& change : giChanges)
+    {
+      const uint8_t giNo = static_cast<uint8_t>(change.number);
+      const uint8_t giState = static_cast<uint8_t>(change.value);
+      // PinMAME numbers the GI strings from 0, the game config and the
+      // boards from 1. Passed through unchanged, the first string was
+      // dropped by libppuc and every other one lit its neighbour, so on
+      // WPC the fifth string never lit at all.
+      const int giString = giNo + 1;
+
+      if (opt_debug || opt_debug_lamps)
+      {
+        printf("[%10.3f] GI updated: #%d, %d\n", DebugTimestampMs(), giString, giState);
+      }
+
+      if (pMediaPluginHost != nullptr)
+      {
+        pMediaPluginHost->QueueEvent('G', giNo, giState);
+      }
+
+      pPpuc->SetGIState(giString, giState);
+    }
+  }
+}
+
+// Real-time priority for a thread that answers the machine. Best effort, as for
+// PinMAME's coil poll thread: without it a sleep on a loaded Pi can overshoot
+// by several milliseconds, and the tail is what a player feels.
+static void SetMachineThreadPriority(int priority, const char* what)
+{
+#if defined(__linux__)
+  sched_param param{};
+  param.sched_priority = priority;
+  if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &param) != 0 && opt_debug)
+  {
+    printf("PPUC: SCHED_FIFO unavailable, the %s runs at normal priority\n", what);
+  }
+#else
+  (void)priority;
+  (void)what;
+#endif
+}
+
+// The machine's own thread: everything between a switch closing and a coil
+// firing that is not PinMAME's own solenoid path (which has a thread of its
+// own, see PluginEngine).
+//
+// The switches come off libppuc's queue here and go to tilt and ball save, to
+// the rules and to the engine; the rules' timers run here, and the coils and
+// lamps the rules hold or pulse are serviced here. So is an engine that is
+// itself the game (the ROM-less GameCore). None of it waits for anything that
+// draws, plays or talks to the plugin bus: all of that is the main thread's,
+// and what this thread has for it goes through a queue (ThreadHandoff.h).
+//
+// It used to be the first half of the main loop, behind whatever the second
+// half spent: a DMD frame waiting for the display, a plugin message, a sound
+// file being opened. A switch waited for all of it.
+static void RunSwitchThread(GameEngine* pEngine, BallSearchRunner& ballSearchRunner, uint32_t ballSearchDelayMs,
+                            uint32_t ballSearchRoundDelayMs, bool engineHere, bool pollGis,
+                            const std::atomic<bool>& stop)
+{
+  // Below PinMAME's coil poll thread (40), above everything else.
+  SetMachineThreadPriority(35, "switch thread");
+  std::vector<GameEngineOutputChange> lampChanges;
+  std::vector<GameEngineOutputChange> giChanges;
+  std::vector<std::pair<int, uint8_t>> injected;
+
+  while (running.load(std::memory_order_acquire) && !stop.load(std::memory_order_acquire))
+  {
+    std::this_thread::sleep_for(std::chrono::microseconds(SWITCH_LOOP_SLEEP_US));
+    LoopStallWatch stallWatch(opt_debug_audio, "Switch loop");
+
+    // From the keyboard, on the main thread.
+    g_injectedSwitches.TakeAll(injected);
+    for (const auto& [number, state] : injected)
+    {
+      SendSwitchToEngine(pEngine, number, state);
+    }
+
+    // Drained before the readiness gate, and that is the whole point.
+    //
+    // The boards report their switches as soon as the bus is up; the ROM
+    // takes seconds to boot. Held behind the gate, the whole backlog used to
+    // arrive in one iteration *after* the ROM had already started from an
+    // all-open matrix -- so every switch that was simply closed at power-on
+    // reached it as a fresh edge. A drop target left down became a target
+    // hit, with the award lit for real, and the machine only agreed with
+    // itself again once the first game reset the bank. That is why the first
+    // game after a restart looked confused and the second one did not.
+    //
+    // On a real machine a switch is closed from the instant power comes up.
+    // Forwarding it straight away is what reproduces that: the state is the
+    // ROM's starting position, not something the player did.
+    PPUCSwitchState* switchState;
+    while ((switchState = pPpuc->GetNextSwitchState()) != nullptr)
+    {
+      const int number = switchState->number;
+      const uint8_t newSwitchState = switchState->state == 0 ? 0 : 1;
+      delete switchState;
+      HandleSwitchOnSwitchThread(pEngine, ballSearchRunner, ballSearchDelayMs, number, newSwitchState);
+      g_switchUiEvents.Push(SwitchUiEvent{number, newSwitchState});
+    }
+
+    ApplyBoardFlipperChange(pPpuc, g_boardFlipperGate.Update(BoardFlipperGateNowMs()));
+    ServiceBallSearchRunner(pPpuc, ballSearchRunner, g_ballInPlay.load(std::memory_order_acquire), ballSearchDelayMs,
+                            ballSearchRoundDelayMs);
+    ServiceBallTroughWatch(pEngine);
+    stallWatch.Phase("switches");
+
+    if (engineHere)
+    {
+      pEngine->Update();
+    }
+    // Before anything below can submit a switch: a reversal that has waited
+    // its hold time goes out ahead of newer changes.
+    ServiceSwitchHold(pEngine);
+    stallWatch.Phase("engine");
+
+    const bool ready = pEngine->IsReady();
+    if (ready && engineHere)
+    {
+      PollEngineOutputs(pEngine, lampChanges, giChanges, pollGis);
+    }
+    if (pLuaRulesEngine)
+    {
+      pLuaRulesEngine->Update();
+      if (pLuaRulesEngine->HasFatalError())
+      {
+        printf("Lua rules error: %s\n", pLuaRulesEngine->GetFatalError().c_str());
+        running = false;
+      }
+    }
+    stallWatch.Phase("rules");
+
+    if (ready)
+    {
+      ServicePlayfieldAssist(pEngine);
+    }
+    g_interceptorOutputs.Service(pPpuc);
+    stallWatch.Phase("outputs");
+  }
+}
 
 int main(int argc, char** argv)
 {
@@ -9286,14 +9641,21 @@ int main(int argc, char** argv)
             printf("PPUC: playSound: '%s' is not a path inside the game folder\n", file.c_str());
             return false;
           }
-          const std::filesystem::path path = std::filesystem::path(opt_game_folder) / relative;
-          std::string error;
-          if (!pAudioOutput->PlayEffect(path.string(), &error))
-          {
-            printf("PPUC: playSound: could not play %s: %s\n", path.string().c_str(), error.c_str());
-            return false;
-          }
-          return true;
+          // Played by the main thread. Opening and decoding the file is disk
+          // work, and a rule runs on the switch thread or on PinMAME's coil
+          // thread, holding the rules' lock that the other one waits for. So
+          // "true" means the sound was asked for, and a file that cannot be
+          // played is reported when the main thread finds out.
+          const std::string path = (std::filesystem::path(opt_game_folder) / relative).string();
+          return g_mainThreadTasks.Post(
+              [path]()
+              {
+                std::string error;
+                if (pAudioOutput != nullptr && !pAudioOutput->PlayEffect(path, &error))
+                {
+                  printf("PPUC: playSound: could not play %s: %s\n", path.c_str(), error.c_str());
+                }
+              });
         });
     pLuaRulesEngine->SetSpeechCallback(
         [](const std::string& text)
@@ -9363,14 +9725,19 @@ int main(int argc, char** argv)
     pLuaRulesEngine->SetSerumSceneCallback(
         [&](uint16_t id)
         {
-          if (pMediaPluginHost)
-          {
-            pMediaPluginHost->TriggerSerumScene(id);
-          }
-          if (pDmd)
-          {
-            pDmd->SetPUPTrigger('D', id, 1);
-          }
+          // A broadcast on the plugin bus, which belongs to the main thread.
+          g_mainThreadTasks.Post(
+              [id]()
+              {
+                if (pMediaPluginHost)
+                {
+                  pMediaPluginHost->TriggerSerumScene(id);
+                }
+                if (pDmd)
+                {
+                  pDmd->SetPUPTrigger('D', id, 1);
+                }
+              });
         });
 
     // ppuc.soundCommand(cmd [, board]): a sound command for the AltSound pack,
@@ -9931,6 +10298,18 @@ int main(int argc, char** argv)
       pPpuc->SetSwitchState(pPpuc->GetCoinDoorClosedSwitch(), 1);
     }
 
+    // The machine's own thread: switches, the rules, the coils, and an engine
+    // that does not need the plugin bus's thread. See RunSwitchThread().
+    const bool engineOnSwitchThread = !pEngine->UpdatesOnMainThread();
+    std::atomic<bool> switchThreadStop{false};
+    std::thread switchThread(
+        [&]()
+        {
+          RunSwitchThread(pEngine.get(), ballSearchRunner, opt_ball_search_delay_ms, opt_ball_search_round_delay_ms,
+                          engineOnSwitchThread, pollGis, switchThreadStop);
+        });
+    std::vector<SwitchUiEvent> switchUiBatch;
+
     const auto loopStartedAt = std::chrono::steady_clock::now();
     uint32_t boardsLostConfigurationSeen =
         (!opt_no_serial && pPpuc != nullptr) ? pPpuc->GetBusHealth().boardsLostConfiguration : 0;
@@ -9993,144 +10372,15 @@ int main(int argc, char** argv)
         loggedIdentity = true;
       }
 
-      // Drained before the readiness gate, and that is the whole point.
-      //
-      // The boards report their switches as soon as the bus is up; the ROM
-      // takes seconds to boot. Held behind the gate, the whole backlog used to
-      // arrive in one iteration *after* the ROM had already started from an
-      // all-open matrix -- so every switch that was simply closed at power-on
-      // reached it as a fresh edge. A drop target left down became a target
-      // hit, with the award lit for real, and the machine only agreed with
-      // itself again once the first game reset the bank. That is why the first
-      // game after a restart looked confused and the second one did not.
-      //
-      // On a real machine a switch is closed from the instant power comes up.
-      // Forwarding it straight away is what reproduces that: the state is the
-      // ROM's starting position, not something the player did.
-      PPUCSwitchState* switchState;
-      while ((switchState = pPpuc->GetNextSwitchState()) != nullptr)
+      // What the switch thread passed on: every switch change once more, for
+      // what it means to the screens and to the files this thread writes, and
+      // the work the rules asked of the bus, the audio and the DMD.
+      g_switchUiEvents.TakeAll(switchUiBatch);
+      for (const SwitchUiEvent& change : switchUiBatch)
       {
-        const uint8_t newSwitchState = switchState->state == 0 ? 0 : 1;
-        // Before any suppression: the screen answers what the machine is
-        // doing, not what the engine was told about it.
-        NoteSwitchMonitorState(switchState->number, newSwitchState);
-        NoteNvramCoinDoorSwitch(switchState->number, newSwitchState);
-        NoteHealthCoinDoorSwitch(switchState->number, newSwitchState);
-        // The slideshow. The two navigation buttons steer it; the other
-        // buttons take it down.
-        //
-        // Only buttons. A machine in attract moves its own ball -- the ball
-        // search fires the release, the jets and the kickers, and the ball
-        // rolls over whatever it rolls over -- and treating that as somebody
-        // walking up meant the show started late, at a different time every
-        // time, and gave up after two or three slides. Nobody was touching the
-        // machine; the machine was touching itself. A person arrives at a
-        // flipper button, a coin slot or the start button, and those are
-        // exactly the switches the configuration marks as buttons.
-        //
-        // Who the two buttons belong to depends on what is on the screen: the
-        // song chooser during a game, the slideshow in attract. The two can
-        // never be up at once, so there is no priority to argue about. Either
-        // way the switch still reaches the engine -- the flippers are the
-        // player's even while they are answering a question.
-        bool steered = false;
-        const bool isNext = opt_slide_next_switch != 0 && switchState->number == opt_slide_next_switch;
-        const bool isPrevious = opt_slide_previous_switch != 0 && switchState->number == opt_slide_previous_switch;
-        if (isNext || isPrevious)
-        {
-          const int index = isNext ? 0 : 1;
-          // On the close, not the release: a button that acts when it is let go
-          // feels broken to anybody used to a pinball machine. Every close steps,
-          // because libppuc reports changes -- a close it repeats is a close that
-          // really happened -- and nothing here waits for a release it may never
-          // be told about.
-          if (newSwitchState != 0)
-          {
-            const uint64_t nowMs = SDL_GetTicks();
-            const uint64_t acceptedMs = g_slideNavAcceptedAtMs[index];
-            if (acceptedMs != 0 && nowMs - acceptedMs < kSlideNavDebounceMs)
-            {
-              // A bounce of a press already acted on. Still steered: it is these
-              // buttons being used, not somebody walking up to the machine.
-              steered = true;
-            }
-            else
-            {
-              const uint64_t otherMs = g_slideNavClosedAtMs[isNext ? 1 : 0];
-              const bool bothHeld = otherMs != 0 && nowMs - otherMs <= kSlideNavBothWindowMs;
-              g_slideNavClosedAtMs[index] = nowMs;
-              g_slideNavAcceptedAtMs[index] = nowMs;
-
-              const SlideNav direction = isNext ? SlideNav::Next : SlideNav::Previous;
-              steered = HandleSongPickerNav(direction, bothHeld) || HandleSlideNav(direction, bothHeld);
-            }
-          }
-          else
-          {
-            // A release is not activity, or holding a flipper button would end
-            // the show.
-            steered = true;
-          }
-        }
-        if (!steered && g_attractSlides && g_buttonSwitchNumbers.count(switchState->number) != 0)
-        {
-          g_attractSlides->NoteActivity(SDL_GetTicks());
-        }
-        // The playfield answering instead of the player closes the chooser.
-        NoteSongPickerSwitch(switchState->number, newSwitchState);
-        // Raw board state, before any rule can suppress it: what is being timed
-        // is a ball physically sitting there.
-        if (opt_ball_trough_switch != 0 && switchState->number == opt_ball_trough_switch)
-        {
-            BallTroughWatch::NoteSwitch(g_troughWatch, newSwitchState != 0, SDL_GetTicks());
-        }
-        NoteBallSearchSwitchUpdate(pPpuc, ballSearchRunner, switchState->number, newSwitchState,
-                                   opt_ball_search_delay_ms);
-
-        // Tilt warnings and ball save decide first: a warning hit and a saved
-        // drain must never reach the engine at all, under either engine.
-        PlayfieldAssist::SwitchDecision assistDecision;
-        if (g_playfieldAssistEnabled)
-        {
-          assistDecision = g_playfieldAssist.ProcessSwitch(switchState->number, newSwitchState);
-        }
-
-        LuaRulesEngine::SwitchProcessResult switchProcess;
-        if (pLuaRulesEngine)
-        {
-          switchProcess = pLuaRulesEngine->ProcessSwitchState(switchState->number, newSwitchState);
-          if (pLuaRulesEngine->HasFatalError())
-          {
-            printf("Lua rules error: %s\n", pLuaRulesEngine->GetFatalError().c_str());
-            running = false;
-          }
-        }
-
-        // Switches between 200 and 240 are custom switches within the io-boards which should not be sent to
-        // pinmame. Switches above 240 will become negative values, for example 243 => -3.
-        if (assistDecision.forwardToEngine && switchProcess.forwardToCpu &&
-            (switchState->number < 200 || switchState->number > 241))
-        {
-          SendSwitchToEngine(pEngine.get(), switchState->number, newSwitchState);
-        }
-
-        if (opt_debug || opt_debug_switches)
-        {
-          printf("[%10.3f] Switch updated: #%d, %d\n", DebugTimestampMs(), switchState->number, newSwitchState);
-        }
-
-        if (pMediaPluginHost != nullptr)
-        {
-          pMediaPluginHost->QueueEvent('W', switchState->number, newSwitchState);
-        }
-
-        delete switchState;
+        HandleSwitchOnMainThread(change.number, change.state);
       }
-
-      ApplyBoardFlipperChange(pPpuc, g_boardFlipperGate.Update(BoardFlipperGateNowMs()));
-      ServiceBallSearchRunner(pPpuc, ballSearchRunner, g_ballInPlay.load(std::memory_order_acquire),
-                              opt_ball_search_delay_ms, opt_ball_search_round_delay_ms);
-      ServiceBallTroughWatch(pEngine.get());
+      g_mainThreadTasks.RunAll();
       if (opt_nvram_save)
       {
         ServiceNvramSave(pEngine.get());
@@ -10140,27 +10390,19 @@ int main(int argc, char** argv)
 
       // Runs in both loop phases, before the readiness gate: the engine has its
       // own startup work (identity, tracking-map load) that must proceed while
-      // the host is still waiting for it to come up.
-      pEngine->Update();
-      // Before anything below can submit a switch: a reversal that has waited
-      // its hold time goes out ahead of newer changes.
-      ServiceSwitchHold(pEngine.get());
-      // The DMD is sampled in here, which means a plugin's GetRenderFrame is
-      // called from this loop -- the first place to look when it stalls.
+      // the host is still waiting for it to come up. Here only for an engine
+      // that has to share this thread with the plugin bus (PinMAME); any other
+      // is updated by the switch thread. The DMD is sampled in here, which
+      // means a plugin's GetRenderFrame is called from this loop -- the first
+      // place to look when it stalls.
+      if (!engineOnSwitchThread)
+      {
+        pEngine->Update();
+      }
       stallWatch.Phase("engine");
 
       if (!pEngine->IsReady())
       {
-        if (pLuaRulesEngine)
-        {
-          pLuaRulesEngine->Update();
-          if (pLuaRulesEngine->HasFatalError())
-          {
-            printf("Lua rules error: %s\n", pLuaRulesEngine->GetFatalError().c_str());
-            running = false;
-          }
-        }
-        g_interceptorOutputs.Service(pPpuc);
         if (pMediaPluginHost != nullptr)
         {
           if (pPluginBus) pPluginBus->Process();
@@ -10171,74 +10413,11 @@ int main(int argc, char** argv)
         continue;
       }
 
-      pEngine->PollChangedLamps(lampChanges);
-      for (const GameEngineOutputChange& change : lampChanges)
+      if (!engineOnSwitchThread)
       {
-        const uint16_t lampNo = change.number;
-        const uint8_t lampState = change.value == 0 ? 0 : 1;
-
-        if (opt_debug || opt_debug_lamps)
-        {
-          printf("[%10.3f] Lamp updated: #%d, %d\n", DebugTimestampMs(), lampNo, lampState);
-        }
-
-        if (pMediaPluginHost != nullptr)
-        {
-          pMediaPluginHost->QueueEvent('L', lampNo, lampState);
-        }
-
-        g_interceptorOutputs.ApplyEngineLamp(pPpuc, static_cast<int>(lampNo), lampState);
-
-        if (pLuaRulesEngine)
-        {
-          pLuaRulesEngine->OnLampState(static_cast<int>(lampNo), lampState);
-          if (pLuaRulesEngine->HasFatalError())
-          {
-            printf("Lua rules error: %s\n", pLuaRulesEngine->GetFatalError().c_str());
-            running = false;
-          }
-        }
-      }
-
-      if (pollGis)
-      {
-        pEngine->PollChangedGis(giChanges);
-        for (const GameEngineOutputChange& change : giChanges)
-        {
-          const uint8_t giNo = static_cast<uint8_t>(change.number);
-          const uint8_t giState = static_cast<uint8_t>(change.value);
-          // PinMAME numbers the GI strings from 0, the game config and the
-          // boards from 1. Passed through unchanged, the first string was
-          // dropped by libppuc and every other one lit its neighbour, so on
-          // WPC the fifth string never lit at all.
-          const int giString = giNo + 1;
-
-          if (opt_debug || opt_debug_lamps)
-          {
-            printf("[%10.3f] GI updated: #%d, %d\n", DebugTimestampMs(), giString, giState);
-          }
-
-          if (pMediaPluginHost != nullptr)
-          {
-            pMediaPluginHost->QueueEvent('G', giNo, giState);
-          }
-
-          pPpuc->SetGIState(giString, giState);
-        }
-      }
-
-      if (pLuaRulesEngine)
-      {
-        pLuaRulesEngine->Update();
-        if (pLuaRulesEngine->HasFatalError())
-        {
-          printf("Lua rules error: %s\n", pLuaRulesEngine->GetFatalError().c_str());
-          running = false;
-        }
+        PollEngineOutputs(pEngine.get(), lampChanges, giChanges, pollGis);
       }
       stallWatch.Phase("outputs");
-      ServicePlayfieldAssist(pEngine.get());
-      g_interceptorOutputs.Service(pPpuc);
 
       if (pMediaPluginHost != nullptr)
       {
@@ -10544,12 +10723,12 @@ int main(int argc, char** argv)
               case 53:  // 5
                 // Coin Right on Williams Flash
                 NoteMachineActivity();
-                SendSwitchToEngine(pEngine.get(), 4, 1);
+                g_injectedSwitches.Push({4, 1});
                 break;
               case 13:  // Enter
                 // Game Start on Williams Flash
                 NoteMachineActivity();
-                SendSwitchToEngine(pEngine.get(), 3, 1);
+                g_injectedSwitches.Push({3, 1});
                 break;
             }
             break;
@@ -10557,6 +10736,10 @@ int main(int argc, char** argv)
       }
 #endif
     }
+
+    // Before anything below tears down what it uses: the engine, libppuc.
+    switchThreadStop.store(true, std::memory_order_release);
+    switchThread.join();
 
     if (shutdown_requested && opt_serum)
     {

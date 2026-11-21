@@ -56,6 +56,11 @@ Repository-local reference documentation:
 - `src/ppuc.cpp` (~5k lines): main entry point. CLI parsing (`cargs`), INI and
   game-folder resolution, the `GameEngineHost` fan-out, runtime loop, bench
   test modes, ball search, switch refresh, DMD/translite setup, backbox server.
+  The runtime is two loops on two threads: `RunSwitchThread()` (switches,
+  rules, coils, a ROM-less engine) and the main loop (bus, media, screens,
+  PinMAME's output sampling). Nothing on the switch thread may wait for the
+  main thread; see "Host threads" in `docs/STACK.md`.
+- `src/ThreadHandoff.h`: the queues the two threads meet in.
 - `src/GameEngine.h`: the engine seam. `GameEngine` (start/stop/update/poll/
   send-switch) and the `GameEngineHost` sink that everything else hangs off.
   Depends on nothing but the standard library, which is what lets `ppuc_tests`

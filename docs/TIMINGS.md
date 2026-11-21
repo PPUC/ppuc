@@ -17,7 +17,7 @@ stages are paid twice: once to report the opto, once to send the coil.
 |---|---|---|
 | Board debounce | io-boards | `debounce` + `debounceMode` per switch. Fast Flip reports a close at once; since firmware 0.4.3 a release only once the input has stayed open for the debounce window. |
 | Wait to be polled | libppuc | one switch-chain pass, plus the idle interval when nothing is queued |
-| Host → PinMAME | ppuc | main loop (20 µs) and the time fence (1 ms steps) |
+| Host → PinMAME | ppuc | the switch thread (100 µs), which does nothing that draws or plays, and the time fence (1 ms steps) |
 | ROM decides | ROM | the ROM's own switch scan; about 5 ms for a WPC ROM to accept a closure |
 | PinMAME → host | ppuc | coil poll thread, 1 kHz |
 | Wait for the next output frame | libppuc | the rest of the switch chain in progress; since libppuc c615c4b the idle interval no longer adds to it |

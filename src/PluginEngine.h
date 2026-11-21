@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -83,6 +84,7 @@ class PluginEngine final : public GameEngine
   bool IsReady() const override;
   bool TryGetIdentity(Identity* pIdentity) const override;
   void Update() override;
+  bool UpdatesOnMainThread() const override { return true; }
   bool SetPaused(bool paused) override;
   void PollChangedLamps(std::vector<GameEngineOutputChange>& changes) override;
   void PollChangedGis(std::vector<GameEngineOutputChange>& changes) override;
@@ -156,6 +158,13 @@ class PluginEngine final : public GameEngine
   // Main-thread output maps, rebuilt on every source change.
   std::vector<OutputEntry> m_lamps;
   std::vector<OutputEntry> m_gis;
+  // The switch accessors and the ledger below. SendSwitch() is called from the
+  // host's switch thread, and from any thread a rule runs on (the coil poll
+  // thread among them), while the accessors are replaced on the bus thread;
+  // between OnStateSrcAboutToChange() and OnStateSrcChanged() they point into
+  // freed memory and the map is empty. A leaf lock: nothing is called out to
+  // while it is held but the accessors themselves.
+  mutable std::mutex m_switchMutex;
   std::unordered_map<int, SwitchEntry> m_switchesByNumber;
 
   // What this engine was last told each switch is, and the periodic check that
@@ -180,6 +189,8 @@ class PluginEngine final : public GameEngine
   uint64_t m_nextSwitchAuditMs = 0;
   uint32_t m_switchCorrections = 0;
   void AuditSwitches();
+  void AuditSwitchesLocked();
+  size_t SwitchMappingCount() const;
   // Set when the output sources change, so the next sample states every lamp and
   // GI rather than only the ones that differ from a cache that begins as "all
   // off". The boards hold their outputs across a restart of ppuc, so a lamp the
@@ -230,6 +241,9 @@ class PluginEngine final : public GameEngine
 
   std::atomic<int> m_runState{0};
   mutable bool m_identityKnown = false;
+  // The one fact about the identity SendSwitch() needs, readable from any
+  // thread: whether this is a WPC Fliptronic game.
+  mutable std::atomic<bool> m_fliptronic{false};
   mutable Identity m_identity;
 
   PinmameTrackingConfig m_tracking;

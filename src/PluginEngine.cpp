@@ -201,6 +201,11 @@ void PluginEngine::OnStateSrcAboutToChange()
     std::this_thread::yield();
   }
   m_coilPlan.reset();
+  // The switch accessors go with the same StateDefs. Emptied, a switch sent
+  // until the new ones arrive waits in the ledger, as one sent before the
+  // first mappings does.
+  std::lock_guard<std::mutex> lock(m_switchMutex);
+  m_switchesByNumber.clear();
 }
 
 void PluginEngine::OnStateSrcChanged()
@@ -270,12 +275,17 @@ void PluginEngine::OnStateSrcChanged()
 
   m_lamps = std::move(lamps);
   m_gis = std::move(gis);
-  m_switchesByNumber = std::move(switches);
   // The accessors were all just replaced. Whatever the engine believed about
-  // these switches came through the old ones, so re-apply the ledger before
-  // anything reads it: a source change in the middle of a game must not leave
-  // the ROM with a switch it can no longer be told about.
-  m_nextSwitchAuditMs = 0;
+  // these switches came through the old ones, so re-apply the ledger now: a
+  // source change in the middle of a game must not leave the ROM with a switch
+  // it can no longer be told about. Here rather than at the next Update(),
+  // because a switch thread may be sending to them already.
+  {
+    std::lock_guard<std::mutex> lock(m_switchMutex);
+    m_switchesByNumber = std::move(switches);
+    AuditSwitchesLocked();
+  }
+  m_nextSwitchAuditMs = NowMs() + 1000;
   // Re-announce every output after a source change: a restarted game must not
   // inherit the previous run's edge state.
   //
@@ -300,7 +310,7 @@ void PluginEngine::OnStateSrcChanged()
   if (m_options.debug)
   {
     std::printf("PluginEngine: %zu solenoids, %zu lamps, %zu GIs, %zu switches\n", m_coilPlan->entries.size(),
-                m_lamps.size(), m_gis.size(), m_switchesByNumber.size());
+                m_lamps.size(), m_gis.size(), SwitchMappingCount());
   }
 }
 
@@ -1059,7 +1069,7 @@ void PluginEngine::PollChangedGis(std::vector<GameEngineOutputChange>& changes)
 // shown EOS states that matched neither its flippers nor the real ones.
 bool PluginEngine::IsSimulatedByPinmame(int number) const
 {
-  if (!m_identityKnown || (m_identity.hardwareGen & kHardwareGenWpcFliptronic) == 0)
+  if (!m_fliptronic.load(std::memory_order_acquire))
   {
     return false;
   }
@@ -1078,7 +1088,7 @@ bool PluginEngine::IsSimulatedByPinmame(int number) const
 // configuration does not report that input itself.
 int PluginEngine::MirroredFlipperButton(int number) const
 {
-  if (!m_identityKnown || (m_identity.hardwareGen & kHardwareGenWpcFliptronic) == 0)
+  if (!m_fliptronic.load(std::memory_order_acquire))
   {
     return 0;
   }
@@ -1109,6 +1119,7 @@ void PluginEngine::SendSwitch(int number, uint8_t state)
   }
   const int sw = (number < 241) ? number : 240 - number;
   const uint8_t value = state == 0 ? 0 : 1;
+  std::lock_guard<std::mutex> lock(m_switchMutex);
   // The ledger records what the engine was told, not what the machine is
   // doing. A switch the rules deliberately keep from the ROM stays kept from
   // it: the audit repeats this, and never contradicts a decision made above.
@@ -1161,6 +1172,18 @@ bool PluginEngine::SaveNvram(uint32_t minIdleMs)
 }
 
 void PluginEngine::AuditSwitches()
+{
+  std::lock_guard<std::mutex> lock(m_switchMutex);
+  AuditSwitchesLocked();
+}
+
+size_t PluginEngine::SwitchMappingCount() const
+{
+  std::lock_guard<std::mutex> lock(m_switchMutex);
+  return m_switchesByNumber.size();
+}
+
+void PluginEngine::AuditSwitchesLocked()
 {
   for (const auto& [number, value] : m_sentSwitchValues)
   {
@@ -1455,6 +1478,7 @@ bool PluginEngine::TryGetIdentity(Identity* pIdentity) const
   m_identity.hardwareGen = msg.hardwareGen;
   m_identity.description = DescribeHardwareGen(msg.hardwareGen);
   m_identityKnown = true;
+  m_fliptronic.store((msg.hardwareGen & kHardwareGenWpcFliptronic) != 0, std::memory_order_release);
   if (pIdentity != nullptr)
   {
     *pIdentity = m_identity;

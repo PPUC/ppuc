@@ -144,8 +144,11 @@ example `"sounds/intro.mp3"`; an absolute path or one leaving the folder with
 `..` is refused. MP3 is the format to use: it is the one SDL_mixer is built
 with. One sound plays at a time, and a second call replaces one still
 playing. It plays in attract mode too, where the music is off. It returns
-whether the sound started: `false` without sound output, or when the file is
-missing or unreadable, which is also printed.
+whether the sound was asked for: `false` for a path outside the game folder or
+without sound output. The file is opened and played by the main thread, not by
+the rule: a rule runs on the switch thread or on PinMAME's coil thread, and
+neither waits for a disk. A file that is missing or unreadable is therefore
+printed a moment later rather than reported to the rule.
 
 Once per attract mode, 10 seconds after it began:
 

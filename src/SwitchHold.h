@@ -31,8 +31,8 @@
 // the machine has -- a spinner -- or its turns merge.
 //
 // Free of the engine and of SDL so it can be tested on its own. Thread safe: the
-// rules may inject switches from the coil poll thread while the main loop
-// forwards the boards' own.
+// rules may inject switches from the coil poll thread or the main thread while
+// the switch thread forwards the boards' own.
 class SwitchHold
 {
  public:

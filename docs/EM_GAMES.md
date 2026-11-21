@@ -272,8 +272,9 @@ every sink downstream (ZeDMD, the console DMD, the SDL virtual DMD) wants indexe
 data, and RGB24 would triple the payload for a screen that is a single colour.
 
 Frames are paced to roughly 30fps and suppressed when the content has not
-changed. The main loop runs at 20 microseconds, so an unpaced renderer would offer
-around 50,000 frames a second into libdmdutil's 128-entry ring.
+changed. The game core runs on ppuc's switch thread, every 100 microseconds, so an
+unpaced renderer would offer around 10,000 frames a second into libdmdutil's
+128-entry ring.
 
 ## Running
 

@@ -23,7 +23,7 @@
 // solenoid from dropping a held flipper; on WPC a real end of ball keeps it off
 // for seconds.
 //
-// Thread-safe: the engine reports on its own thread, the main loop calls
+// Thread-safe: the engine reports on its own thread, the switch thread calls
 // Update() for the delayed off.
 class BoardFlipperGate
 {

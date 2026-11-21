@@ -251,8 +251,14 @@ class LuaRulesEngine
   DmdCanvas* m_pDmdCanvas = nullptr;
   // Recursive because a Lua handler may call ppuc.game.* which re-enters through
   // a query handler -- ppuc.game.startGame() reaching canStartGame is the
-  // obvious case. Everything runs on the main loop, so the lock is nearly
-  // vestigial; making it recursive costs nothing and removes a class of
-  // deadlock that is very hard to reproduce.
+  // obvious case. Recursive costs nothing and removes a class of deadlock that
+  // is very hard to reproduce.
+  //
+  // The lock is far from vestigial: rules run on the switch thread (switches,
+  // timers, a ROM-less engine's events), on PinMAME's coil poll thread
+  // (onCoilChanged) and on the main thread (PinMAME's lamps, ball and player).
+  // Whoever holds it holds up the other two, which is why a callback out of
+  // a rule never waits for a disk, a screen or the plugin bus: those are
+  // posted to the main thread instead (see ppuc.cpp).
   mutable std::recursive_mutex m_mutex;
 };

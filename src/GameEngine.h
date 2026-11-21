@@ -208,11 +208,25 @@ class GameEngine
   // the host calls it until it returns true, then stops.
   virtual bool TryGetIdentity(Identity* pIdentity) const = 0;
 
-  // One host tick. Everything the engine must do on the main thread lives here:
-  // PinmameEngine polls NVRAM tracking and drains sound commands; ScriptEngine
-  // runs its whole game core. Called in BOTH main-loop phases, before and after
-  // IsReady() turns true.
+  // One host tick. PinmameEngine polls NVRAM tracking and drains sound
+  // commands; ScriptEngine runs its whole game core. Called in BOTH loop
+  // phases, before and after IsReady() turns true.
+  //
+  // Which thread calls it is the engine's to say, through
+  // UpdatesOnMainThread(). Update(), PollChangedLamps() and PollChangedGis()
+  // are always called from that one thread.
   virtual void Update() = 0;
+
+  // Whether Update() must run on the thread that drives the plugin bus. True
+  // for an engine whose state arrives through bus callbacks and that is only
+  // consistent with them on the same thread (PluginEngine).
+  //
+  // False lets the host run Update() on its switch thread, next to the
+  // switches and the rules, so that an engine that is itself the game (the
+  // ROM-less GameCore) answers a switch without waiting for anything that
+  // draws or plays. Such an engine is then called from that thread only,
+  // SendSwitch() included.
+  virtual bool UpdatesOnMainThread() const { return false; }
 
   // Freezes the game where it stands, and lets it go again.
   //

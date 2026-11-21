@@ -539,6 +539,32 @@ chain, and resync only after `RS485_COMM_SWITCH_REPLY_MISS_THRESHOLD`
 consecutive misses. Treat these as *tuning parameters per cabinet*, not
 protocol constants.
 
+**Host threads** (`ppuc/src/ppuc.cpp`, `RunSwitchThread()`)
+
+Switch and coil handling never waits for anything that draws, plays or talks to
+the plugin bus. `ppuc-pinmame` runs:
+
+- PinMAME's coil poll thread (`PluginEngine`, real-time priority 40): ROM
+  solenoids to the boards.
+- The switch thread (priority 35): libppuc's switch queue, tilt and ball save,
+  the Lua rules' switch handlers and timers, the switch hold into the engine,
+  rule-held and rule-pulsed coils and lamps, ball search, the trough watch, and
+  an engine that is itself the game (`GameEngine::UpdatesOnMainThread()` false:
+  the ROM-less GameCore, with its DMD canvas).
+- The main thread: SDL events, the plugin bus and the media host, the
+  translite, the tools and slides, the virtual DMD, NVRAM saves, the health
+  log, and `PluginEngine::Update()` (lamps, GI, DMD, ball and player), which has
+  to share a thread with the plugin bus that publishes its sources.
+
+They meet only through locks held for a lookup or a push (the Lua state, the
+interceptor, PlayfieldAssist, the switch hold, PinMAME's switch ledger) and
+through queues (`src/ThreadHandoff.h`): a switch change goes to the main thread
+for the screens, and what a rule asks of the bus, a sound file or libdmdutil is
+posted to it. A new call from the switch side into the main side goes through
+such a queue, not around it. The DMD used to be drawn from the one loop that
+also forwarded switches, and a busy animation or a page flip held every switch
+up behind it.
+
 **Effect stack**
 
 WS2812 strips are segmented: `WS2812FXEffect::deviceStackScope()` returns the
