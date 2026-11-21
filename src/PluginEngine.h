@@ -93,6 +93,10 @@ class PluginEngine final : public GameEngine
   bool HasCapability(Capability capability) const override;
 
  private:
+  // Start() without the already-started check. Whatever it subscribed or
+  // created before failing is left for Stop() to undo.
+  bool StartSteps(std::string& error);
+
   // One output, resolved to the provider's own accessor. Borrowed from the
   // provider and valid only while the quiesce gate is open.
   struct OutputEntry

@@ -1230,6 +1230,21 @@ bool PluginEngine::Start(std::string& error)
     error = "PluginEngine is already started";
     return false;
   }
+  if (StartSteps(error))
+  {
+    return true;
+  }
+  // A start that fails half way has already subscribed to the bus and created
+  // PinMAME's controller -- an unknown ROM name is only found out after both.
+  // Left in place, they outlived the plugin bus: PinMAME complained that its
+  // controller was never destroyed and the process died on the way out.
+  Stop();
+  m_stopping = false;
+  return false;
+}
+
+bool PluginEngine::StartSteps(std::string& error)
+{
   if (m_options.rom.empty())
   {
     error = "no ROM configured";
@@ -1375,10 +1390,9 @@ bool PluginEngine::Start(std::string& error)
 
 void PluginEngine::Stop()
 {
-  if (!m_started)
-  {
-    return;
-  }
+  // Every step below checks for itself whether there is anything to undo, so
+  // this also cleans up after a Start() that failed half way, and a second
+  // call does nothing.
   m_stopping = true;
 
   // Join first. This is what replaces PinmameStop()'s join of the emulation
@@ -1395,7 +1409,9 @@ void PluginEngine::Stop()
     m_fenceThread.join();
   }
 
-  if (m_controller.IsValid())
+  // Only a ROM that is running is stopped; one that never started is simply
+  // released below.
+  if (m_started && m_controller.IsValid())
   {
     m_controller.Call("Stop", {});
   }

@@ -10260,6 +10260,7 @@ int main(int argc, char** argv)
   }
 
   std::string engineError;
+  bool engineStartFailed = false;
   if (pEngine->Start(engineError))
   {
     // Setup signal handlers to allow graceful termination
@@ -10778,6 +10779,7 @@ int main(int argc, char** argv)
   else
   {
     printf("%s\n", engineError.c_str());
+    engineStartFailed = true;
   }
 
   if (!opt_no_serial)
@@ -10790,6 +10792,13 @@ int main(int argc, char** argv)
   }
 
   bool quitSDL = false;
+
+  // The rules and the engine before the media host and the plugin bus: the
+  // engine is subscribed to the bus and holds PinMAME's controller, and the
+  // rules hold the ROM-less engine's game. Left to the end of main(), they
+  // were destroyed after the bus had unloaded the plugins they point into.
+  pLuaRulesEngine.reset();
+  pEngine.reset();
 
   if (pMediaPluginHost)
   {
@@ -10890,5 +10899,7 @@ int main(int argc, char** argv)
     return kExitRestart;
   }
 
-  return 0;
+  // Not 0: the launcher reports the status next to the log tail, and "exited
+  // with status 0" for a ROM that never ran sent people looking in the wrong place.
+  return engineStartFailed ? 1 : 0;
 }

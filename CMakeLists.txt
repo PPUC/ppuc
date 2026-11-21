@@ -932,6 +932,14 @@ if(PPUC_BUILD_TESTS)
       SKIP_RETURN_CODE 77
       TIMEOUT 120)
 
+   # An unknown ROM ends the run with status 1 instead of a crash on the way
+   # out. Same packaged-binary rule as above; needs no ROM.
+   add_test(NAME ppuc_unknown_rom
+      COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/unknown_rom.sh")
+   set_tests_properties(ppuc_unknown_rom PROPERTIES
+      SKIP_RETURN_CODE 77
+      TIMEOUT 60)
+
    # ppuc-menu's first frame, rendered headless to a PNG and checked for size
    # and content. Same packaged-binary rule as above.
    add_test(NAME ppuc_menu_render
