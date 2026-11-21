@@ -605,13 +605,27 @@ ppuc/ppuc-pinmame --game /path/to/games/t2 -n -i
 
 ### Menu launcher
 
-`ppuc-menu` is an SDL3 selector that reads a plain-text menu file with repeated `title`, `image`, `selected-image`, and `command` fields. It uses the same speech backend options as `ppuc-pinmame`.
+`ppuc-menu` is an SDL3 selector for a machine that runs more than one game folder on the same playfield: the original ROM, a ROM-less Lua game, custom ROM builds. It uses the same speech backend options as `ppuc-pinmame`.
+
+```shell
+ppuc/ppuc-menu --games-dir /path/to/games --speech --greeting
+```
+
+`--games-dir` lists every subfolder that holds an `io-boards.yaml` (or the `[Paths] ConfigFile` of its `ppuc.ini`) and starts the chosen one as `ppuc-pinmame --game <folder>`. Each folder's `ppuc.ini` may carry a `[Menu]` section: `Title`, `Info`, `Image`, `SelectedImage` (default `translite-off.*` / `translite-on.*`), `Order`, `Hidden`, `Arguments`, and `LeftFlipperSwitch`, `RightFlipperSwitch`, `StartSwitch`.
+
+The menu is steered from the playfield. It looks for the left flipper button, right flipper button and start button in the first game folder (by switch description, `emGame.startSwitch`, or the `[Menu]` switch keys), writes a configuration with just those switches and their boards to the system temp directory as `ppuc-menu-io-boards.yaml`, and reads them through libppuc: left and right flipper move, start launches. No output is configured, so nothing fires while the menu runs. The serial device is the source game's `[Paths] Serial`, overridden by `--serial`; `--no-serial` skips the boards. If the buttons cannot be resolved or the boards do not answer, the menu logs why and runs keyboard-only. Other game folders whose buttons sit on different board inputs are reported as warnings.
+
+With exactly one entry the menu opens no window and does not touch the boards: it starts that game directly, so a launcher can always start `ppuc-menu`. Arguments after `--` are appended to every game folder's `ppuc-pinmame` command, e.g. `ppuc-menu --games-dir /userdata/ppuc -- --plugin-dir /usr/lib/ppuc/plugins`. On POSIX the menu execs `ppuc-pinmame`, so a supervisor sees the game's exit status.
+
+The menu window is set up like `ppuc-pinmame`'s translite window: size, screen and windowed mode come from the game folders' `[Translite]` section (each value from the first folder that sets it; `--width`, `--height`, `--screen`, `--window` override), fullscreen or borderless, with the cursor hidden outside a window. Text uses SDL_ttf with the same font search, sizes and colours as the tools menu and firmware screen (`src/UiStyle.h`), scaled to the screen height, and falls back to SDL's debug font without SDL_ttf or a font. `--screenshot FILE` renders the first frame to a PNG and exits without touching the boards; `tests/integration/menu_render.sh` (ctest `ppuc_menu_render`) does that on SDL's offscreen driver and checks size and content.
+
+`--menu-file` reads a plain-text menu with repeated `title`, `info`, `image`, `selected-image`, and either `command` or `game` (a game folder, optionally with `arguments`) fields; see `examples/menu.txt`. Both options can be combined: menu file entries come first.
 
 ```shell
 ppuc/ppuc-menu \
   --menu-file examples/menu.txt \
   --logo assets/ppuc-logo.png \
-  --slogan "Choose a machine and press Enter" \
+  --slogan "Choose a game and press Start" \
   --speech --greeting
 ```
 

@@ -10,16 +10,25 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <map>
+#include <memory>
+#include <optional>
 #include <string>
 #include <system_error>
 #include <vector>
 
 #include "AudioOutput.h"
+#include "MenuConfigYaml.h"
+#include "MenuGames.h"
 #include "SDL3/SDL.h"
 #include "SDL3/SDL_filesystem.h"
 #include "SDL3_image/SDL_image.h"
 #include "SpeechCliSupport.h"
+#include "UiStyle.h"
 #include "cargs.h"
+#ifdef PPUC_HAS_SDL3_TTF
+#include "SDL3_ttf/SDL_ttf.h"
+#endif
 
 #if defined(_WIN32) || defined(_WIN64)
 #include <process.h>
@@ -44,6 +53,10 @@ struct MenuEntry
   std::string info;
   std::string commandLine;
   std::vector<std::string> commandArgs;
+  // Set for a game folder: launched as `ppuc-pinmame --game <folder>`, with
+  // the folder's [Menu] Arguments (or the menu file's `arguments:`) appended.
+  std::optional<menugames::GameFolder> game;
+  std::string arguments;
   std::string imagePath;
   std::string selectedImagePath;
   MenuTexture normalTexture;
@@ -238,9 +251,74 @@ bool FinalizeMenuEntry(MenuEntry* entry,
   }
 
   if (entry->title.empty() && entry->commandLine.empty() &&
-      entry->imagePath.empty() && entry->selectedImagePath.empty())
+      entry->imagePath.empty() && entry->selectedImagePath.empty() &&
+      !entry->game.has_value() && entry->arguments.empty())
   {
     return true;
+  }
+
+  if (entry->game.has_value())
+  {
+    if (!entry->commandLine.empty())
+    {
+      if (errorMessage != nullptr)
+      {
+        *errorMessage = "line " + std::to_string(lineNumber) +
+                        ": menu entry has both game and command";
+      }
+      return false;
+    }
+
+    // The game folder's own [Menu] settings fill in what the entry leaves
+    // out, so one folder can be listed twice with different arguments.
+    const menugames::GameFolder& game = *entry->game;
+    if (entry->title.empty())
+    {
+      entry->title = game.title;
+    }
+    if (entry->info.empty())
+    {
+      entry->info = game.info;
+    }
+    if (entry->imagePath.empty() && entry->selectedImagePath.empty())
+    {
+      entry->imagePath = game.image.string();
+      entry->selectedImagePath = game.selectedImage.string();
+    }
+    if (entry->arguments.empty())
+    {
+      entry->arguments = game.arguments;
+    }
+    // Built as arguments rather than as a command line: a Windows path is
+    // full of backslashes, which the command line tokenizer reads as escapes.
+    std::vector<std::string> extraArgs;
+    if (!entry->arguments.empty())
+    {
+      std::string tokenizeError;
+      if (!TokenizeCommandLine(entry->arguments, &extraArgs, &tokenizeError))
+      {
+        if (errorMessage != nullptr)
+        {
+          *errorMessage = "line " + std::to_string(lineNumber) +
+                          ": arguments: " + tokenizeError;
+        }
+        return false;
+      }
+    }
+    entry->commandArgs = {"ppuc-pinmame", "--game", game.folder.string()};
+    entry->commandArgs.insert(entry->commandArgs.end(), extraArgs.begin(),
+                              extraArgs.end());
+    entry->commandLine = "ppuc-pinmame --game " + game.folder.string() +
+                         (entry->arguments.empty() ? "" : " " + entry->arguments);
+  }
+  else if (!entry->arguments.empty())
+  {
+    if (errorMessage != nullptr)
+    {
+      *errorMessage = "line " + std::to_string(lineNumber) +
+                      ": arguments belong to a game entry; put them in the command";
+    }
+    return false;
   }
 
   if (entry->title.empty())
@@ -264,7 +342,8 @@ bool FinalizeMenuEntry(MenuEntry* entry,
   }
 
   std::string tokenizeError;
-  if (!TokenizeCommandLine(entry->commandLine, &entry->commandArgs,
+  if (!entry->game.has_value() &&
+      !TokenizeCommandLine(entry->commandLine, &entry->commandArgs,
                            &tokenizeError))
   {
     if (errorMessage != nullptr)
@@ -369,6 +448,27 @@ bool LoadMenuDefinition(const char* path,
     {
       currentEntry.commandLine = value;
     }
+    else if (key == "game")
+    {
+      menugames::GameFolder game;
+      std::string gameError;
+      if (!menugames::ReadGameFolder(
+              ResolvePathRelativeToCurrentWorkingDirectory(value), &game,
+              &gameError))
+      {
+        if (errorMessage != nullptr)
+        {
+          *errorMessage = "line " + std::to_string(lineNumber) + ": " +
+                          gameError;
+        }
+        return false;
+      }
+      currentEntry.game = std::move(game);
+    }
+    else if (key == "arguments")
+    {
+      currentEntry.arguments = value;
+    }
     else if (key == "image" || key == "normal-image")
     {
       currentEntry.imagePath =
@@ -405,6 +505,46 @@ bool LoadMenuDefinition(const char* path,
     return false;
   }
 
+  return true;
+}
+
+// Adds one entry per game folder in gamesDir.
+bool AddGamesDirectoryEntries(const std::string& gamesDir,
+                              std::vector<MenuEntry>* outEntries,
+                              std::string* errorMessage)
+{
+  std::vector<std::string> skipped;
+  const std::vector<menugames::GameFolder> games =
+      menugames::ScanGamesDirectory(
+          ResolvePathRelativeToCurrentWorkingDirectory(gamesDir), &skipped);
+  for (const std::string& reason : skipped)
+  {
+    printf("Menu: skipping %s\n", reason.c_str());
+  }
+
+  for (const menugames::GameFolder& game : games)
+  {
+    MenuEntry entry;
+    entry.game = game;
+    std::string finalizeError;
+    if (!FinalizeMenuEntry(&entry, outEntries, 0, &finalizeError))
+    {
+      if (errorMessage != nullptr)
+      {
+        *errorMessage = game.folder.string() + ": " + finalizeError;
+      }
+      return false;
+    }
+  }
+
+  if (games.empty())
+  {
+    if (errorMessage != nullptr)
+    {
+      *errorMessage = "no game folders found in " + gamesDir;
+    }
+    return false;
+  }
   return true;
 }
 
@@ -545,77 +685,228 @@ bool LoadMenuTextures(SDL_Renderer* renderer,
   return true;
 }
 
-std::vector<std::string> WrapText(const std::string& text, size_t maxChars)
+// The fonts of PPUC's own screens. Each one is null when SDL_ttf or a font is
+// missing; text then falls back to SDL's built-in debug font, which is crude
+// but never absent, so the menu always says what it is.
+struct MenuFonts
+{
+#ifdef PPUC_HAS_SDL3_TTF
+  TTF_Font* large = nullptr;
+  TTF_Font* small = nullptr;
+  TTF_Font* compact = nullptr;
+#endif
+};
+
+enum class FontSize
+{
+  Large,
+  Small,
+  Compact,
+};
+
+// Opened once the renderer exists, scaled to its height: the tools menu is
+// laid out for a 1080-line backbox, and the menu keeps those proportions on
+// whatever screen it gets.
+void OpenMenuFonts(MenuFonts* fonts, int outputHeight)
+{
+#ifdef PPUC_HAS_SDL3_TTF
+  if (!TTF_Init())
+  {
+    printf("Menu: plain text only: TTF_Init failed: %s\n", SDL_GetError());
+    return;
+  }
+  const float scale = outputHeight > 0 ? static_cast<float>(outputHeight) / 1080.0f : 1.0f;
+  for (const char* path : uistyle::kFontCandidates)
+  {
+    fonts->large = TTF_OpenFont(path, uistyle::kFontLargePt * scale);
+    if (fonts->large != nullptr)
+    {
+      fonts->small = TTF_OpenFont(path, uistyle::kFontSmallPt * scale);
+      fonts->compact = TTF_OpenFont(path, uistyle::kFontCompactPt * scale);
+      printf("Menu: font %s\n", path);
+      return;
+    }
+  }
+  printf("Menu: plain text only: no usable font found\n");
+#else
+  (void)fonts;
+  (void)outputHeight;
+  printf("Menu: plain text only: built without SDL_ttf\n");
+#endif
+}
+
+void CloseMenuFonts(MenuFonts* fonts)
+{
+#ifdef PPUC_HAS_SDL3_TTF
+  for (TTF_Font** font : {&fonts->large, &fonts->small, &fonts->compact})
+  {
+    if (*font != nullptr)
+    {
+      TTF_CloseFont(*font);
+      *font = nullptr;
+    }
+  }
+  if (TTF_WasInit() > 0)
+  {
+    TTF_Quit();
+  }
+#else
+  (void)fonts;
+#endif
+}
+
+#ifdef PPUC_HAS_SDL3_TTF
+TTF_Font* FontFor(const MenuFonts& fonts, FontSize size)
+{
+  switch (size)
+  {
+    case FontSize::Large:
+      return fonts.large;
+    case FontSize::Small:
+      return fonts.small;
+    case FontSize::Compact:
+      return fonts.compact;
+  }
+  return nullptr;
+}
+#endif
+
+// The debug font is 8 pixels square; scaled to roughly the TTF sizes.
+float DebugScale(FontSize size, float outputHeight)
+{
+  const float base = size == FontSize::Large ? 4.0f : size == FontSize::Small ? 2.5f : 2.0f;
+  return std::max(1.0f, base * outputHeight / 1080.0f);
+}
+
+float LineHeight(const MenuFonts& fonts, FontSize size, float outputHeight)
+{
+#ifdef PPUC_HAS_SDL3_TTF
+  if (TTF_Font* font = FontFor(fonts, size); font != nullptr)
+  {
+    return static_cast<float>(TTF_GetFontLineSkip(font));
+  }
+#else
+  (void)fonts;
+#endif
+  return DebugScale(size, outputHeight) * SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE * 1.4f;
+}
+
+float MeasureText(const MenuFonts& fonts, FontSize size, const std::string& text, float outputHeight)
+{
+#ifdef PPUC_HAS_SDL3_TTF
+  if (TTF_Font* font = FontFor(fonts, size); font != nullptr)
+  {
+    int w = 0;
+    int h = 0;
+    return TTF_GetStringSize(font, text.c_str(), 0, &w, &h) ? static_cast<float>(w) : 0.0f;
+  }
+#else
+  (void)fonts;
+#endif
+  return static_cast<float>(text.size()) * SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE * DebugScale(size, outputHeight);
+}
+
+// Shortens text until it fits, so a long title never runs off its card.
+std::string FitText(const MenuFonts& fonts, FontSize size, std::string text, float maxWidth, float outputHeight)
+{
+  if (MeasureText(fonts, size, text, outputHeight) <= maxWidth)
+  {
+    return text;
+  }
+  while (!text.empty() && MeasureText(fonts, size, text + "...", outputHeight) > maxWidth)
+  {
+    text.pop_back();
+  }
+  return text + "...";
+}
+
+// Splits text into lines no wider than maxWidth, at spaces.
+std::vector<std::string> WrapText(const MenuFonts& fonts, FontSize size, const std::string& text, float maxWidth,
+                                  float outputHeight)
 {
   std::vector<std::string> lines;
-  if (text.empty())
+  std::string line;
+  size_t start = 0;
+  const std::string trimmed = Trim(text);
+  while (start < trimmed.size())
   {
-    return lines;
+    size_t end = trimmed.find(' ', start);
+    if (end == std::string::npos)
+    {
+      end = trimmed.size();
+    }
+    const std::string word = trimmed.substr(start, end - start);
+    start = end + 1;
+    if (word.empty())
+    {
+      continue;
+    }
+    const std::string candidate = line.empty() ? word : line + " " + word;
+    if (!line.empty() && MeasureText(fonts, size, candidate, outputHeight) > maxWidth)
+    {
+      lines.push_back(line);
+      line = word;
+    }
+    else
+    {
+      line = candidate;
+    }
   }
-
-  std::string remaining = Trim(text);
-  while (!remaining.empty())
+  if (!line.empty())
   {
-    if (remaining.size() <= maxChars)
-    {
-      lines.push_back(remaining);
-      break;
-    }
-
-    size_t split = remaining.rfind(' ', maxChars);
-    if (split == std::string::npos || split == 0)
-    {
-      split = maxChars;
-    }
-
-    lines.push_back(Trim(remaining.substr(0, split)));
-    remaining = Trim(remaining.substr(split));
+    lines.push_back(line);
   }
-
   return lines;
 }
 
-float MeasureDebugTextWidth(const std::string& text, float scale)
+enum class Align
 {
-  return static_cast<float>(text.size()) *
-         static_cast<float>(SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE) * scale;
-}
+  Left,
+  Center,
+};
 
-void RenderDebugTextLine(SDL_Renderer* renderer,
-                         float x,
-                         float y,
-                         const std::string& text,
-                         SDL_Color color,
-                         float scale)
+void DrawText(SDL_Renderer* renderer, const MenuFonts& fonts, FontSize size, const std::string& text, float x, float y,
+              SDL_Color color, Align align, float outputHeight)
 {
   if (renderer == nullptr || text.empty())
   {
     return;
   }
+  const float width = MeasureText(fonts, size, text, outputHeight);
+  const float left = align == Align::Center ? x - width / 2.0f : x;
 
+#ifdef PPUC_HAS_SDL3_TTF
+  if (TTF_Font* font = FontFor(fonts, size); font != nullptr)
+  {
+    SDL_Surface* surface = TTF_RenderText_Blended(font, text.c_str(), 0, color);
+    if (surface == nullptr)
+    {
+      return;
+    }
+    SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
+    const SDL_FRect dst{left, y, static_cast<float>(surface->w), static_cast<float>(surface->h)};
+    SDL_DestroySurface(surface);
+    if (texture != nullptr)
+    {
+      SDL_RenderTexture(renderer, texture, nullptr, &dst);
+      SDL_DestroyTexture(texture);
+    }
+    return;
+  }
+#else
+  (void)fonts;
+#endif
+
+  const float scale = DebugScale(size, outputHeight);
   SDL_SetRenderScale(renderer, scale, scale);
   SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
-  SDL_RenderDebugText(renderer, x / scale, y / scale, text.c_str());
+  SDL_RenderDebugText(renderer, left / scale, y / scale, text.c_str());
   SDL_SetRenderScale(renderer, 1.0f, 1.0f);
 }
 
-void RenderCenteredWrappedText(SDL_Renderer* renderer,
-                               const std::string& text,
-                               float centerX,
-                               float y,
-                               size_t maxCharsPerLine,
-                               SDL_Color color,
-                               float scale,
-                               float lineSpacing)
+void SetDrawColor(SDL_Renderer* renderer, SDL_Color color)
 {
-  const std::vector<std::string> lines = WrapText(text, maxCharsPerLine);
-  for (size_t i = 0; i < lines.size(); ++i)
-  {
-    const float width = MeasureDebugTextWidth(lines[i], scale);
-    RenderDebugTextLine(renderer, centerX - (width / 2.0f),
-                        y + static_cast<float>(i) * lineSpacing, lines[i],
-                        color, scale);
-  }
+  SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
 }
 
 void RenderTextureFitted(SDL_Renderer* renderer,
@@ -641,62 +932,66 @@ void RenderTextureFitted(SDL_Renderer* renderer,
   SDL_RenderTexture(renderer, texture.texture, nullptr, &dst);
 }
 
-void RenderPlaceholder(SDL_Renderer* renderer, const SDL_FRect& bounds)
+void RenderPlaceholder(SDL_Renderer* renderer, const MenuFonts& fonts, const SDL_FRect& bounds, float outputHeight)
 {
-  SDL_SetRenderDrawColor(renderer, 80, 80, 80, 255);
+  SetDrawColor(renderer, uistyle::kPanelBorder);
   SDL_RenderRect(renderer, &bounds);
-  RenderCenteredWrappedText(renderer, "NO IMAGE",
-                            bounds.x + (bounds.w / 2.0f),
-                            bounds.y + (bounds.h / 2.0f) - 10.0f, 10,
-                            SDL_Color{220, 220, 220, 255}, 2.0f, 20.0f);
+  DrawText(renderer, fonts, FontSize::Compact, "NO IMAGE", bounds.x + bounds.w / 2.0f,
+           bounds.y + (bounds.h - LineHeight(fonts, FontSize::Compact, outputHeight)) / 2.0f, uistyle::kDim,
+           Align::Center, outputHeight);
 }
 
-void RenderMenu(SDL_Renderer* renderer,
-                const std::vector<MenuEntry>& entries,
-                const MenuAssets& assets,
-                size_t selectedIndex,
-                const std::string& slogan)
+// Draws one frame without presenting it, so the same frame can be read back
+// for --screenshot.
+//
+// Laid out like the tools menu in ppuc-pinmame, in its colours and fonts: one
+// card per game, the chosen one lifted and outlined in amber, and the keys that
+// work spelled out at the bottom.
+void DrawMenu(SDL_Renderer* renderer,
+              const MenuFonts& fonts,
+              const std::vector<MenuEntry>& entries,
+              const MenuAssets& assets,
+              size_t selectedIndex,
+              const std::string& slogan,
+              bool playfieldButtons)
 {
   int renderWidth = 0;
   int renderHeight = 0;
-  SDL_GetRenderOutputSize(renderer, &renderWidth, &renderHeight);
-
+  SDL_GetCurrentRenderOutputSize(renderer, &renderWidth, &renderHeight);
   const float screenWidth = static_cast<float>(renderWidth);
   const float screenHeight = static_cast<float>(renderHeight);
+  const float unit = screenHeight / 1080.0f;
 
-  SDL_SetRenderDrawColor(renderer, 9, 12, 18, 255);
+  SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
   SDL_RenderClear(renderer);
 
-  float currentY = 36.0f;
+  float currentY = 36.0f * unit;
   if (assets.logoTexture.texture != nullptr)
   {
     const SDL_FRect logoBounds{
         screenWidth * 0.30f,
         currentY,
         screenWidth * 0.40f,
-        std::min(screenHeight * 0.18f, 180.0f),
+        screenHeight * 0.16f,
     };
     RenderTextureFitted(renderer, assets.logoTexture, logoBounds);
-    currentY = logoBounds.y + logoBounds.h + 18.0f;
+    currentY = logoBounds.y + logoBounds.h + 18.0f * unit;
   }
 
-  if (!slogan.empty())
-  {
-    RenderCenteredWrappedText(renderer, slogan, screenWidth / 2.0f, currentY,
-                              48, SDL_Color{233, 197, 106, 255}, 2.0f, 20.0f);
-    currentY += 56.0f;
-  }
+  const std::string heading = slogan.empty() ? "CHOOSE A GAME" : slogan;
+  DrawText(renderer, fonts, FontSize::Large, FitText(fonts, FontSize::Large, heading, screenWidth * 0.9f, screenHeight),
+           screenWidth / 2.0f, currentY, slogan.empty() ? uistyle::kText : uistyle::kAmber, Align::Center,
+           screenHeight);
+  currentY += LineHeight(fonts, FontSize::Large, screenHeight) + 20.0f * unit;
 
-  const float sectionTop = currentY + 12.0f;
-  const float sectionBottom = screenHeight - 36.0f;
-  const float availableHeight = std::max(160.0f, sectionBottom - sectionTop);
-  const float cardHeight =
-      std::min(200.0f, std::max(150.0f, availableHeight / 3.4f));
-  const float cardGap = 16.0f;
-  size_t visibleCount =
-      static_cast<size_t>(availableHeight / (cardHeight + cardGap));
-  visibleCount =
-      std::max<size_t>(1, std::min<size_t>(visibleCount, entries.size()));
+  const float footerHeight = 2.0f * LineHeight(fonts, FontSize::Small, screenHeight) + 24.0f * unit;
+  const float sectionTop = currentY;
+  const float sectionBottom = screenHeight - footerHeight;
+  const float availableHeight = std::max(120.0f * unit, sectionBottom - sectionTop);
+  const float cardGap = 16.0f * unit;
+  const float cardHeight = std::min(220.0f * unit, std::max(140.0f * unit, availableHeight / 3.4f));
+  size_t visibleCount = static_cast<size_t>((availableHeight + cardGap) / (cardHeight + cardGap));
+  visibleCount = std::max<size_t>(1, std::min<size_t>(visibleCount, entries.size()));
 
   size_t startIndex = 0;
   if (selectedIndex >= visibleCount / 2)
@@ -708,72 +1003,104 @@ void RenderMenu(SDL_Renderer* renderer,
     startIndex = entries.size() - visibleCount;
   }
 
-  const float cardX = screenWidth * 0.08f;
-  const float cardWidth = screenWidth * 0.84f;
+  const float cardWidth = std::min(screenWidth - 48.0f * unit, std::max(screenWidth * 0.6f, 1100.0f * unit));
+  const float cardX = (screenWidth - cardWidth) / 2.0f;
 
   for (size_t visibleSlot = 0; visibleSlot < visibleCount; ++visibleSlot)
   {
     const size_t entryIndex = startIndex + visibleSlot;
+    const MenuEntry& entry = entries[entryIndex];
     const bool selected = entryIndex == selectedIndex;
-    const float cardY = sectionTop + visibleSlot * (cardHeight + cardGap);
+    const float cardY = sectionTop + static_cast<float>(visibleSlot) * (cardHeight + cardGap);
     const SDL_FRect cardRect{cardX, cardY, cardWidth, cardHeight};
 
-    SDL_SetRenderDrawColor(renderer, selected ? 35 : 22, selected ? 48 : 28,
-                           selected ? 70 : 38, 255);
+    SetDrawColor(renderer, selected ? uistyle::kRowSelected : uistyle::kPanel);
     SDL_RenderFillRect(renderer, &cardRect);
-
-    SDL_SetRenderDrawColor(renderer, selected ? 233 : 96,
-                           selected ? 197 : 110,
-                           selected ? 106 : 128, 255);
+    SetDrawColor(renderer, selected ? uistyle::kAmber : uistyle::kPanelBorder);
     SDL_RenderRect(renderer, &cardRect);
+    if (selected)
+    {
+      // Two pixels on a 1080-line screen: the amber has to be seen from where
+      // the player stands, not from where the technician sits.
+      const SDL_FRect inner{cardRect.x + 1.0f, cardRect.y + 1.0f, cardRect.w - 2.0f, cardRect.h - 2.0f};
+      SDL_RenderRect(renderer, &inner);
+    }
 
-    const float imagePadding = 14.0f;
+    const float padding = 14.0f * unit;
     const SDL_FRect imageRect{
-        cardRect.x + imagePadding,
-        cardRect.y + imagePadding,
-        std::min(260.0f, cardRect.w * 0.28f),
-        cardRect.h - (imagePadding * 2.0f),
+        cardRect.x + padding,
+        cardRect.y + padding,
+        std::min(cardRect.w * 0.3f, (cardRect.h - 2.0f * padding) * 1.6f),
+        cardRect.h - 2.0f * padding,
     };
-
-    const MenuTexture& texture = selected ? entries[entryIndex].selectedTexture
-                                          : entries[entryIndex].normalTexture;
+    const MenuTexture& texture = selected ? entry.selectedTexture : entry.normalTexture;
     if (texture.texture != nullptr)
     {
       RenderTextureFitted(renderer, texture, imageRect);
     }
     else
     {
-      RenderPlaceholder(renderer, imageRect);
+      RenderPlaceholder(renderer, fonts, imageRect, screenHeight);
     }
 
-    const float textX = imageRect.x + imageRect.w + 24.0f;
-    const float textY = cardRect.y + 24.0f;
-    const float textWidth = cardRect.x + cardRect.w - textX - 20.0f;
-    const size_t maxChars = std::max<size_t>(
-        10, static_cast<size_t>(
-                textWidth / (SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE * 2.0f)));
+    const float textX = imageRect.x + imageRect.w + 28.0f * unit;
+    const float textWidth = cardRect.x + cardRect.w - textX - 24.0f * unit;
+    float textY = cardRect.y + 22.0f * unit;
 
-    const SDL_Color titleColor = selected ? SDL_Color{255, 240, 197, 255}
-                                          : SDL_Color{232, 236, 243, 255};
-    RenderCenteredWrappedText(renderer, entries[entryIndex].title,
-                              textX + (textWidth / 2.0f), textY, maxChars,
-                              titleColor, 2.0f, 22.0f);
+    DrawText(renderer, fonts, FontSize::Large, FitText(fonts, FontSize::Large, entry.title, textWidth, screenHeight),
+             textX, textY, selected ? uistyle::kText : uistyle::kDim, Align::Left, screenHeight);
+    textY += LineHeight(fonts, FontSize::Large, screenHeight) + 6.0f * unit;
 
-    if (!entries[entryIndex].info.empty())
+    const float infoLine = LineHeight(fonts, FontSize::Small, screenHeight);
+    for (const std::string& line : WrapText(fonts, FontSize::Small, entry.info, textWidth, screenHeight))
     {
-      RenderCenteredWrappedText(renderer, entries[entryIndex].info,
-                                textX + (textWidth / 2.0f), textY + 50.0f,
-                                maxChars * 2,
-                                SDL_Color{172, 181, 195, 255}, 1.0f, 14.0f);
+      if (textY + infoLine > cardRect.y + cardRect.h - padding)
+      {
+        break;
+      }
+      DrawText(renderer, fonts, FontSize::Small, line, textX, textY, uistyle::kDim, Align::Left, screenHeight);
+      textY += infoLine;
     }
-
-    RenderDebugTextLine(renderer, textX, cardRect.y + cardRect.h - 28.0f,
-                        selected ? "ENTER: START   ESC: QUIT"
-                                 : "ARROWS: MOVE",
-                        SDL_Color{150, 160, 175, 255}, 1.0f);
   }
 
+  const float legendY = screenHeight - footerHeight + 12.0f * unit;
+  const std::string position = std::to_string(selectedIndex + 1) + " / " + std::to_string(entries.size());
+  DrawText(renderer, fonts, FontSize::Small, position, screenWidth / 2.0f, legendY, uistyle::kDim, Align::Center,
+           screenHeight);
+  const char* legend = playfieldButtons ? "FLIPPERS choose    START plays"
+                                        : "cursor keys choose    ENTER plays    ESC quits";
+  DrawText(renderer, fonts, FontSize::Small, legend, screenWidth / 2.0f,
+           legendY + LineHeight(fonts, FontSize::Small, screenHeight), uistyle::kDim, Align::Center, screenHeight);
+}
+
+void RenderMenu(SDL_Renderer* renderer,
+                const MenuFonts& fonts,
+                const std::vector<MenuEntry>& entries,
+                const MenuAssets& assets,
+                size_t selectedIndex,
+                const std::string& slogan,
+                bool playfieldButtons)
+{
+  DrawMenu(renderer, fonts, entries, assets, selectedIndex, slogan, playfieldButtons);
   SDL_RenderPresent(renderer);
+}
+
+// Writes the frame DrawMenu has just drawn, before it is presented.
+bool SaveMenuScreenshot(SDL_Renderer* renderer, const std::string& path)
+{
+  SDL_Surface* surface = SDL_RenderReadPixels(renderer, nullptr);
+  if (surface == nullptr)
+  {
+    fprintf(stderr, "Menu: screenshot failed: %s\n", SDL_GetError());
+    return false;
+  }
+  const bool saved = IMG_SavePNG(surface, path.c_str());
+  if (!saved)
+  {
+    fprintf(stderr, "Menu: screenshot failed: %s\n", SDL_GetError());
+  }
+  SDL_DestroySurface(surface);
+  return saved;
 }
 
 void SpeakFocusTitle(SpeechService* speechService,
@@ -907,6 +1234,8 @@ bool LaunchSelectedEntry(const MenuEntry& entry,
 #endif
 }
 
+// As ppuc-pinmame places its translite: on the display's origin, then waits
+// for the window manager (where there is one) to have done it.
 void PositionWindowOnDisplay(SDL_Window* window, int displayIndex)
 {
   if (window == nullptr || displayIndex < 0)
@@ -916,16 +1245,204 @@ void PositionWindowOnDisplay(SDL_Window* window, int displayIndex)
 
   int displayCount = 0;
   SDL_DisplayID* displays = SDL_GetDisplays(&displayCount);
-  if (displays == nullptr || displayIndex >= displayCount)
+  if (displays == nullptr)
   {
+    return;
+  }
+  const SDL_DisplayID display =
+      displayIndex < displayCount ? displays[displayIndex] : 0;
+  SDL_free(displays);
+  if (display == 0)
+  {
+    printf("Menu: there is no screen %d, staying on the first\n",
+           displayIndex);
     return;
   }
 
   SDL_Rect bounds{};
-  if (SDL_GetDisplayBounds(displays[displayIndex], &bounds))
+  if (SDL_GetDisplayBounds(display, &bounds))
   {
     SDL_SetWindowPosition(window, bounds.x, bounds.y);
   }
+}
+
+// The playfield buttons, read from the boards with a configuration that holds
+// nothing else.
+struct MenuHardware
+{
+  std::unique_ptr<PPUC> ppuc;
+  menugames::MenuButtons buttons;
+  // Switch reports arriving before this are the boards' initial state, not
+  // presses: a button held while the machine boots must not start a game.
+  uint64_t acceptSwitchesFromMs = 0;
+  // Last reported state per switch: a press is an open-to-closed edge, never
+  // a closed state reported again by a switch refresh.
+  std::map<uint32_t, bool> closed;
+};
+
+constexpr uint64_t kInitialSwitchStateMs = 1000;
+
+void PrintButton(const char* role, const menugames::SwitchInfo& sw)
+{
+  printf("Menu: %s is switch %u '%s' (board %u, %s %u)\n", role, sw.number,
+         sw.description.c_str(), sw.board, sw.matrix ? "matrix position" : "port",
+         sw.port);
+}
+
+// Finds the three buttons in the first game folder that names them all, and
+// checks every other game folder agrees about where they are wired. The source
+// game is returned through pSource.
+bool FindMenuButtons(const std::vector<MenuEntry>& entries,
+                     menugames::MenuButtons* pButtons,
+                     const menugames::GameFolder** pSource)
+{
+  bool found = false;
+  for (const MenuEntry& entry : entries)
+  {
+    if (!entry.game.has_value())
+    {
+      continue;
+    }
+    const menugames::GameFolder& game = *entry.game;
+
+    std::vector<menugames::SwitchInfo> switches;
+    menugames::ButtonOverrides overrides = game.buttons;
+    std::string error;
+    menugames::MenuButtons buttons;
+    if (!LoadMenuSwitches(game.configFile.string(), &switches,
+                          &overrides.emGameStart, &error) ||
+        !menugames::ResolveMenuButtons(switches, overrides, &buttons, &error))
+    {
+      printf("Menu: buttons of %s: %s\n", game.folder.string().c_str(),
+             error.c_str());
+      continue;
+    }
+
+    if (!found)
+    {
+      *pButtons = buttons;
+      *pSource = &game;
+      found = true;
+      continue;
+    }
+
+    // The same playfield wired the same way: anything else means one of the
+    // game folders is for another machine, or its io-boards.yaml is wrong.
+    const std::pair<const char*, std::pair<const menugames::SwitchInfo*,
+                                           const menugames::SwitchInfo*>>
+        pairs[] = {
+            {"left flipper button", {&pButtons->leftFlipper, &buttons.leftFlipper}},
+            {"right flipper button", {&pButtons->rightFlipper, &buttons.rightFlipper}},
+            {"start button", {&pButtons->start, &buttons.start}},
+        };
+    for (const auto& [role, pair] : pairs)
+    {
+      if (!menugames::SameInput(*pair.first, *pair.second))
+      {
+        printf("Menu: WARNING: %s wires the %s to board %u port %u, but "
+               "the menu reads it on board %u port %u as %s does\n",
+               game.folder.string().c_str(), role, pair.second->board,
+               pair.second->port, pair.first->board, pair.first->port,
+               (*pSource)->folder.string().c_str());
+      }
+    }
+  }
+  return found;
+}
+
+uint64_t NowMs()
+{
+  return SDL_GetTicks();
+}
+
+bool ConnectMenuHardware(const std::vector<MenuEntry>& entries,
+                         const char* optSerial,
+                         MenuHardware* pHardware)
+{
+  const menugames::GameFolder* source = nullptr;
+  if (!FindMenuButtons(entries, &pHardware->buttons, &source))
+  {
+    printf("Menu: no game folder names its flipper and start buttons; "
+           "keyboard only\n");
+    return false;
+  }
+
+  printf("Menu: buttons from %s\n", source->folder.string().c_str());
+  PrintButton("left flipper button", pHardware->buttons.leftFlipper);
+  PrintButton("right flipper button", pHardware->buttons.rightFlipper);
+  PrintButton("start button", pHardware->buttons.start);
+
+  std::error_code ec;
+  fs::path configPath = fs::temp_directory_path(ec);
+  if (ec)
+  {
+    configPath = fs::current_path();
+  }
+  configPath /= "ppuc-menu-io-boards.yaml";
+
+  std::string error;
+  if (!WriteMenuConfig(source->configFile.string(), configPath.string(),
+                       pHardware->buttons, &error))
+  {
+    printf("Menu: %s; keyboard only\n", error.c_str());
+    return false;
+  }
+  printf("Menu: board configuration written to %s\n",
+         configPath.string().c_str());
+
+  auto ppuc = std::make_unique<PPUC>();
+  try
+  {
+    ppuc->LoadConfiguration(configPath.string().c_str());
+  }
+  catch (const std::exception& ex)
+  {
+    printf("Menu: %s; keyboard only\n", ex.what());
+    return false;
+  }
+
+  // The source game's own connection settings: the boards answer the menu
+  // the way they answer the game.
+  if (!source->skipBoards.empty())
+  {
+    ppuc->SetSkippedBoardsCsv(source->skipBoards.c_str());
+  }
+  if (source->switchReplyDelayUs > 0)
+  {
+    ppuc->SetSwitchReplyDelayUs(source->switchReplyDelayUs);
+  }
+  const std::string serial =
+      optSerial != nullptr && optSerial[0] != '\0' ? optSerial : source->serial;
+  if (!serial.empty())
+  {
+    ppuc->SetSerial(serial.c_str());
+  }
+
+  if (!ppuc->Connect())
+  {
+    printf("Menu: unable to open the PPUC boards on %s; keyboard only\n",
+           ppuc->GetSerial());
+    ppuc->Disconnect();
+    return false;
+  }
+  ppuc->StartUpdates();
+  printf("Menu: playfield buttons active on %s\n", ppuc->GetSerial());
+
+  pHardware->ppuc = std::move(ppuc);
+  pHardware->acceptSwitchesFromMs = NowMs() + kInitialSwitchStateMs;
+  return true;
+}
+
+// Releases the serial port for the game about to start.
+void DisconnectMenuHardware(MenuHardware* pHardware)
+{
+  if (pHardware->ppuc == nullptr)
+  {
+    return;
+  }
+  pHardware->ppuc->StopUpdates();
+  pHardware->ppuc->Disconnect();
+  pHardware->ppuc.reset();
 }
 
 static struct cag_option options[] = {
@@ -933,7 +1450,24 @@ static struct cag_option options[] = {
      .access_letters = "m",
      .access_name = "menu-file",
      .value_name = "VALUE",
-     .description = "Path to menu definition file (required)"},
+     .description = "Path to menu definition file (optional with --games-dir)"},
+    {.identifier = 'd',
+     .access_letters = "d",
+     .access_name = "games-dir",
+     .value_name = "VALUE",
+     .description = "Directory of game folders, one menu entry each (optional)"},
+    {.identifier = 's',
+     .access_name = "serial",
+     .value_name = "VALUE",
+     .description = "Serial device of the PPUC boards; overrides the game's (optional)"},
+    {.identifier = 'n',
+     .access_name = "no-serial",
+     .value_name = nullptr,
+     .description = "Do not read the playfield buttons; keyboard only (optional)"},
+    {.identifier = 'p',
+     .access_name = "screenshot",
+     .value_name = "FILE",
+     .description = "Render the first frame to a PNG and exit, touching no boards (optional)"},
     {.identifier = 'l',
      .access_letters = "l",
      .access_name = "logo",
@@ -947,19 +1481,19 @@ static struct cag_option options[] = {
     {.identifier = 'F',
      .access_name = "window",
      .value_name = nullptr,
-     .description = "Run the selector in a window instead of fullscreen (optional)"},
+     .description = "Run the selector in a borderless window instead of fullscreen (optional, default the game's [Translite] Window)"},
     {.identifier = 'G',
      .access_name = "width",
      .value_name = "VALUE",
-     .description = "Window width in pixels (optional, default 1920)"},
+     .description = "Window width in pixels (optional, default the game's [Translite] Width, else 1920)"},
     {.identifier = 'H',
      .access_name = "height",
      .value_name = "VALUE",
-     .description = "Window height in pixels (optional, default 1080)"},
+     .description = "Window height in pixels (optional, default the game's [Translite] Height, else 1080)"},
     {.identifier = 'I',
      .access_name = "screen",
      .value_name = "VALUE",
-     .description = "Display index for the menu window (optional)"},
+     .description = "Display index for the menu window (optional, default the game's [Translite] Screen)"},
     {.identifier = 'M',
      .access_name = "no-sound",
      .value_name = nullptr,
@@ -988,6 +1522,8 @@ static struct cag_option options[] = {
      .access_name = "speech-pitch",
      .value_name = "VALUE",
      .description = "Speech pitch 0-100 for espeak-ng (optional)"},
+    // Not an option cargs parses: arguments after "--" are appended to every
+    // game folder's ppuc-pinmame command.
     {.identifier = 'h',
      .access_letters = "h",
      .access_name = "help",
@@ -998,18 +1534,27 @@ static struct cag_option options[] = {
 
 int main(int argc, char* argv[])
 {
+  // Line by line, so a supervisor's log has what the menu found about the
+  // buttons even when nobody quits it cleanly.
+  setvbuf(stdout, nullptr, _IOLBF, BUFSIZ);
   printf("PPUC Menu Version: %s\n", PPUC_EXECUTABLE_VERSION);
   printf("Commit SHA: %s\n", PPUC_EXECUTABLE_SHA);
 
   char identifier = 0;
   cag_option_context cagContext;
   const char* optMenuFile = nullptr;
+  const char* optGamesDir = nullptr;
+  const char* optSerial = nullptr;
+  bool optNoSerial = false;
   const char* optLogo = nullptr;
   const char* optSlogan = nullptr;
+  // Unset until given: the first game's [Translite] fills in what the command
+  // line does not, so the menu comes up on the screen the game will use.
   bool optWindowed = false;
-  int optWidth = 1920;
-  int optHeight = 1080;
-  int optScreen = -1;
+  int optWidth = 0;
+  int optHeight = 0;
+  int optScreen = -2;
+  const char* optScreenshot = nullptr;
   bool optNoSound = false;
   bool optSpeech = false;
   bool optGreeting = false;
@@ -1018,7 +1563,23 @@ int main(int argc, char* argv[])
   const char* optSpeechRate = nullptr;
   const char* optSpeechPitch = nullptr;
 
-  cag_option_init(&cagContext, options, CAG_ARRAY_SIZE(options), argc, argv);
+  // Everything after "--" belongs to the game, not to the menu: the OS image
+  // passes --plugin-dir and --firmware-path this way, whichever game is
+  // chosen.
+  std::vector<std::string> gameArgs;
+  int menuArgc = argc;
+  for (int i = 1; i < argc; ++i)
+  {
+    if (std::strcmp(argv[i], "--") == 0)
+    {
+      menuArgc = i;
+      gameArgs.assign(argv + i + 1, argv + argc);
+      break;
+    }
+  }
+
+  cag_option_init(&cagContext, options, CAG_ARRAY_SIZE(options), menuArgc,
+                  argv);
   while (cag_option_fetch(&cagContext))
   {
     identifier = cag_option_get_identifier(&cagContext);
@@ -1026,6 +1587,18 @@ int main(int argc, char* argv[])
     {
       case 'm':
         optMenuFile = cag_option_get_value(&cagContext);
+        break;
+      case 'd':
+        optGamesDir = cag_option_get_value(&cagContext);
+        break;
+      case 's':
+        optSerial = cag_option_get_value(&cagContext);
+        break;
+      case 'n':
+        optNoSerial = true;
+        break;
+      case 'p':
+        optScreenshot = cag_option_get_value(&cagContext);
         break;
       case 'l':
         optLogo = cag_option_get_value(&cagContext);
@@ -1067,8 +1640,10 @@ int main(int argc, char* argv[])
         optSpeechPitch = cag_option_get_value(&cagContext);
         break;
       case 'h':
-        printf("Usage: ppuc-menu [OPTION]...\n");
+        printf("Usage: ppuc-menu [OPTION]... [-- PPUC-PINMAME ARGUMENT...]\n");
         cag_option_print(options, CAG_ARRAY_SIZE(options), stdout);
+        printf("Arguments after -- are passed to ppuc-pinmame for every game "
+               "folder. With exactly one entry the game starts directly.\n");
         return 0;
       default:
         if (cag_option_get_error_index(&cagContext) >= 0)
@@ -1083,7 +1658,7 @@ int main(int argc, char* argv[])
     }
   }
 
-  for (int i = cag_option_get_index(&cagContext); i < argc; ++i)
+  for (int i = cag_option_get_index(&cagContext); i < menuArgc; ++i)
   {
     const char* arg = argv[i];
     if (arg != nullptr && arg[0] == '-' && arg[1] != '\0')
@@ -1095,16 +1670,11 @@ int main(int argc, char* argv[])
     }
   }
 
-  if (optMenuFile == nullptr)
+  if (optMenuFile == nullptr && optGamesDir == nullptr)
   {
     fprintf(stderr,
-            "No menu definition provided. Use option -m /path/to/menu/file.\n");
-    return 1;
-  }
-
-  if (optWidth <= 0 || optHeight <= 0)
-  {
-    fprintf(stderr, "--width and --height must be > 0\n");
+            "Nothing to offer. Use --games-dir /path/to/games and/or "
+            "-m /path/to/menu/file.\n");
     return 1;
   }
 
@@ -1125,12 +1695,109 @@ int main(int argc, char* argv[])
     return 1;
   }
 
+  // Menu file entries first, in the order written there, then the game
+  // folders found in --games-dir.
   std::vector<MenuEntry> entries;
   std::string menuError;
-  if (!LoadMenuDefinition(optMenuFile, &entries, &menuError))
+  if (optMenuFile != nullptr &&
+      !LoadMenuDefinition(optMenuFile, &entries, &menuError))
   {
     fprintf(stderr, "%s\n", menuError.c_str());
     return 1;
+  }
+  if (optGamesDir != nullptr)
+  {
+    std::vector<MenuEntry> gameEntries;
+    if (!AddGamesDirectoryEntries(optGamesDir, &gameEntries, &menuError))
+    {
+      fprintf(stderr, "%s\n", menuError.c_str());
+      return 1;
+    }
+    for (MenuEntry& entry : gameEntries)
+    {
+      entries.push_back(std::move(entry));
+    }
+  }
+
+  for (MenuEntry& entry : entries)
+  {
+    if (entry.game.has_value())
+    {
+      entry.commandArgs.insert(entry.commandArgs.end(), gameArgs.begin(),
+                               gameArgs.end());
+      for (const std::string& arg : gameArgs)
+      {
+        entry.commandLine += " " + arg;
+      }
+    }
+  }
+
+  // The screen the game draws its translite, B2S backglass, tools and firmware
+  // screen on: [Translite] of the game folders. Every game on one cabinet has
+  // the same backbox, so each setting comes from the first folder that makes
+  // it -- one folder carrying the cabinet's screen settings is enough. The
+  // command line still wins.
+  int iniWindowed = -1;
+  for (const MenuEntry& entry : entries)
+  {
+    if (!entry.game.has_value())
+    {
+      continue;
+    }
+    const menugames::GameFolder& game = *entry.game;
+    if (optWidth == 0 && game.transliteWidth > 0)
+    {
+      optWidth = game.transliteWidth;
+    }
+    if (optHeight == 0 && game.transliteHeight > 0)
+    {
+      optHeight = game.transliteHeight;
+    }
+    if (optScreen == -2 && game.transliteScreen >= 0)
+    {
+      optScreen = game.transliteScreen;
+    }
+    if (iniWindowed < 0)
+    {
+      iniWindowed = game.transliteWindow;
+    }
+  }
+  optWindowed = optWindowed || iniWindowed == 1;
+  if (optWidth == 0)
+  {
+    optWidth = 1920;
+  }
+  if (optHeight == 0)
+  {
+    optHeight = 1080;
+  }
+  if (optScreen == -2)
+  {
+    optScreen = -1;
+  }
+  if (optWidth <= 0 || optHeight <= 0)
+  {
+    fprintf(stderr, "--width and --height must be > 0\n");
+    return 1;
+  }
+
+  // Nothing to choose between: start the game straight away, without a
+  // window and without touching the boards. A machine with one game folder
+  // boots exactly as if ppuc-pinmame had been started directly.
+  if (entries.size() == 1 && optScreenshot == nullptr)
+  {
+    printf("Menu: one game, starting %s directly\n",
+           entries.front().title.c_str());
+    const fs::path menuDir = optMenuFile != nullptr
+                                 ? fs::path(optMenuFile).parent_path()
+                                 : fs::current_path();
+    if (!LaunchSelectedEntry(entries.front(), menuDir, GetBaseExecutablePath(),
+                             &menuError))
+    {
+      fprintf(stderr, "%s\n", menuError.c_str());
+      return 1;
+    }
+    return 0;
   }
 
   const SDL_InitFlags initFlags = SDL_INIT_VIDEO |
@@ -1174,9 +1841,18 @@ int main(int argc, char* argv[])
 
   SDL_Window* window = nullptr;
   SDL_Renderer* renderer = nullptr;
+  // The same window as ppuc-pinmame's translite, so whatever puts the
+  // translite on the right panel puts the menu there too: fullscreen, or
+  // borderless with Window=true; no high-DPI scaling, which the translite
+  // does not ask for either.
   const SDL_WindowFlags windowFlags =
-      SDL_WINDOW_HIGH_PIXEL_DENSITY |
-      (optWindowed ? 0 : SDL_WINDOW_FULLSCREEN);
+      optWindowed ? SDL_WINDOW_BORDERLESS : SDL_WINDOW_FULLSCREEN;
+  // A cabinet has no mouse, and SDL's KMS/DRM backend draws a cursor by
+  // default. Kept in a window, as ppuc-pinmame does.
+  if (!optWindowed)
+  {
+    SDL_HideCursor();
+  }
   if (!SDL_CreateWindowAndRenderer("PPUC Menu", optWidth, optHeight,
                                    windowFlags, &window, &renderer))
   {
@@ -1191,6 +1867,16 @@ int main(int argc, char* argv[])
   PositionWindowOnDisplay(window, optScreen);
   while (!SDL_SyncWindow(window))
   {
+  }
+  SDL_ShowWindow(window);
+  SDL_RaiseWindow(window);
+  {
+    int outputWidth = 0;
+    int outputHeight = 0;
+    SDL_GetCurrentRenderOutputSize(renderer, &outputWidth, &outputHeight);
+    printf("Menu: %s renderer, %dx%d on screen %d, %s, video driver %s\n",
+           SDL_GetRendererName(renderer), outputWidth, outputHeight, optScreen,
+           optWindowed ? "window" : "fullscreen", SDL_GetCurrentVideoDriver());
   }
 
   MenuAssets assets;
@@ -1208,7 +1894,36 @@ int main(int argc, char* argv[])
     return 1;
   }
 
+  MenuFonts fonts;
+  {
+    int outputWidth = 0;
+    int outputHeight = 0;
+    SDL_GetCurrentRenderOutputSize(renderer, &outputWidth, &outputHeight);
+    OpenMenuFonts(&fonts, outputHeight);
+  }
+
   size_t selectedIndex = 0;
+
+  if (optScreenshot != nullptr)
+  {
+    DrawMenu(renderer, fonts, entries, assets, selectedIndex,
+             optSlogan ? optSlogan : "", !optNoSerial);
+    const bool saved = SaveMenuScreenshot(renderer, optScreenshot);
+    if (saved)
+    {
+      printf("Menu: screenshot written to %s\n", optScreenshot);
+    }
+    CloseMenuFonts(&fonts);
+    DestroyMenuTextures(&entries);
+    DestroyTexture(&assets.logoTexture);
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroyWindow(window);
+    speechService.reset();
+    audioOutput.reset();
+    SDL_Quit();
+    return saved ? 0 : 1;
+  }
+
   if (optGreeting && speechService != nullptr)
   {
     speechService->SpeakText("Welcome to the P P U C game menu.");
@@ -1223,16 +1938,80 @@ int main(int argc, char* argv[])
   bool launchRequested = false;
   bool needsRender = true;
 
+  // Shown before connecting: resetting and configuring the boards takes a
+  // moment, and a black screen meanwhile looks like a machine that is broken.
+  RenderMenu(renderer, fonts, entries, assets, selectedIndex, slogan, false);
+  MenuHardware hardware;
+  const bool playfieldButtons =
+      !optNoSerial && ConnectMenuHardware(entries, optSerial, &hardware);
+
+  const auto moveSelection = [&](int delta)
+  {
+    if ((delta < 0 && selectedIndex == 0) ||
+        (delta > 0 && selectedIndex + 1 >= entries.size()))
+    {
+      return;
+    }
+    selectedIndex = delta < 0 ? selectedIndex - 1 : selectedIndex + 1;
+    needsRender = true;
+    if (optSpeech && speechService != nullptr)
+    {
+      SpeakFocusTitle(speechService.get(), entries, selectedIndex);
+    }
+  };
+
   while (running)
   {
     if (needsRender)
     {
-      RenderMenu(renderer, entries, assets, selectedIndex, slogan);
+      RenderMenu(renderer, fonts, entries, assets, selectedIndex, slogan,
+                 playfieldButtons);
       needsRender = false;
     }
 
+    if (hardware.ppuc != nullptr)
+    {
+      const bool accept = NowMs() >= hardware.acceptSwitchesFromMs;
+      PPUCSwitchState* switchState = nullptr;
+      while (running &&
+             (switchState = hardware.ppuc->GetNextSwitchState()) != nullptr)
+      {
+        const uint32_t number = static_cast<uint32_t>(switchState->number);
+        const bool pressed = switchState->state != 0;
+        delete switchState;
+        bool& wasClosed = hardware.closed[number];
+        const bool edge = pressed && !wasClosed;
+        wasClosed = pressed;
+        if (!accept || !edge)
+        {
+          continue;
+        }
+        if (number == hardware.buttons.leftFlipper.number)
+        {
+          moveSelection(-1);
+        }
+        else if (number == hardware.buttons.rightFlipper.number)
+        {
+          moveSelection(1);
+        }
+        else if (number == hardware.buttons.start.number)
+        {
+          launchRequested = true;
+          running = false;
+        }
+      }
+      if (!running)
+      {
+        break;
+      }
+      if (needsRender)
+      {
+        continue;
+      }
+    }
+
     SDL_Event event;
-    if (!SDL_WaitEventTimeout(&event, 50))
+    if (!SDL_WaitEventTimeout(&event, hardware.ppuc != nullptr ? 10 : 50))
     {
       continue;
     }
@@ -1263,28 +2042,12 @@ int main(int argc, char* argv[])
 
           case SDLK_UP:
           case SDLK_LEFT:
-            if (selectedIndex > 0)
-            {
-              --selectedIndex;
-              needsRender = true;
-              if (optSpeech && speechService != nullptr)
-              {
-                SpeakFocusTitle(speechService.get(), entries, selectedIndex);
-              }
-            }
+            moveSelection(-1);
             break;
 
           case SDLK_DOWN:
           case SDLK_RIGHT:
-            if (selectedIndex + 1 < entries.size())
-            {
-              ++selectedIndex;
-              needsRender = true;
-              if (optSpeech && speechService != nullptr)
-              {
-                SpeakFocusTitle(speechService.get(), entries, selectedIndex);
-              }
-            }
+            moveSelection(1);
             break;
 
           case SDLK_RETURN:
@@ -1304,9 +2067,15 @@ int main(int argc, char* argv[])
     }
   }
 
-  const fs::path menuDir = fs::path(optMenuFile).parent_path();
+  // Before anything starts: the game opens the same serial port.
+  DisconnectMenuHardware(&hardware);
+
+  const fs::path menuDir = optMenuFile != nullptr
+                               ? fs::path(optMenuFile).parent_path()
+                               : fs::current_path();
   const std::string basePath = GetBaseExecutablePath();
 
+  CloseMenuFonts(&fonts);
   DestroyMenuTextures(&entries);
   DestroyTexture(&assets.logoTexture);
   if (renderer != nullptr)
@@ -1325,6 +2094,9 @@ int main(int argc, char* argv[])
   {
     return 0;
   }
+
+  printf("Menu: starting %s: %s\n", entries[selectedIndex].title.c_str(),
+         entries[selectedIndex].commandLine.c_str());
 
   if (!LaunchSelectedEntry(entries[selectedIndex], menuDir, basePath,
                            &menuError))

@@ -612,6 +612,8 @@ add_executable(ppuc-menu
    src/AudioMixer.cpp
    src/AudioOutput.cpp
    src/menu.cpp
+   src/MenuConfigYaml.cpp
+   src/MenuGames.cpp
    src/SpeechCliSupport.cpp
    src/SpeechService.cpp
 )
@@ -625,6 +627,12 @@ target_compile_definitions(ppuc-menu PRIVATE
 )
 if(PPUC_ENABLE_SDL3_MIXER)
    target_compile_definitions(ppuc-menu PRIVATE PPUC_HAS_SDL3_MIXER)
+endif()
+# The same fonts as the tools menu and the firmware screen. Without SDL_ttf the
+# menu falls back to SDL's debug font rather than showing no text.
+if(PPUC_HAVE_SDL3_TTF)
+   target_compile_definitions(ppuc-menu PRIVATE PPUC_HAS_SDL3_TTF)
+   target_link_libraries(ppuc-menu LINK_PUBLIC SDL3_ttf)
 endif()
 
 if(PPUC_ENABLE_FLITE)
@@ -685,6 +693,7 @@ else()
       cargs
       SDL3
       SDL3_image
+      ${PPUC_YAML_CPP_LINK_LIBRARY}
    )
 
    if(PPUC_ENABLE_FLITE)
@@ -837,6 +846,7 @@ if(PPUC_BUILD_TESTS)
       src/BallTroughWatch.cpp
       src/SwitchHold.cpp
       src/LedStringWalk.cpp
+      src/MenuGames.cpp
       src/AudioLanes.cpp
       src/AudioMixer.cpp
       src/LuaGameApi.cpp
@@ -872,6 +882,7 @@ if(PPUC_BUILD_TESTS)
       tests/test_ball_trough_watch.cpp
       tests/test_switch_hold.cpp
       tests/test_led_string_walk.cpp
+      tests/test_menu_games.cpp
       tests/test_audio_lanes.cpp
       tests/test_audio_mixer.cpp
       tests/test_plugin_switch_map.cpp
@@ -915,4 +926,12 @@ if(PPUC_BUILD_TESTS)
    set_tests_properties(ppuc_tmwrp_coldstart PROPERTIES
       SKIP_RETURN_CODE 77
       TIMEOUT 120)
+
+   # ppuc-menu's first frame, rendered headless to a PNG and checked for size
+   # and content. Same packaged-binary rule as above.
+   add_test(NAME ppuc_menu_render
+      COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/menu_render.sh")
+   set_tests_properties(ppuc_menu_render PROPERTIES
+      SKIP_RETURN_CODE 77
+      TIMEOUT 60)
 endif()

@@ -77,6 +77,7 @@
 #include "SDL3_ttf/SDL_ttf.h"
 #endif
 #include "SpeechCliSupport.h"
+#include "UiStyle.h"
 #include "SpeechService.h"
 #include "cargs.h"
 #include "io-boards/Event.h"
@@ -2542,16 +2543,7 @@ static TTF_Font* pFirmwareFontCompact = nullptr;
 #endif
 [[maybe_unused]] static bool firmwareFontAttempted = false;
 
-// Where a font might be. Deliberately a search rather than a setting: this
-// screen has to work on a machine nobody configured for it.
-[[maybe_unused]] static const char* kFirmwareFontCandidates[] = {
-    "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
-    "/System/Library/Fonts/Helvetica.ttc",
-};
+// The font search is shared with ppuc-menu's game selector: see UiStyle.h.
 
 #ifdef PPUC_HAS_SDL3_TTF
 static void EnsureFirmwareFont()
@@ -2568,13 +2560,13 @@ static void EnsureFirmwareFont()
         return;
     }
 
-    for (const char* path : kFirmwareFontCandidates)
+    for (const char* path : uistyle::kFontCandidates)
     {
-        pFirmwareFontLarge = TTF_OpenFont(path, 48);
+        pFirmwareFontLarge = TTF_OpenFont(path, uistyle::kFontLargePt);
         if (pFirmwareFontLarge)
         {
-            pFirmwareFontSmall = TTF_OpenFont(path, 28);
-            pFirmwareFontCompact = TTF_OpenFont(path, 23);
+            pFirmwareFontSmall = TTF_OpenFont(path, uistyle::kFontSmallPt);
+            pFirmwareFontCompact = TTF_OpenFont(path, uistyle::kFontCompactPt);
             return;
         }
     }

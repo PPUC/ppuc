@@ -58,6 +58,115 @@ machine is actually configured. Download it from a game's page as *Download
 Game Folder* and unpack it on the host. `io-boards.yaml` is the same file you
 get from *Download Game Config*, and the two are interchangeable.
 
+### Several games on one machine
+
+One playfield can run more than one game: the original ROM, a game written in
+Lua, a custom ROM build, an older ROM revision. Each is a game folder of its
+own. Put them side by side in one directory and start the game selector instead
+of a game:
+
+```
+games/
+  tmwrp/          the original ROM
+  tmwrp-lua/      the same playfield with a Lua game
+  tmwrp-custom/   a custom ROM build
+```
+
+```
+ppuc-menu --games-dir /path/to/games
+```
+
+Every subfolder with an `io-boards.yaml` is a card in the menu. With only one
+such folder there is nothing to choose: the selector starts that game at once,
+without showing anything, so it is safe to always start the selector.
+
+On a ZeDMDOS machine nothing has to be started by hand. Put the game folders
+side by side under `ppuc/` on the USB stick instead of making `ppuc/` itself the
+game folder, and the machine boots into the selector:
+
+```
+<usb-stick>/
+  ppuc/
+    tmwrp/        each with its own ppuc.ini, io-boards.yaml, pinmame/ ...
+    tmwrp-lua/
+```
+
+A `ppuc.ini` directly in `ppuc/` still means "this is the one game", as before.
+
+To change games, switch the machine off and on again: the selector appears at
+every power-on.
+
+On the playfield:
+
+| button | what it does |
+|---|---|
+| **left flipper** | previous game |
+| **right flipper** | next game |
+| **start** | play the highlighted game |
+
+A keyboard works as well: cursor keys move, ENTER plays, ESC quits the
+selector.
+
+The selector appears where the game draws its backglass: it takes `Width`,
+`Height`, `Screen` and `Window` from the `[Translite]` section of the game
+folders (each from the first folder that sets it), and looks like the service
+tools, in the same font and colours. A card shows the game's
+`translite-off.png`, and the highlighted card its `translite-on.png`.
+
+The selector finds these three buttons on its own: in the first game folder's
+`io-boards.yaml` it looks for the switches described as the left and right
+flipper buttons and the start button (or, for a Lua game, `emGame.startSwitch`).
+It then talks to the boards with only those three switches configured, so while
+it runs nothing on the playfield moves or lights up and the flippers are dead.
+Pressing start hands the boards over to the game, which configures them in full.
+
+Every game folder on the machine should wire the three buttons to the same board
+inputs, since it is the same cabinet. If one does not, the selector says so in
+its log at startup and keeps using the first folder's. When it cannot tell which
+switch is which — no switch says "left flipper button", or two do — the log
+names the candidates and the selector runs keyboard only until the game's
+`ppuc.ini` settles it:
+
+```ini
+[Menu]
+Title=Time Warp Deluxe  ; the card's title; the folder name when absent
+Info=Lua rules edition ; a line under the title; "ROM tmwrp_l2" or "Lua game" when absent
+Image=card-off.png      ; default translite-off.png
+SelectedImage=card-on.png ; default translite-on.png
+Order=0                 ; cards sort by Order, then by title
+Hidden=false            ; true leaves the folder out of the menu
+Arguments=--no-sound    ; added to the command that starts this game
+LeftFlipperSwitch=0     ; switch number of the left flipper button; 0 finds it
+RightFlipperSwitch=0    ; switch number of the right flipper button; 0 finds it
+StartSwitch=0           ; switch number of the start button; 0 finds it
+```
+
+The buttons come from the first game in that order, so give the folder you
+trust most the lowest `Order`.
+
+The selector takes the serial port from that game's `[Paths] Serial`, or from
+`--serial /dev/ttyUSB0`. With `--no-serial` it does not touch the boards and is
+steered from the keyboard only. If the boards do not answer, it says so and
+carries on keyboard only rather than refusing to start.
+
+To list one game folder twice — the same ROM with and without a bench option,
+say — write a menu file instead of, or as well as, `--games-dir`:
+
+```
+title: Time Warp
+game: games/tmwrp
+
+title: Time Warp, sound off
+game: games/tmwrp
+arguments: --no-sound
+```
+
+```
+ppuc-menu --menu-file menu.txt --games-dir /path/to/games
+```
+
+Menu file entries come first, then the folders found in `--games-dir`.
+
 ## 3. `ppuc.ini`
 
 Sections and the keys worth knowing. Anything not listed has a sensible default

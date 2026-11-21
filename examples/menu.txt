@@ -1,10 +1,25 @@
 # Menu file format:
 # title: <display title>
+# info: <line under the title>
 # image: <normal image path>
 # selected-image: <focused image path>
 # command: <ppuc-pinmame command line>
 #
-# Entries are separated by blank lines.
+# or, instead of command, a game folder started as ppuc-pinmame --game <folder>.
+# Title, info and images then default to the folder's ppuc.ini [Menu] section
+# and its translite images:
+# game: <game folder>
+# arguments: <extra ppuc-pinmame arguments>
+#
+# Entries are separated by blank lines. Paths are relative to the current
+# working directory.
+
+title: Time Warp
+game: ../ppuc_games/tmwrp
+
+title: Time Warp (bench, sound off)
+game: ../ppuc_games/tmwrp
+arguments: --no-sound --skip-boards 2,3
 
 title: Flash
 info: Williams 1976
