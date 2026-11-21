@@ -651,6 +651,8 @@ struct InterceptorOutputOverrides
   std::unordered_map<int, uint8_t> engineCoils;
   std::unordered_map<int, uint8_t> engineLamps;
   std::unordered_map<int, CoilPulse> coilPulses;
+  // Coils a rule holds on (ppuc.setCoil) until it releases them.
+  std::unordered_set<int> coilHolds;
   std::unordered_map<int, LampBlink> lampBlinks;
   std::mutex mutex;
 
@@ -672,7 +674,7 @@ struct InterceptorOutputOverrides
     }
     const auto now = std::chrono::steady_clock::now();
     const auto pulseIt = coilPulses.find(number);
-    if (pulseIt != coilPulses.end() && now < pulseIt->second.until)
+    if (coilHolds.count(number) != 0 || (pulseIt != coilPulses.end() && now < pulseIt->second.until))
     {
       NoteCoilMonitorState(number, 1);
       controller->SetSolenoidState(number, 1);
@@ -705,6 +707,25 @@ struct InterceptorOutputOverrides
     }
     NoteCoilMonitorState(number, 1);
     controller->SetSolenoidState(number, 1);
+  }
+
+  // A held coil stays on until released, whatever the engine or a pulse ends
+  // in the meantime. Releasing ends a running pulse too: the rule said off.
+  void SetCoil(PPUC* controller, int number, uint8_t state)
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (state != 0)
+    {
+      coilHolds.insert(number);
+      NoteCoilMonitorState(number, 1);
+      controller->SetSolenoidState(number, 1);
+      return;
+    }
+    coilHolds.erase(number);
+    coilPulses.erase(number);
+    const uint8_t restore = engineCoils.count(number) == 0 ? 0 : engineCoils[number];
+    NoteCoilMonitorState(number, restore);
+    controller->SetSolenoidState(number, restore);
   }
 
   void StartBlinkLamp(PPUC* controller, int number, uint32_t onMs, uint32_t offMs)
@@ -748,6 +769,10 @@ struct InterceptorOutputOverrides
       {
         const int number = coilIt->first;
         coilIt = coilPulses.erase(coilIt);
+        if (coilHolds.count(number) != 0)
+        {
+          continue;                         // still held by a rule
+        }
         const uint8_t restore = engineCoils.count(number) == 0 ? 0 : engineCoils[number];
         NoteCoilMonitorState(number, restore);
         controller->SetSolenoidState(number, restore);
@@ -784,6 +809,9 @@ struct InterceptorOutputOverrides
         break;
       case RulesActionType::PulseCoil:
         PulseCoil(controller, action.number, action.durationMs);
+        break;
+      case RulesActionType::SetCoil:
+        SetCoil(controller, action.number, action.state);
         break;
       case RulesActionType::StartBlinkLamp:
         StartBlinkLamp(controller, action.number, action.onMs, action.offMs);

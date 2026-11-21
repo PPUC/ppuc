@@ -92,11 +92,21 @@ ppuc.effectTrigger(name, value)
 ppuc.suppressSwitch(number)
 ppuc.sendSwitchToCpu(number, state)
 ppuc.pulseCoil(number, durationMs)
+ppuc.setCoil(number, on)
 ppuc.blinkLamp(number, onMs, offMs)
 ppuc.stopBlinkLamp(number)
 ppuc.ballSave(durationMs)
 ppuc.setGiProgram(string, colors, effect, periodMs)
 ```
+
+`ppuc.setCoil(number, true)` holds a coil on until `ppuc.setCoil(number,
+false)`: a diverter, a gate, a motor. `on` may also be a number (0 = off).
+Releasing ends a running `ppuc.pulseCoil` on the same coil too, and the coil
+returns to what the engine wants (off under `engine: script` unless GameCore
+drives it). The rule only says on and off: power, hold power and the maximum
+on-time stay the coil's configuration (config-tool), which the board
+enforces, so a rule that forgets to release cannot cook a coil beyond what
+its configuration allows.
 
 `ppuc.ballSave` works under both engines: ball save lives in the switch path
 ahead of the engine, not inside it. So do `ppuc.setGiProgram`, see

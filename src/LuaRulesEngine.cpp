@@ -222,6 +222,7 @@ void LuaRulesEngine::RegisterApi()
   SetPpucFunction(m_lua, this, "suppressSwitch", LuaSuppressSwitch);
   SetPpucFunction(m_lua, this, "sendSwitchToCpu", LuaSendSwitchToCpu);
   SetPpucFunction(m_lua, this, "pulseCoil", LuaPulseCoil);
+  SetPpucFunction(m_lua, this, "setCoil", LuaSetCoil);
   SetPpucFunction(m_lua, this, "blinkLamp", LuaBlinkLamp);
   SetPpucFunction(m_lua, this, "stopBlinkLamp", LuaStopBlinkLamp);
   SetPpucFunction(m_lua, this, "ballSave", LuaBallSave);
@@ -1220,6 +1221,33 @@ int LuaRulesEngine::LuaPulseCoil(lua_State* L)
                                          static_cast<uint32_t>(luaL_checkinteger(L, 2)),
                                          0,
                                          0});
+  }
+  return 0;
+}
+
+// ppuc.setCoil(number, on) -- hold a coil on until ppuc.setCoil(number, false).
+//
+// `on` is a boolean or a number (0 = off). For coils a rule keeps on for a
+// while: a diverter, a gate, a motor. How the copper is driven while it is
+// held -- power, hold power, maximum on-time -- stays the coil's configuration,
+// which the board enforces.
+int LuaRulesEngine::LuaSetCoil(lua_State* L)
+{
+  auto* engine = FromLua(L);
+  const int number = static_cast<int>(luaL_checkinteger(L, 1));
+  bool on;
+  if (lua_isboolean(L, 2))
+  {
+    on = lua_toboolean(L, 2) != 0;
+  }
+  else
+  {
+    on = luaL_checkinteger(L, 2) != 0;
+  }
+  if (engine->m_actionCallback)
+  {
+    engine->m_actionCallback(RulesAction{RulesActionType::SetCoil, number,
+                                         on ? static_cast<uint8_t>(1) : static_cast<uint8_t>(0), 0, 0, 0});
   }
   return 0;
 }

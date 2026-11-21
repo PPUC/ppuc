@@ -135,6 +135,48 @@ end
   }
 }
 
+TEST_CASE("a rule holds a coil on and releases it") {
+  // A diverter, a gate, a motor: on until the rule says off. The board keeps
+  // applying the coil's configured power, hold power and maximum on-time.
+  RulesHarness harness(R"LUA(
+function ppuc.onSwitchChanged(number, state)
+  if number == 38 and state == 1 then
+    ppuc.setCoil(27, true)
+  elseif number == 38 then
+    ppuc.setCoil(27, false)
+  elseif number == 42 then
+    ppuc.setCoil(28, state)
+  end
+end
+)LUA");
+  harness.LoadOrFail();
+
+  harness.engine().ProcessSwitchState(38, 1);
+  harness.engine().ProcessSwitchState(38, 0);
+  harness.engine().ProcessSwitchState(42, 1);
+
+  REQUIRE(harness.actions.size() == 3);
+  CHECK(harness.actions[0].type == RulesActionType::SetCoil);
+  CHECK(harness.actions[0].number == 27);
+  CHECK(harness.actions[0].state == 1);
+  CHECK(harness.actions[1].type == RulesActionType::SetCoil);
+  CHECK(harness.actions[1].state == 0);
+  CHECK(harness.actions[2].number == 28);
+  CHECK(harness.actions[2].state == 1);              // a number works too
+}
+
+TEST_CASE("setCoil without a state is an error naming the call") {
+  RulesHarness harness(R"LUA(
+function ppuc.onSwitchChanged(number, state)
+  ppuc.setCoil(27)
+end
+)LUA");
+  harness.LoadOrFail();
+  harness.engine().ProcessSwitchState(1, 1);
+  CHECK(harness.engine().HasFatalError());
+  CHECK(harness.engine().GetFatalError().find("setCoil") != std::string::npos);
+}
+
 TEST_CASE("a rule can tell a playfield hit from a button press") {
   // The same definition the ball search uses, rather than a second list in the
   // rules that can disagree with the configuration.

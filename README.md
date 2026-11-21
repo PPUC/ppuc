@@ -526,6 +526,9 @@ Outputs and integrations:
 * `ppuc.suppressSwitch(number)`
 * `ppuc.sendSwitchToCpu(number, state)`
 * `ppuc.pulseCoil(number, durationMs)`
+* `ppuc.setCoil(number, on)` holds a coil (diverter, gate, motor) on until
+  `ppuc.setCoil(number, false)`; the board keeps applying the coil's
+  configured power, hold power and maximum on-time
 * `ppuc.blinkLamp(number, onMs, offMs)` and `ppuc.stopBlinkLamp(number)`
 * `ppuc.setGiProgram(string, colors, effect, periodMs)` colors a GI string
   (`static`, `cycle`, `fade`, or `default` for the configured colors); the

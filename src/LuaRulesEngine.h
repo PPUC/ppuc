@@ -213,6 +213,7 @@ class LuaRulesEngine
   static int LuaHoldBallSearch(lua_State* L);
   static int LuaSendSwitchToCpu(lua_State* L);
   static int LuaPulseCoil(lua_State* L);
+  static int LuaSetCoil(lua_State* L);
   static int LuaBlinkLamp(lua_State* L);
   static int LuaStopBlinkLamp(lua_State* L);
   static int LuaBallSave(lua_State* L);
