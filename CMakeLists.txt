@@ -368,6 +368,8 @@ add_executable(ppuc-pinmame
    src/dmd/DmdCanvas.cpp
    src/dmd/DmdDefaultScreen.cpp
    src/dmd/DmdRenderer.cpp
+   src/game/BenchBalls.cpp
+   src/game/BenchBallsYaml.cpp
    src/game/GameConfigYaml.cpp
    src/game/GameCore.cpp
    src/game/PlayfieldAssist.cpp
@@ -901,6 +903,7 @@ if(PPUC_BUILD_TESTS)
       src/dmd/DmdCanvas.cpp
       src/dmd/DmdDefaultScreen.cpp
       src/dmd/DmdRenderer.cpp
+      src/game/BenchBalls.cpp
       src/game/GameCore.cpp
       src/game/PlayfieldAssist.cpp
       ${PPUC_LUA_SOURCES}
@@ -925,6 +928,7 @@ if(PPUC_BUILD_TESTS)
       tests/test_pinmame_nvram_tracking.cpp
       tests/test_attract_slides.cpp
       tests/test_ball_trough_watch.cpp
+      tests/test_bench_balls.cpp
       tests/test_switch_hold.cpp
       tests/test_led_string_walk.cpp
       tests/test_menu_games.cpp

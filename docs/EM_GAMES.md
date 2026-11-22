@@ -293,6 +293,58 @@ ppuc-pinmame --game ppuc_games/emdemo --serial /dev/ttyUSB0
 See [`ppuc_games/emdemo`](../../ppuc_games/emdemo/README.md) for a complete
 reference machine.
 
+### Playing on a desk
+
+With `--no-serial` alone, nothing happens when a coil fires: the trough never
+releases and a game waits for a ball that never reaches the shooter lane.
+`--bench` puts a ball model in the boards' place (`src/game/BenchBalls.*`). It
+sees every coil PPUC drives, from GameCore, a rule or a ROM, and answers with
+the switches a machine would change, through the same path as a board's
+switches (coin door, rules, engine, switch monitor):
+
+- a **trough kick** (its rising edge) opens a trough switch and, `serveMs`
+  later, closes the shooter lane switch; with a `plunger` switch, that is
+  tapped `afterMs` after the ball arrives, as a player would;
+- a **launch coil** sends the waiting ball onto the playfield;
+- a **hole** keeps its switch closed until its coil fires, then the ball is
+  back on the playfield, or in the hole it feeds (`to`);
+- a **drain** (from the play script) rolls over `drainSwitches` and closes the
+  next trough switch.
+
+The trough, kick coil, shooter lane and start switch come from `emGame:`; a
+`bench:` block adds the rest, or gives all of it for a ROM game:
+
+```yaml
+bench:
+  launchCoils: [2, 3]                 # autoplunger, gun
+  plunger: {switch: 11, afterMs: 2500}
+  holes:
+    - {switch: 47, coil: 14}
+    - {switch: 45, coil: 5, to: 44}   # a popper feeding the gun chamber
+    - {switch: 44, coil: 3}
+  # balls, trough: {switches, kickCoil}, shooterLane, startSwitch,
+  # serveMs (600), tapMs (80), drainSwitches: only to override emGame:
+```
+
+What the ball does on the playfield is the player's, and the player is a
+script, `--bench-play car_chase.play`. Times are ms from when the engine is up,
+or `+ms` after the line before:
+
+```
+1000  start
++6000 tap 61         # a sling
++4000 hole 47        # into HQ; the rules kick it out
++3600 tap 41
++400  tap 43         # a ramp: enter, then make
++3000 drain
+```
+
+`press`/`release` hold a switch (a flipper button), `launch` is a manual
+plunger, `say` prints a line into the log. The model prints what it does
+(`[  4.101s] bench: ball launched`), and a step that makes no sense (a drain
+with no ball out, a hole that is not in `bench.holes`) is reported, not
+modelled. Add `--exit-after-ms` for a run that ends by itself.
+
 ### Sound from an AltSound pack
 
 A ROM-less game plays an AltSound pack the same way a ROM does: rules send the

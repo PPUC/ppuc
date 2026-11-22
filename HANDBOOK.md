@@ -693,6 +693,13 @@ memory*: an extra-ball level that adjusts itself, a champion's name), and take
 switches off the switch report that may rightly sit still for many games. Both
 are kept in the game folder's `state/`.
 
+A custom game can be played through on a desk, with no machine attached:
+`ppuc-pinmame --game <folder> --bench --bench-play game.play` lets a small
+ball model answer the coils (the trough serves, the poppers kick out) while a
+script plays the shots. The rules, the scores and the scoreboard are the real
+ones. The `bench:` block and the script are described in
+[`docs/EM_GAMES.md`](docs/EM_GAMES.md#playing-on-a-desk).
+
 Written up in [`docs/RULES_AND_EFFECTS.md`](docs/RULES_AND_EFFECTS.md) and
 [`docs/INTERCEPTOR.md`](docs/INTERCEPTOR.md). Flash's multiball is documented
 for players in `ppuc_games/flash/MULTIBALL.md` and technically in

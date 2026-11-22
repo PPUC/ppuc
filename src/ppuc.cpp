@@ -82,6 +82,7 @@
 #include "PinmameNvramMapLoader.h"
 #include "PluginEngine.h"
 #include "ScriptEngine.h"
+#include "game/BenchBallsYaml.h"
 #include "game/GameConfigYaml.h"
 #include "LuaGameApi.h"
 #include "game/GameCore.h"
@@ -463,6 +464,8 @@ const char* opt_altsound_hardware = NULL;
 // is wasted work on one that does.
 int opt_serum_resolution = 0;
 bool opt_no_serial = false;
+bool opt_bench = false;
+std::string opt_bench_play;
 bool opt_no_sound = false;
 bool opt_no_time_fence = false;
 // "pinmame" runs an original ROM under libpinmame; "script" runs the ROM-less
@@ -702,6 +705,14 @@ HandoffQueue<SwitchUiEvent> g_switchUiEvents;
 // send: an engine updated on that thread is only ever called from it.
 HandoffQueue<std::pair<int, uint8_t>> g_injectedSwitches(256);
 
+// --bench: a ball model in the boards' place (game/BenchBalls.h). Every coil
+// PPUC drives is queued here, from whichever thread drove it; the switch thread
+// owns the model and answers with the switches a machine would change.
+std::atomic<bool> g_benchOn{false};
+HandoffQueue<std::pair<int, uint8_t>> g_benchCoils(1024);
+std::unique_ptr<bench::Balls> g_benchBalls;
+std::unique_ptr<bench::Player> g_benchPlayer;
+
 // Arbitrates between what the game engine wants an output to do and what a Lua
 // rule has temporarily overridden it to do. Engine-neutral: "engine" here is
 // PinMAME or the ROM-less game core, and the arbitration is the same either way.
@@ -715,6 +726,18 @@ HandoffQueue<std::pair<int, uint8_t>> g_injectedSwitches(256);
 // here, and a non-recursive mutex held across that would deadlock.
 // Defined with the rest of the monitor, further down.
 static void NoteCoilMonitorState(int number, uint8_t state);
+
+// Every solenoid command from the arbitration below goes through here: the
+// coil monitor and the bench see what the boards are told.
+static void DriveSolenoid(PPUC* controller, int number, uint8_t state)
+{
+  NoteCoilMonitorState(number, state);
+  if (g_benchOn.load(std::memory_order_relaxed))
+  {
+    g_benchCoils.Push({number, state});
+  }
+  controller->SetSolenoidState(number, state);
+}
 
 struct InterceptorOutputOverrides
 {
@@ -759,12 +782,10 @@ struct InterceptorOutputOverrides
     const auto pulseIt = coilPulses.find(number);
     if (coilHolds.count(number) != 0 || (pulseIt != coilPulses.end() && now < pulseIt->second.until))
     {
-      NoteCoilMonitorState(number, 1);
-      controller->SetSolenoidState(number, 1);
+      DriveSolenoid(controller, number, 1);
       return;
     }
-    NoteCoilMonitorState(number, state == 0 ? 0 : 1);
-    controller->SetSolenoidState(number, state == 0 ? 0 : 1);
+    DriveSolenoid(controller, number, state == 0 ? 0 : 1);
   }
 
   void ApplyEngineLamp(PPUC* controller, int number, uint8_t state)
@@ -788,8 +809,7 @@ struct InterceptorOutputOverrides
     {
       pulse.until = until;
     }
-    NoteCoilMonitorState(number, 1);
-    controller->SetSolenoidState(number, 1);
+    DriveSolenoid(controller, number, 1);
   }
 
   // A held coil stays on until released, whatever the engine or a pulse ends
@@ -800,15 +820,13 @@ struct InterceptorOutputOverrides
     if (state != 0)
     {
       coilHolds.insert(number);
-      NoteCoilMonitorState(number, 1);
-      controller->SetSolenoidState(number, 1);
+      DriveSolenoid(controller, number, 1);
       return;
     }
     coilHolds.erase(number);
     coilPulses.erase(number);
     const uint8_t restore = engineCoils.count(number) == 0 ? 0 : engineCoils[number];
-    NoteCoilMonitorState(number, restore);
-    controller->SetSolenoidState(number, restore);
+    DriveSolenoid(controller, number, restore);
   }
 
   void StartBlinkLamp(PPUC* controller, int number, uint32_t onMs, uint32_t offMs)
@@ -857,8 +875,7 @@ struct InterceptorOutputOverrides
           continue;                         // still held by a rule
         }
         const uint8_t restore = engineCoils.count(number) == 0 ? 0 : engineCoils[number];
-        NoteCoilMonitorState(number, restore);
-        controller->SetSolenoidState(number, restore);
+        DriveSolenoid(controller, number, restore);
       }
       else
       {
@@ -7821,6 +7838,14 @@ static struct cag_option options[] = {
      .access_name = "no-display",
      .value_name = NULL,
      .description = "Do not open or search for any DMD (optional, for headless runs)"},
+    {.identifier = '\x05',
+     .access_name = "bench",
+     .value_name = NULL,
+     .description = "No boards: a ball model answers the coils (trough, shooter lane, holes), see the bench: block (optional)"},
+    {.identifier = '\x06',
+     .access_name = "bench-play",
+     .value_name = "VALUE",
+     .description = "With --bench: a script of what the player does (start, tap, hole, drain), see docs/EM_GAMES.md (optional)"},
     {.identifier = ']',
      .access_name = "exit-after-ms",
      .value_name = "VALUE",
@@ -8993,6 +9018,51 @@ static void PublishScoreboardFacts()
   g_scoreboardFeed.Publish(facts);
 }
 
+// --bench, on the switch thread: the coils driven since the last pass reach the
+// ball model, and the play script takes its next steps once the engine is up.
+// The switches the balls changed are added to `changes`, which the switch loop
+// handles exactly like the boards' own: coin door, rules, engine, monitor.
+static void ServiceBench(GameEngine* pEngine, std::vector<std::pair<int, uint8_t>>& changes)
+{
+  if (!g_benchBalls)
+  {
+    return;
+  }
+  static std::vector<std::pair<int, uint8_t>> coils;  // switch thread only
+  static bool begun = false;
+  static uint64_t begunMs = 0;
+  const uint64_t nowMs = SDL_GetTicks();
+  if (!begun)
+  {
+    begun = true;
+    begunMs = nowMs;
+    g_benchBalls->Begin(nowMs);
+  }
+  g_benchCoils.TakeAll(coils);
+  for (const auto& [number, state] : coils)
+  {
+    g_benchBalls->OnCoil(number, state != 0, nowMs);
+  }
+  if (g_benchPlayer)
+  {
+    if (!g_benchPlayer->Started() && pEngine != nullptr && pEngine->IsReady())
+    {
+      g_benchPlayer->Begin(nowMs);
+      printf("Bench: playing %s\n", opt_bench_play.c_str());
+    }
+    const bool wasFinished = g_benchPlayer->Finished();
+    if (g_benchPlayer->Service(nowMs, *g_benchBalls) && !wasFinished)
+    {
+      printf("Bench: the play script is done\n");
+    }
+  }
+  g_benchBalls->Service(nowMs, [&changes](int sw, uint8_t state) { changes.push_back({sw, state}); });
+  for (const std::string& line : g_benchBalls->TakeLog())
+  {
+    printf("[%8.3fs] %s\n", static_cast<double>(nowMs - begunMs) / 1000.0, line.c_str());
+  }
+}
+
 static void RunSwitchThread(GameEngine* pEngine, BallSearchRunner& ballSearchRunner, uint32_t ballSearchDelayMs,
                             uint32_t ballSearchRoundDelayMs, bool engineHere, bool pollGis,
                             const std::atomic<bool>& stop)
@@ -9002,6 +9072,7 @@ static void RunSwitchThread(GameEngine* pEngine, BallSearchRunner& ballSearchRun
   std::vector<GameEngineOutputChange> lampChanges;
   std::vector<GameEngineOutputChange> giChanges;
   std::vector<std::pair<int, uint8_t>> injected;
+  std::vector<std::pair<int, uint8_t>> benchSwitches;
 
   while (running.load(std::memory_order_acquire) && !stop.load(std::memory_order_acquire))
   {
@@ -9014,6 +9085,10 @@ static void RunSwitchThread(GameEngine* pEngine, BallSearchRunner& ballSearchRun
     {
       SendSwitchToEngine(pEngine, number, state);
     }
+
+    // No boards: the balls answer the coils, with switches handled below as
+    // if a board had reported them.
+    ServiceBench(pEngine, benchSwitches);
 
     // Drained before the readiness gate, and that is the whole point.
     //
@@ -9045,6 +9120,17 @@ static void RunSwitchThread(GameEngine* pEngine, BallSearchRunner& ballSearchRun
       HandleSwitchOnSwitchThread(pEngine, ballSearchRunner, ballSearchDelayMs, number, newSwitchState);
       g_switchUiEvents.Push(SwitchUiEvent{number, newSwitchState});
     }
+    for (const auto& [number, newSwitchState] : benchSwitches)
+    {
+      if (g_coinDoor.OnSwitch(number, newSwitchState) == CoinDoorRouter::Route::Tools)
+      {
+        g_switchUiEvents.Push(SwitchUiEvent{number, newSwitchState, true});
+        continue;
+      }
+      HandleSwitchOnSwitchThread(pEngine, ballSearchRunner, ballSearchDelayMs, number, newSwitchState);
+      g_switchUiEvents.Push(SwitchUiEvent{number, newSwitchState});
+    }
+    benchSwitches.clear();
 
     // The game core as adjusted at the machine, once no game is running.
     if (engineHere && g_gameConfigPending.load(std::memory_order_acquire) && g_pGameCore != nullptr &&
@@ -9629,6 +9715,13 @@ int main(int argc, char** argv)
       case 'n':
         opt_no_serial = true;
         break;
+      case '\x05':
+        opt_bench = true;
+        break;
+      case '\x06':
+        opt_bench = true;
+        opt_bench_play = cag_option_get_value(&cag_context);
+        break;
       case 't':
         opt_engine = cag_option_get_value(&cag_context);
         break;
@@ -10124,6 +10217,50 @@ int main(int argc, char** argv)
     {
       pPpuc->SetTiltSwitch(static_cast<uint8_t>(g_gameConfig.tilt.inhibitSwitch));
     }
+  }
+
+  // --bench: a ball model in the boards' place. It needs a trough to serve
+  // from, which a ROM-less game has in emGame: and any game can give in bench:.
+  if (opt_bench)
+  {
+    opt_no_serial = true;
+    bench::Config benchConfig;
+    std::string benchError;
+    if (!bench::LoadConfig(config_file, useScriptEngine ? &g_gameConfig : nullptr, &benchConfig, &benchError))
+    {
+      printf("%s\n", benchError.c_str());
+      return 1;
+    }
+    if (!benchConfig.present)
+    {
+      printf("--bench: %s has neither a bench: nor an emGame: block, so there is no trough to serve a ball from.\n",
+             config_file);
+      return 1;
+    }
+    if (!opt_bench_play.empty())
+    {
+      std::ifstream playFile(opt_bench_play);
+      if (!playFile)
+      {
+        printf("--bench-play: cannot read %s\n", opt_bench_play.c_str());
+        return 1;
+      }
+      std::stringstream playText;
+      playText << playFile.rdbuf();
+      std::vector<bench::Step> steps;
+      std::string playError;
+      if (!bench::ParsePlay(playText.str(), &steps, &playError))
+      {
+        printf("--bench-play: %s: %s\n", opt_bench_play.c_str(), playError.c_str());
+        return 1;
+      }
+      g_benchPlayer = std::make_unique<bench::Player>(std::move(steps));
+    }
+    printf("Bench: no boards; %d ball(s) in a trough of %zu switch(es) kicked by coil %d, shooter lane %d, %zu hole(s)\n",
+           benchConfig.balls, benchConfig.troughSwitches.size(), benchConfig.troughKickCoil, benchConfig.shooterSwitch,
+           benchConfig.holes.size());
+    g_benchBalls = std::make_unique<bench::Balls>(std::move(benchConfig));
+    g_benchOn.store(true, std::memory_order_release);
   }
 
   // Tilt warnings and ball save are loaded for BOTH engines. Giving an

@@ -145,6 +145,15 @@ Dedicated command-line options override values from the game folder and INI.
 * -p VALUE
     * Serum ignore number of unknown frames
     * optional
+* --bench
+    * no boards: a ball model answers the coils, so a game runs on a desk (implies `--no-serial`)
+    * a trough kick rolls a ball into the shooter lane, a launch coil sends it onto the playfield, a hole's coil kicks its ball out
+    * needs an `emGame:` or a `bench:` block in `io-boards.yaml`, see [docs/EM_GAMES.md](docs/EM_GAMES.md#playing-on-a-desk)
+    * optional
+* --bench-play file
+    * with `--bench` (implied): a script of what the player does, `start`, `tap`, `press`, `release`, `hole`, `launch`, `drain`, one step per line
+    * starts once the engine is up
+    * optional
 * --rules path
     * path to one Lua rules file or a directory containing Lua rule files
     * explicit override for the default `<game>/rules` directory
