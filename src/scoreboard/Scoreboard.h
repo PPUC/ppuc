@@ -62,7 +62,8 @@ class Board
   struct Glyph
   {
     SDL_Texture* texture = nullptr;
-    int width = 0;  // the texture, scorch included
+    SDL_Texture* shadow = nullptr;  // same size, for a style with a shadow
+    int width = 0;                  // the texture, scorch included
     int height = 0;
     int advance = 0;
   };
@@ -70,6 +71,7 @@ class Board
   {
     TTF_Font* font = nullptr;
     int pad = 0;
+    int shadowOffset = 0;  // 0: no shadow
     std::map<uint32_t, Glyph> glyphs;
   };
 

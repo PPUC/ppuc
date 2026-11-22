@@ -24,6 +24,7 @@ void Board::Unload()
     for (auto& [cp, glyph] : face.glyphs)
     {
       if (glyph.texture) SDL_DestroyTexture(glyph.texture);
+      if (glyph.shadow) SDL_DestroyTexture(glyph.shadow);
     }
 #ifdef PPUC_HAS_SDL3_TTF
     if (face.font) TTF_CloseFont(face.font);
@@ -139,7 +140,9 @@ Board::Face* Board::GetFace(const std::string& style, int pixelSize)
     return nullptr;
   }
   const auto styleIt = m_layout.styles.find(style);
-  face.pad = BurnPad(styleIt != m_layout.styles.end() ? styleIt->second : Style{}, pixelSize);
+  const Style faceStyle = styleIt != m_layout.styles.end() ? styleIt->second : Style{};
+  face.pad = BurnPad(faceStyle, pixelSize);
+  face.shadowOffset = ShadowOffset(faceStyle, pixelSize);
   return &m_faces.emplace(key, std::move(face)).first->second;
 #else
   (void)style;
@@ -222,10 +225,16 @@ const Board::Glyph* Board::GetGlyph(Face* face, const std::string& style, int pi
     if (Coverage(face->font, EncodeUtf8(codepoint).c_str(), &coverage, &w, &h))
     {
       const auto styleIt = m_layout.styles.find(style);
+      const Style glyphStyle = styleIt != m_layout.styles.end() ? styleIt->second : Style{};
       std::vector<uint8_t> rgba;
-      Burn(coverage.data(), w, h, styleIt != m_layout.styles.end() ? styleIt->second : Style{}, pixelSize, &rgba,
-           &glyph.width, &glyph.height);
+      Burn(coverage.data(), w, h, glyphStyle, pixelSize, &rgba, &glyph.width, &glyph.height);
       glyph.texture = TextureFromRgba(m_renderer, rgba, glyph.width, glyph.height);
+      if (HasShadow(glyphStyle))
+      {
+        int sw = 0, sh = 0;
+        BurnShadow(coverage.data(), w, h, glyphStyle, pixelSize, &rgba, &sw, &sh);
+        glyph.shadow = TextureFromRgba(m_renderer, rgba, sw, sh);
+      }
     }
   }
 #else
@@ -256,16 +265,25 @@ void Board::DrawText(const std::string& text, const std::string& style, int pixe
   float pen = x;
   if (align == Align::Center) pen -= static_cast<float>(width) / 2.0f;
   if (align == Align::Right) pen -= static_cast<float>(width);
-  for (const uint32_t cp : DecodeUtf8(text))
+  // Shadows first, all of them, then the letters: a shadow falls on the wood,
+  // never on the letter next to it.
+  const float start = pen;
+  for (int pass = face->shadowOffset != 0 ? 0 : 1; pass < 2; ++pass)
   {
-    const Glyph* glyph = GetGlyph(face, style, pixelSize, cp);
-    if (glyph->texture)
+    pen = start;
+    const float off = pass == 0 ? static_cast<float>(face->shadowOffset) : 0.0f;
+    for (const uint32_t cp : DecodeUtf8(text))
     {
-      const SDL_FRect dst{std::round(pen) - face->pad, std::round(y) - face->pad, static_cast<float>(glyph->width),
-                          static_cast<float>(glyph->height)};
-      SDL_RenderTexture(m_renderer, glyph->texture, nullptr, &dst);
+      const Glyph* glyph = GetGlyph(face, style, pixelSize, cp);
+      SDL_Texture* texture = pass == 0 ? glyph->shadow : glyph->texture;
+      if (texture)
+      {
+        const SDL_FRect dst{std::round(pen) - face->pad + off, std::round(y) - face->pad + off,
+                            static_cast<float>(glyph->width), static_cast<float>(glyph->height)};
+        SDL_RenderTexture(m_renderer, texture, nullptr, &dst);
+      }
+      pen += static_cast<float>(glyph->advance);
     }
-    pen += static_cast<float>(glyph->advance);
   }
 }
 
@@ -288,18 +306,25 @@ void Board::DrawPosed(const std::string& text, const std::string& style, int pix
   float pen = cx - width / 2.0f;
   const float top = cy - boxH * scale / 2.0f;
   const uint8_t a = static_cast<uint8_t>(std::clamp(alpha, 0.0f, 1.0f) * 255.0f + 0.5f);
-  for (const uint32_t cp : DecodeUtf8(text))
+  const float start = pen;
+  for (int pass = face->shadowOffset != 0 ? 0 : 1; pass < 2; ++pass)
   {
-    const Glyph* glyph = GetGlyph(face, style, pixelSize, cp);
-    if (glyph->texture)
+    pen = start;
+    const float off = pass == 0 ? face->shadowOffset * scale : 0.0f;
+    for (const uint32_t cp : DecodeUtf8(text))
     {
-      SDL_SetTextureAlphaMod(glyph->texture, a);
-      const SDL_FRect dst{pen - face->pad * scale, top - face->pad * scale, glyph->width * scale,
-                          glyph->height * scale};
-      SDL_RenderTexture(m_renderer, glyph->texture, nullptr, &dst);
-      SDL_SetTextureAlphaMod(glyph->texture, 255);
+      const Glyph* glyph = GetGlyph(face, style, pixelSize, cp);
+      SDL_Texture* texture = pass == 0 ? glyph->shadow : glyph->texture;
+      if (texture)
+      {
+        SDL_SetTextureAlphaMod(texture, a);
+        const SDL_FRect dst{pen - face->pad * scale + off, top - face->pad * scale + off, glyph->width * scale,
+                            glyph->height * scale};
+        SDL_RenderTexture(m_renderer, texture, nullptr, &dst);
+        SDL_SetTextureAlphaMod(texture, 255);
+      }
+      pen += static_cast<float>(glyph->advance) * scale;
     }
-    pen += static_cast<float>(glyph->advance) * scale;
   }
 }
 
@@ -453,7 +478,10 @@ void Board::DrawBoard(int w, int h, const Snapshot& snapshot, bool fillWindow, u
     for (auto& [key, face] : m_faces)
     {
       for (auto& [cp, glyph] : face.glyphs)
+      {
         if (glyph.texture) SDL_DestroyTexture(glyph.texture);
+        if (glyph.shadow) SDL_DestroyTexture(glyph.shadow);
+      }
 #ifdef PPUC_HAS_SDL3_TTF
       if (face.font) TTF_CloseFont(face.font);
 #endif

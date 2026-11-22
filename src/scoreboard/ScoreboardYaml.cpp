@@ -166,6 +166,15 @@ Style ReadStyle(const YAML::Node& node, Style style)
   style.scorchStrength = ReadFloat(node, "scorch_strength", style.scorchStrength);
   style.scorchReach = ReadFloat(node, "scorch_reach", style.scorchReach);
   if (node["glow"]) style.glow = node["glow"].as<bool>();
+  if (const YAML::Node shadow = node["shadow"])
+  {
+    if (!shadow.IsMap()) Fail(shadow, "shadow must be a map: {opacity, offset, softness, color}");
+    style.shadow = ReadFloat(shadow, "opacity", 0.6f);
+    style.shadowOffset = ReadFloat(shadow, "offset", style.shadowOffset);
+    style.shadowSoftness = ReadFloat(shadow, "softness", style.shadowSoftness);
+    style.shadowColor = ReadColor(shadow, "color", style.shadowColor);
+    if (style.shadow < 0.0f || style.shadow > 1.0f) Fail(shadow["opacity"], "shadow opacity must be between 0 and 1");
+  }
   return style;
 }
 

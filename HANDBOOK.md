@@ -762,10 +762,15 @@ scoreboard:
   logo: {corner: top-right, size: 180, margin: 24}
   styles:                      # how text is burnt in; "burnt" and "ember" exist
     ember: {core: "ffcf48", scorch: "3a1606", glow: true}
+    score:                     # a soft shadow lifts the letters off the wood
+      core: "ffcf48"
+      scorch: "3a1606"
+      glow: true
+      shadow: {opacity: 0.75, offset: 0.045, softness: 0.035, color: "140802"}
   lists:
     ranks: [Rookie, Officer, Sergeant, Detective]
   fields:
-    - {type: current_score, x: 960, y: 846, size: 116, style: ember}
+    - {type: current_score, x: 960, y: 846, size: 116, style: score}
     - {type: other_scores, x: 330, y: 992, width: 1260, size: 44}
     - {type: text, when: game, text: "Player {player}", x: 342, y: 882, size: 40, align: left}
     - {type: text, when: game, text: "{player.rank:ranks}", x: 177, y: 714, size: 40}
@@ -790,6 +795,10 @@ scoreboard:
   `ppuc.scoreboardSet`. `{player.rank:ranks}` turns a number into a name from
   a list. A name that means nothing shows as nothing.
 - **when** is `always`, `game` or `attract`.
+- A style's **shadow** is drawn under its letters, offset down and right:
+  `opacity` 0 to 1, `offset` and `softness` as parts of the letter size,
+  `color`. It is made once with the letters, like the scorch, so it costs a
+  second small copy per letter. Callouts in that style get it too.
 - **callouts** are the moments the rules put over the scene with
   `ppuc.scoreboardCallout`: "10,000,000" for a shot, "SILVER BULLET" for an
   award. They are made of the same burnt glyphs and move by the GPU alone,

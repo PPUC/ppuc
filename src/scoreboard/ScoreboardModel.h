@@ -118,6 +118,13 @@ struct Style
   float scorchReach = 0.08f;
   // True: the letters glow like a brand fresh from the fire.
   bool glow = false;
+  // A soft shadow under the letters, so they stand off the wood: 0 for none,
+  // up to 1 for black. Offset down and right and softness are fractions of the
+  // font size, like the scorch.
+  float shadow = 0.0f;
+  float shadowOffset = 0.05f;
+  float shadowSoftness = 0.04f;
+  uint32_t shadowColor = 0x000000;
 };
 
 enum class Corner

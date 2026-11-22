@@ -23,8 +23,17 @@ namespace scoreboard
 // The output is `Pad(style, size)` pixels bigger on every side than the input,
 // so the scorch is not cut off at the glyph's box.
 int BurnPad(const Style& style, int fontSize);
-void Burn(const uint8_t* coverage, int width, int height, const Style& style, int fontSize,
-          std::vector<uint8_t>* rgba, int* outWidth, int* outHeight);
+void Burn(const uint8_t* coverage, int width, int height, const Style& style, int fontSize, std::vector<uint8_t>* rgba,
+          int* outWidth, int* outHeight);
+
+// The shadow of a glyph, for a style with `shadow` above 0: the letter's shape,
+// blurred and in shadowColor, the same size as Burn's output so it lines up
+// with it. Drawn first, ShadowOffset() pixels down and right of the letter, so
+// one letter's shadow never falls on the letter before it.
+bool HasShadow(const Style& style);
+int ShadowOffset(const Style& style, int fontSize);
+void BurnShadow(const uint8_t* coverage, int width, int height, const Style& style, int fontSize,
+                std::vector<uint8_t>* rgba, int* outWidth, int* outHeight);
 
 // Area-averaged downscale of coverage, for the logo: a plain resample would
 // drop the thin lines of its lettering.

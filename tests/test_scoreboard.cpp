@@ -283,6 +283,48 @@ TEST_CASE("scoreboard: a burnt letter")
   CHECK(middle[1] > 150);
 }
 
+TEST_CASE("scoreboard: a shadow under the letters")
+{
+  const int n = 20;
+  std::vector<uint8_t> coverage(n * n, 0);
+  for (int y = 4; y < 16; ++y)
+    for (int x = 4; x < 16; ++x) coverage[y * n + x] = 255;
+
+  Style plain;
+  CHECK_FALSE(HasShadow(plain));
+  CHECK(ShadowOffset(plain, 100) == 0);
+
+  Style shaded;
+  shaded.shadow = 0.5f;
+  shaded.shadowOffset = 0.05f;
+  shaded.shadowSoftness = 0.03f;
+  shaded.shadowColor = 0x102030;
+  REQUIRE(HasShadow(shaded));
+  CHECK(ShadowOffset(shaded, 100) == 5);
+  // A blur wider than the scorch grows the pad, so letter and shadow still
+  // line up.
+  Style soft = shaded;
+  soft.shadowSoftness = 0.2f;
+  CHECK(BurnPad(soft, 100) > BurnPad(plain, 100));
+  CHECK(BurnPad(shaded, 100) == BurnPad(plain, 100));
+
+  std::vector<uint8_t> letter, shadow;
+  int lw = 0, lh = 0, sw = 0, sh = 0;
+  Burn(coverage.data(), n, n, shaded, 100, &letter, &lw, &lh);
+  BurnShadow(coverage.data(), n, n, shaded, 100, &shadow, &sw, &sh);
+  CHECK(sw == lw);
+  CHECK(sh == lh);
+  const int pad = BurnPad(shaded, 100);
+  auto alpha = [&](int x, int y) { return shadow[(static_cast<size_t>(y + pad) * sw + (x + pad)) * 4 + 3]; };
+  // Under the letter: as dark as asked, never darker.
+  CHECK(alpha(10, 10) > 100);
+  CHECK(alpha(10, 10) <= 128);
+  // Soft at the edge, gone far away.
+  CHECK(alpha(10, 10 + 6 + pad / 2) < alpha(10, 10));
+  CHECK(shadow[3] == 0);
+  CHECK(shadow[(static_cast<size_t>(pad + 10) * sw + pad + 10) * 4 + 0] == 0x10);
+}
+
 TEST_CASE("scoreboard: blur keeps the total")
 {
   std::vector<float> values(9 * 9, 0.0f);

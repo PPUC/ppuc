@@ -11,7 +11,56 @@ static int ScorchRadius(const Style& style, int fontSize)
   return std::max(1, static_cast<int>(std::lround(style.scorchReach * static_cast<float>(fontSize))));
 }
 
-int BurnPad(const Style& style, int fontSize) { return ScorchRadius(style, fontSize) * 2 + 1; }
+static int ShadowRadius(const Style& style, int fontSize)
+{
+  return std::max(1, static_cast<int>(std::lround(style.shadowSoftness * static_cast<float>(fontSize))));
+}
+
+bool HasShadow(const Style& style) { return style.shadow > 0.0f; }
+
+int ShadowOffset(const Style& style, int fontSize)
+{
+  return HasShadow(style) ? static_cast<int>(std::lround(style.shadowOffset * static_cast<float>(fontSize))) : 0;
+}
+
+// Room for the scorch, and for a shadow's blur when there is one: a glyph and
+// its shadow share one size, so they line up by the same pad.
+int BurnPad(const Style& style, int fontSize)
+{
+  const int scorch = ScorchRadius(style, fontSize) * 2 + 1;
+  return HasShadow(style) ? std::max(scorch, ShadowRadius(style, fontSize) * 2 + 1) : scorch;
+}
+
+void BurnShadow(const uint8_t* coverage, int width, int height, const Style& style, int fontSize,
+                std::vector<uint8_t>* rgba, int* outWidth, int* outHeight)
+{
+  const int pad = BurnPad(style, fontSize);
+  const int w = width + pad * 2;
+  const int h = height + pad * 2;
+  *outWidth = w;
+  *outHeight = h;
+  rgba->assign(static_cast<size_t>(w) * h * 4, 0);
+  if (width <= 0 || height <= 0 || !HasShadow(style)) return;
+  std::vector<float> shape(static_cast<size_t>(w) * h, 0.0f);
+  for (int y = 0; y < height; ++y)
+    for (int x = 0; x < width; ++x)
+      shape[static_cast<size_t>(y + pad) * w + (x + pad)] = coverage[static_cast<size_t>(y) * width + x] / 255.0f;
+  BlurCoverage(&shape, w, h, ShadowRadius(style, fontSize));
+  const float opacity = std::clamp(style.shadow, 0.0f, 1.0f);
+  const uint8_t r = static_cast<uint8_t>((style.shadowColor >> 16) & 0xffu);
+  const uint8_t g = static_cast<uint8_t>((style.shadowColor >> 8) & 0xffu);
+  const uint8_t b = static_cast<uint8_t>(style.shadowColor & 0xffu);
+  for (size_t i = 0; i < shape.size(); ++i)
+  {
+    // A little denser than the blur alone: thin strokes would otherwise cast
+    // next to no shadow.
+    const float a = std::min(1.0f, shape[i] * 1.4f) * opacity;
+    (*rgba)[i * 4 + 0] = r;
+    (*rgba)[i * 4 + 1] = g;
+    (*rgba)[i * 4 + 2] = b;
+    (*rgba)[i * 4 + 3] = static_cast<uint8_t>(a * 255.0f + 0.5f);
+  }
+}
 
 static void BoxBlurLine(const float* in, float* out, int n, int stride, int radius)
 {
@@ -80,8 +129,8 @@ static float Noise(int x, int y)
 
 static float Channel(uint32_t rgb, int shift) { return static_cast<float>((rgb >> shift) & 0xffu); }
 
-void Burn(const uint8_t* coverage, int width, int height, const Style& style, int fontSize,
-          std::vector<uint8_t>* rgba, int* outWidth, int* outHeight)
+void Burn(const uint8_t* coverage, int width, int height, const Style& style, int fontSize, std::vector<uint8_t>* rgba,
+          int* outWidth, int* outHeight)
 {
   const int pad = BurnPad(style, fontSize);
   const int w = width + pad * 2;
