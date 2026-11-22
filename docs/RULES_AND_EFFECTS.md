@@ -231,7 +231,8 @@ ppuc.scoreboardCallout{text = "SILVER BULLET", effect = "shake", ms = 2000, prio
 ppuc.scoreboardCallout{text = "x2", spot = "low", effect = "slide"}
 ```
 
-`effect` is `pop` (the default), `fade`, `slide` or `shake`; `ms` how long it
+`effect` is `pop` (the default), `fade`, `slide`, `shake` or `brand` (burnt in
+letter by letter, each letter flaring like a hot iron: "Player 2"); `ms` how long it
 shows (1500); `spot` one of the layout's callout spots (`center`, the
 window's middle, unless the layout moves it); `style` and `size` override the
 spot's. Every spot shows one callout at a time, so a word in the middle and a

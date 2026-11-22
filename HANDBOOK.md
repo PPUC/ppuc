@@ -847,6 +847,8 @@ ppuc-scoreboard-preview /path/to/game out.png --players 3 --current 2 \
 
 `--callout "SILVER BULLET" --callout-at 120 --effect shake` shows a callout
 as it is 120 ms after it started, to check how one moves frame by frame.
+The effects are `pop`, `fade`, `slide`, `shake` and `brand`, which burns
+the letters in one after another, each flaring as it lands.
 
 `--replay timeline.txt --frames folder` draws a whole recorded game, one PNG
 per frame, callouts moving and all; ffmpeg makes a video of it. A timeline

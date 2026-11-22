@@ -1652,7 +1652,7 @@ int LuaRulesEngine::LuaScoreboardCallout(lua_State* L)
     lua_getfield(L, 1, "effect");
     if (lua_isstring(L, -1) && !scoreboard::Callout::ParseEffect(lua_tostring(L, -1), &callout.effect))
     {
-      return luaL_error(L, "scoreboardCallout: effect must be pop, fade, slide or shake");
+      return luaL_error(L, "scoreboardCallout: effect must be pop, fade, slide, shake or brand");
     }
     lua_pop(L, 1);
   }

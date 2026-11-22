@@ -150,6 +150,7 @@ enum class Effect
   Fade,   // fades in and out
   Slide,  // rises into place, then fades
   Shake,  // pops, then shakes: the big ones
+  Brand,  // burnt in letter by letter, each flaring like a hot iron, then fades
 };
 
 // Where callouts go, by name. The layout's "center" is the window's middle
@@ -190,6 +191,16 @@ struct CalloutPose
   float dy = 0.0f;
 };
 CalloutPose PoseAt(const Callout& callout, uint64_t elapsedMs);
+// One letter of a callout, for effects that move letters one by one (Brand):
+// `index` of `count` letters. Scale is around the letter's own middle; flare
+// 0..1 is extra heat drawn over it. Every other effect: scale 1, alpha 1.
+struct LetterPose
+{
+  float scale = 1.0f;
+  float alpha = 1.0f;
+  float flare = 0.0f;
+};
+LetterPose LetterAt(const Callout& callout, uint64_t elapsedMs, int index, int count);
 // Whether `incoming` takes the place of `showing`, which started `elapsedMs`
 // ago: always once that one is over, otherwise unless it has the higher
 // priority.

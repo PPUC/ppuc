@@ -82,9 +82,10 @@ class Board
   // middle of its line, so a score never runs into the labels beside it.
   void DrawText(const std::string& text, const std::string& style, int pixelSize, float x, float y, Align align,
                 float room = 0.0f);
-  // Centred on cx, cy, scaled about that point, with an opacity.
+  // Centred on cx, cy, scaled about that point, with an opacity. With a
+  // callout, its letters are posed one by one as well (LetterAt).
   void DrawPosed(const std::string& text, const std::string& style, int pixelSize, float cx, float cy, float scale,
-                 float alpha);
+                 float alpha, const Callout* callout = nullptr, uint64_t elapsedMs = 0);
   struct ActiveCallout
   {
     Callout callout;

@@ -256,6 +256,8 @@ static const char* EffectName(Effect effect)
       return "slide";
     case Effect::Shake:
       return "shake";
+    case Effect::Brand:
+      return "brand";
   }
   return "pop";
 }
@@ -361,6 +363,8 @@ bool Callout::ParseEffect(const std::string& text, Effect* out)
     *out = Effect::Slide;
   else if (text == "shake")
     *out = Effect::Shake;
+  else if (text == "brand")
+    *out = Effect::Brand;
   else
     return false;
   return true;
@@ -388,6 +392,10 @@ CalloutPose PoseAt(const Callout& callout, uint64_t elapsedMs)
     case Effect::Fade:
       pose.alpha = std::min(rise, fall);
       break;
+    case Effect::Brand:
+      // The letters come in by themselves (LetterAt); the whole only fades.
+      pose.alpha = fall;
+      break;
     case Effect::Slide:
       pose.alpha = std::min(rise, fall);
       pose.dy = (1.0f - EaseOut(rise)) * 0.8f;
@@ -412,6 +420,28 @@ CalloutPose PoseAt(const Callout& callout, uint64_t elapsedMs)
       }
       break;
   }
+  return pose;
+}
+
+// Brand: the iron moves along the word in the first 55 % of the callout, at
+// most 110 ms a letter; each letter lands from 1.35 times its size in 150 ms
+// and glows for 350 ms after.
+LetterPose LetterAt(const Callout& callout, uint64_t elapsedMs, int index, int count)
+{
+  LetterPose pose;
+  if (callout.effect != Effect::Brand || count <= 0) return pose;
+  const float total = static_cast<float>(std::max<uint32_t>(callout.durationMs, 1));
+  const float step = std::min(110.0f, total * 0.55f / static_cast<float>(count));
+  const float since = static_cast<float>(elapsedMs) - step * static_cast<float>(index);
+  if (since < 0.0f)
+  {
+    pose.alpha = 0.0f;
+    return pose;
+  }
+  const float land = Clamp01(since / 150.0f);
+  pose.scale = 1.35f - 0.35f * EaseOut(land);
+  pose.alpha = Clamp01(since / 60.0f);
+  pose.flare = since < 350.0f ? 1.0f - since / 350.0f : 0.0f;
   return pose;
 }
 

@@ -500,6 +500,44 @@ TEST_CASE("scoreboard: a callout pops in, settles, fades out")
   CHECK(PoseAt(blink, 100).alpha > 0.0f);
 }
 
+TEST_CASE("scoreboard: a brand burns in letter by letter")
+{
+  Callout callout;
+  callout.text = "Player 1";
+  callout.effect = Effect::Brand;
+  callout.durationMs = 2200;
+  Effect parsed = Effect::Pop;
+  REQUIRE(Callout::ParseEffect("brand", &parsed));
+  CHECK(parsed == Effect::Brand);
+  CHECK(FormatTimelineCallout(callout).find("effect=brand") != std::string::npos);
+
+  const int count = 7;  // P l a y e r 1: the space has no letter
+  // At the start only the first letter is coming, large and hot.
+  LetterPose first = LetterAt(callout, 10, 0, count);
+  CHECK(first.alpha > 0.0f);
+  CHECK(first.scale > 1.2f);
+  CHECK(first.flare > 0.9f);
+  CHECK(LetterAt(callout, 10, 1, count).alpha == 0.0f);
+  // Letter by letter, left to right, at most 110 ms apart.
+  CHECK(LetterAt(callout, 115, 1, count).alpha > 0.0f);
+  CHECK(LetterAt(callout, 115, 3, count).alpha == 0.0f);
+  // Long after: all landed, cooled, at their size.
+  const LetterPose last = LetterAt(callout, 1500, count - 1, count);
+  CHECK(last.alpha == 1.0f);
+  CHECK(last.scale == doctest::Approx(1.0f));
+  CHECK(last.flare == 0.0f);
+  // The whole fades out at the end, and is gone after.
+  CHECK(PoseAt(callout, 1000).alpha == doctest::Approx(1.0f));
+  CHECK(PoseAt(callout, 2100).alpha < 0.5f);
+  CHECK_FALSE(PoseAt(callout, 2200).visible);
+  // Other effects leave letters alone.
+  callout.effect = Effect::Pop;
+  const LetterPose plain = LetterAt(callout, 10, 5, count);
+  CHECK(plain.alpha == 1.0f);
+  CHECK(plain.scale == 1.0f);
+  CHECK(plain.flare == 0.0f);
+}
+
 TEST_CASE("scoreboard: a jackpot is not cut short by the next switch")
 {
   Callout jackpot;
@@ -578,5 +616,5 @@ TEST_CASE("scoreboard: rules call out with ppuc.scoreboardCallout")
   feed.TakeCallouts(&taken);
   CHECK(taken.empty());
   CHECK(rules.engine().HasFatalError());
-  CHECK(rules.engine().GetFatalError().find("pop, fade, slide or shake") != std::string::npos);
+  CHECK(rules.engine().GetFatalError().find("pop, fade, slide, shake or brand") != std::string::npos);
 }

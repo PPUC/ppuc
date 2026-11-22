@@ -303,7 +303,7 @@ void Board::DrawText(const std::string& text, const std::string& style, int pixe
 }
 
 void Board::DrawPosed(const std::string& text, const std::string& style, int pixelSize, float cx, float cy, float scale,
-                      float alpha)
+                      float alpha, const Callout* callout, uint64_t elapsedMs)
 {
   Face* face = GetFace(style, pixelSize);
   if (face == nullptr || text.empty() || alpha <= 0.0f) return;
@@ -320,23 +320,50 @@ void Board::DrawPosed(const std::string& text, const std::string& style, int pix
   const float boxH = static_cast<float>(any->height - 2 * face->pad);
   float pen = cx - width / 2.0f;
   const float top = cy - boxH * scale / 2.0f;
-  const uint8_t a = static_cast<uint8_t>(std::clamp(alpha, 0.0f, 1.0f) * 255.0f + 0.5f);
+  const float a = std::clamp(alpha, 0.0f, 1.0f);
+  int letters = 0;
+  for (const uint32_t cp : DecodeUtf8(text))
+    if (GetGlyph(face, style, pixelSize, cp)->texture) ++letters;
   const float start = pen;
   for (int pass = face->shadowOffset != 0 ? 0 : 1; pass < 2; ++pass)
   {
     pen = start;
+    int index = 0;
     const float off = pass == 0 ? face->shadowOffset * scale : 0.0f;
     for (const uint32_t cp : DecodeUtf8(text))
     {
       const Glyph* glyph = GetGlyph(face, style, pixelSize, cp);
       SDL_Texture* texture = pass == 0 ? glyph->shadow : glyph->texture;
-      if (texture)
+      if (glyph->texture)
       {
-        SDL_SetTextureAlphaMod(texture, a);
-        const SDL_FRect dst{pen - face->pad * scale + off, top - face->pad * scale + off, glyph->width * scale,
-                            glyph->height * scale};
-        SDL_RenderTexture(m_renderer, texture, nullptr, &dst);
-        SDL_SetTextureAlphaMod(texture, 255);
+        const LetterPose letter = callout != nullptr ? LetterAt(*callout, elapsedMs, index, letters) : LetterPose{};
+        ++index;
+        if (texture && letter.alpha > 0.0f)
+        {
+          SDL_FRect dst{pen - face->pad * scale + off, top - face->pad * scale + off, glyph->width * scale,
+                        glyph->height * scale};
+          if (letter.scale != 1.0f)
+          {
+            // About the letter's own middle, so the word does not move.
+            const float mx = dst.x + dst.w / 2.0f, my = dst.y + dst.h / 2.0f;
+            dst.w *= letter.scale;
+            dst.h *= letter.scale;
+            dst.x = mx - dst.w / 2.0f;
+            dst.y = my - dst.h / 2.0f;
+          }
+          SDL_SetTextureAlphaMod(texture, static_cast<uint8_t>(a * letter.alpha * 255.0f + 0.5f));
+          SDL_RenderTexture(m_renderer, texture, nullptr, &dst);
+          if (pass == 1 && letter.flare > 0.0f)
+          {
+            // The iron's heat: the letter once more, added, white-hot and
+            // cooling. Same texture, so nothing is made for it.
+            SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_ADD);
+            SDL_SetTextureAlphaMod(texture, static_cast<uint8_t>(a * letter.flare * 0.9f * 255.0f + 0.5f));
+            SDL_RenderTexture(m_renderer, texture, nullptr, &dst);
+            SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
+          }
+          SDL_SetTextureAlphaMod(texture, 255);
+        }
       }
       pen += static_cast<float>(glyph->advance) * scale;
     }
@@ -395,7 +422,7 @@ void Board::DrawCallout(const ActiveCallout& active, float sx, float sy, uint64_
     if (width > room) fit = room / width;
     SDL_SetRenderClipRect(m_renderer, &window);
   }
-  DrawPosed(callout.text, style, px, cx, cy, pose.scale * fit, pose.alpha);
+  DrawPosed(callout.text, style, px, cx, cy, pose.scale * fit, pose.alpha, &callout, nowMs - active.startMs);
   if (inWindow) SDL_SetRenderClipRect(m_renderer, nullptr);
 }
 

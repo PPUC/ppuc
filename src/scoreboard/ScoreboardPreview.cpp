@@ -18,7 +18,7 @@
 //   --callout text      a callout, drawn as it is --callout-at ms after it
 //                       started (default 400: just landed)
 //   --callout-at ms
-//   --effect name       pop, fade, slide, shake
+//   --effect name       pop, fade, slide, shake, brand
 //   --spot name         a callout spot of the layout (default center)
 //   --replay timeline   plays a recorded game instead: one PNG per frame
 //   --frames folder     where the replay's frames go (frame00001.png, ...); "-"
@@ -162,7 +162,7 @@ static int Usage()
                "usage: ppuc-scoreboard-preview <game folder> <out.png> [--size WxH] [--players N] [--current P]\n"
                "       [--ball B] [--credits C] [--free-play] [--score P=N] [--var name=N] [--ball-var name=N]\n"
                "       [--set name=text] [--attract] [--scene picture]\n"
-               "       [--callout text] [--callout-at ms] [--effect pop|fade|slide|shake] [--spot name]\n"
+               "       [--callout text] [--callout-at ms] [--effect pop|fade|slide|shake|brand] [--spot name]\n"
                "       [--replay timeline --frames folder [--fps n] [--transparent]]\n");
   return 2;
 }
