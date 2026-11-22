@@ -145,6 +145,10 @@ Dedicated command-line options override values from the game folder and INI.
 * -p VALUE
     * Serum ignore number of unknown frames
     * optional
+* --no-display
+    * do not open or search for any DMD, and show no scoreboard window
+    * for headless runs: a desk, CI, a `--bench` script
+    * optional
 * --bench
     * no boards: a ball model answers the coils, so a game runs on a desk (implies `--no-serial`)
     * a trough kick rolls a ball into the shooter lane, a launch coil sends it onto the playfield, a hole's coil kicks its ball out

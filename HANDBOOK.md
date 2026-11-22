@@ -810,7 +810,8 @@ scoreboard:
 - `x` of a text is where `align` puts it; `y` is the top of the letters.
 
 A mistake in the file is reported when the game starts, with the line, and
-the game plays without the scoreboard.
+the game plays without the scoreboard. `--no-display` (a headless run) shows no
+scoreboard either.
 
 The board keeps the shape of its `size`. On a screen of another shape, a
 21:9 monitor for example, it is drawn as large as fits, in the middle, with

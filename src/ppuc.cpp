@@ -7837,7 +7837,7 @@ static struct cag_option options[] = {
     {.identifier = '[',
      .access_name = "no-display",
      .value_name = NULL,
-     .description = "Do not open or search for any DMD (optional, for headless runs)"},
+     .description = "Do not open or search for any DMD, and show no scoreboard (optional, for headless runs)"},
     {.identifier = '\x05',
      .access_name = "bench",
      .value_name = NULL,
@@ -10651,6 +10651,13 @@ int main(int argc, char** argv)
   {
     opt_translite = NULL;
     opt_translite_attract = NULL;
+    g_hasScoreboard = false;
+  }
+  // A headless run (a desk, CI, a bench script) must not put a fullscreen
+  // window over whatever screen the computer has.
+  if (opt_no_display && g_hasScoreboard)
+  {
+    printf("Scoreboard: not shown, --no-display\n");
     g_hasScoreboard = false;
   }
   // A scoreboard needs a window of its own only where no backglass is drawn.
