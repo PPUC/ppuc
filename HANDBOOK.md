@@ -847,7 +847,10 @@ as it is 120 ms after it started, to check how one moves frame by frame.
 per frame, callouts moving and all; ffmpeg makes a video of it. A timeline
 has one change per line (`17840 value.mode Car Chase`, `28600 callout
 text=PROMOTED|effect=pop`); wpc-re's scenario runner writes one from the Lua
-game in its simulator.
+game in its simulator, and `ppuc-pinmame --scoreboard-record game.txt`
+writes one from a real game: on the machine, or on a desk with `--bench`
+(see [section 7](#7-rules)). With `--no-display` the board is
+then recorded without being shown.
 
 It also prints the PUP `CustomPos` that puts a video exactly into the window
 on a screen of `--size`.

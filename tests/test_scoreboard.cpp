@@ -232,6 +232,62 @@ TEST_CASE("scoreboard: PUP CustomPos for the window")
   CHECK(PupCustomPos(layout, 2, 2560, 1080) == "2,25.000,5.000,50.000,66.667");
 }
 
+TEST_CASE("scoreboard: a recorded game reads back")
+{
+  Callout callout;
+  callout.text = "SILVER | BULLET";
+  callout.effect = Effect::Slide;
+  callout.spot = "low";
+  callout.priority = 2;
+  callout.durationMs = 2000;
+  const std::string line = FormatTimelineCallout(callout);
+  CHECK(line == "text=SILVER   BULLET|effect=slide|spot=low|priority=2|ms=2000");
+  Callout back;
+  REQUIRE(ParseTimelineCallout(line, &back));
+  CHECK(back.text == "SILVER   BULLET");
+  CHECK(back.effect == Effect::Slide);
+  CHECK(back.spot == "low");
+  CHECK(back.priority == 2);
+  CHECK(back.durationMs == 2000);
+  CHECK_FALSE(ParseTimelineCallout("text=X|colour=red", &back));
+
+  Layout layout;
+  layout.playerVarNames = {"rank"};
+  layout.ballVarNames = {"bonus_x"};
+  Facts before;
+  Facts after;
+  after.inGame = true;
+  after.players = 3;
+  after.current = 2;
+  after.ball = 1;
+  after.scores = {100, 2500, 0, 0};
+  after.playerVars = {4};
+  after.ballVars = {2};
+  const auto changes = DiffFacts(before, after, layout);
+  std::map<std::string, std::string> got(changes.begin(), changes.end());
+  CHECK(got.size() == 8);
+  CHECK(got["ingame"] == "1");
+  CHECK(got["players"] == "3");
+  CHECK(got["current"] == "2");
+  CHECK(got["score2"] == "2500");
+  CHECK(got["var.rank"] == "4");
+  CHECK(got["ballvar.bonus_x"] == "2");
+  CHECK(DiffFacts(after, after, layout).empty());
+
+  // The feed tells an observer what the rules set and call out.
+  Feed feed;
+  std::vector<std::string> seen;
+  feed.SetObserver([&seen](const std::string& what, const std::string& value) { seen.push_back(what + " " + value); });
+  feed.SetValue("mode", "Car Chase");
+  feed.SetValue("mode", "Car Chase");  // no change, nothing to record
+  feed.SetValue("mode", "");
+  feed.PushCallout(callout);
+  REQUIRE(seen.size() == 3);
+  CHECK(seen[0] == "value.mode Car Chase");
+  CHECK(seen[1] == "value.mode ");
+  CHECK(seen[2].rfind("callout text=SILVER", 0) == 0);
+}
+
 TEST_CASE("scoreboard: UTF-8")
 {
   CHECK(DecodeUtf8("A1") == std::vector<uint32_t>{'A', '1'});

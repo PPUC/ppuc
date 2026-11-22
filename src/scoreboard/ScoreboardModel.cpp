@@ -232,6 +232,7 @@ void Feed::SetValue(const std::string& name, const std::string& value)
     m_snapshot.values[name] = value;
   }
   ++m_snapshot.version;
+  if (m_observer) m_observer("value." + name, value);
 }
 
 void Feed::PushCallout(const Callout& callout)
@@ -240,6 +241,100 @@ void Feed::PushCallout(const Callout& callout)
   static constexpr size_t kMaxQueued = 8;
   if (m_callouts.size() >= kMaxQueued) m_callouts.erase(m_callouts.begin());
   m_callouts.push_back(callout);
+  if (m_observer) m_observer("callout", FormatTimelineCallout(callout));
+}
+
+static const char* EffectName(Effect effect)
+{
+  switch (effect)
+  {
+    case Effect::Pop:
+      return "pop";
+    case Effect::Fade:
+      return "fade";
+    case Effect::Slide:
+      return "slide";
+    case Effect::Shake:
+      return "shake";
+  }
+  return "pop";
+}
+
+std::string FormatTimelineCallout(const Callout& callout)
+{
+  // '|' separates the fields; a text cannot carry one.
+  std::string text = callout.text;
+  for (char& c : text)
+    if (c == '|' || c == '\n') c = ' ';
+  std::string out = "text=" + text + "|effect=" + EffectName(callout.effect) + "|spot=" + callout.spot +
+                    "|priority=" + std::to_string(callout.priority) + "|ms=" + std::to_string(callout.durationMs);
+  if (!callout.style.empty()) out += "|style=" + callout.style;
+  if (callout.size > 0) out += "|size=" + std::to_string(callout.size);
+  return out;
+}
+
+bool ParseTimelineCallout(const std::string& spec, Callout* out)
+{
+  Callout callout;
+  size_t start = 0;
+  while (start <= spec.size())
+  {
+    const size_t bar = spec.find('|', start);
+    const std::string part = spec.substr(start, bar == std::string::npos ? std::string::npos : bar - start);
+    start = bar == std::string::npos ? spec.size() + 1 : bar + 1;
+    const size_t eq = part.find('=');
+    if (eq == std::string::npos) return false;
+    const std::string key = part.substr(0, eq);
+    const std::string value = part.substr(eq + 1);
+    if (key == "text")
+      callout.text = value;
+    else if (key == "spot")
+      callout.spot = value;
+    else if (key == "style")
+      callout.style = value;
+    else if (key == "size")
+      callout.size = std::atoi(value.c_str());
+    else if (key == "ms")
+      callout.durationMs = static_cast<uint32_t>(std::atoi(value.c_str()));
+    else if (key == "priority")
+      callout.priority = std::atoi(value.c_str());
+    else if (key == "effect")
+    {
+      if (!Callout::ParseEffect(value, &callout.effect)) return false;
+    }
+    else
+      return false;
+  }
+  *out = callout;
+  return !callout.text.empty();
+}
+
+std::vector<std::pair<std::string, std::string>> DiffFacts(const Facts& before, const Facts& after,
+                                                           const Layout& layout)
+{
+  std::vector<std::pair<std::string, std::string>> out;
+  auto put = [&out](const std::string& what, int64_t value) { out.emplace_back(what, std::to_string(value)); };
+  if (after.inGame != before.inGame) put("ingame", after.inGame ? 1 : 0);
+  if (after.players != before.players) put("players", after.players);
+  if (after.current != before.current) put("current", after.current);
+  if (after.ball != before.ball) put("ball", after.ball);
+  if (after.credits != before.credits) put("credits", after.credits);
+  for (size_t i = 0; i < after.scores.size(); ++i)
+  {
+    if (after.scores[i] != before.scores[i])
+      out.emplace_back("score" + std::to_string(i + 1), std::to_string(after.scores[i]));
+  }
+  for (size_t i = 0; i < after.playerVars.size() && i < layout.playerVarNames.size(); ++i)
+  {
+    if (i >= before.playerVars.size() || after.playerVars[i] != before.playerVars[i])
+      put("var." + layout.playerVarNames[i], after.playerVars[i]);
+  }
+  for (size_t i = 0; i < after.ballVars.size() && i < layout.ballVarNames.size(); ++i)
+  {
+    if (i >= before.ballVars.size() || after.ballVars[i] != before.ballVars[i])
+      put("ballvar." + layout.ballVarNames[i], after.ballVars[i]);
+  }
+  return out;
 }
 
 void Feed::TakeCallouts(std::vector<Callout>* out)

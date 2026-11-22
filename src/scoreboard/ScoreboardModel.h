@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <string>
@@ -284,7 +285,16 @@ class Feed
   bool ReadIfNewer(uint64_t version, Snapshot* out) const;
   uint64_t Version() const;
 
+  // Told about every value the rules change and every callout, as timeline
+  // changes ("value.mode", "Car Chase"; "callout", "text=..."), on the thread
+  // that made them. Set before the rules run, for --scoreboard-record.
+  void SetObserver(std::function<void(const std::string& what, const std::string& value)> observer)
+  {
+    m_observer = std::move(observer);
+  }
+
  private:
+  std::function<void(const std::string&, const std::string&)> m_observer;
   std::vector<std::string> m_playerVarNames;
   std::vector<std::string> m_ballVarNames;
   mutable std::mutex m_mutex;
@@ -293,6 +303,17 @@ class Feed
   // not grow a queue nobody shows.
   std::vector<Callout> m_callouts;
 };
+
+// A recorded game, as ppuc-pinmame --scoreboard-record writes it and
+// ppuc-scoreboard-preview --replay draws it: one change per line,
+// "<ms> <what> <value>". A callout's value is its fields:
+// "text=SILVER BULLET|effect=slide|spot=low|priority=2|ms=1500".
+std::string FormatTimelineCallout(const Callout& callout);
+bool ParseTimelineCallout(const std::string& spec, Callout* out);
+// What changed from `before` to `after`, as (what, value) pairs: players,
+// current, ball, credits, ingame, score1..4, var.<name>, ballvar.<name>.
+std::vector<std::pair<std::string, std::string>> DiffFacts(const Facts& before, const Facts& after,
+                                                           const Layout& layout);
 
 // "12450000" -> "12,450,000".
 std::string FormatScore(uint64_t score);

@@ -99,41 +99,6 @@ bool ReadTimeline(const std::string& path, std::vector<TimelineEvent>* out, std:
   return true;
 }
 
-// "text=SILVER BULLET|effect=slide|spot=low|priority=2|ms=1500"
-bool ParseCallout(const std::string& spec, Callout* out)
-{
-  Callout callout;
-  std::stringstream parts(spec);
-  std::string part;
-  while (std::getline(parts, part, '|'))
-  {
-    const size_t eq = part.find('=');
-    if (eq == std::string::npos) return false;
-    const std::string key = part.substr(0, eq);
-    const std::string value = part.substr(eq + 1);
-    if (key == "text")
-      callout.text = value;
-    else if (key == "spot")
-      callout.spot = value;
-    else if (key == "style")
-      callout.style = value;
-    else if (key == "size")
-      callout.size = std::atoi(value.c_str());
-    else if (key == "ms")
-      callout.durationMs = static_cast<uint32_t>(std::atoi(value.c_str()));
-    else if (key == "priority")
-      callout.priority = std::atoi(value.c_str());
-    else if (key == "effect")
-    {
-      if (!Callout::ParseEffect(value, &callout.effect)) return false;
-    }
-    else
-      return false;
-  }
-  *out = callout;
-  return !callout.text.empty();
-}
-
 void SetVar(const std::vector<std::string>& names, std::vector<int64_t>* values, const std::string& name, int64_t value)
 {
   for (size_t i = 0; i < names.size(); ++i)
@@ -173,7 +138,7 @@ bool Apply(const TimelineEvent& event, const Layout& layout, Snapshot* snapshot,
   else if (w == "callout")
   {
     Callout callout;
-    if (!ParseCallout(event.value, &callout)) return false;
+    if (!ParseTimelineCallout(event.value, &callout)) return false;
     board->StartCallout(callout, event.ms);
     return true;
   }

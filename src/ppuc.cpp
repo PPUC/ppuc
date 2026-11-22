@@ -465,6 +465,7 @@ const char* opt_altsound_hardware = NULL;
 int opt_serum_resolution = 0;
 bool opt_no_serial = false;
 bool opt_bench = false;
+std::string opt_scoreboard_record;
 std::string opt_bench_play;
 bool opt_no_sound = false;
 bool opt_no_time_fence = false;
@@ -516,6 +517,30 @@ static std::unique_ptr<AttractSlides::Show> g_attractSlides;
 // feed are plain data; the drawing is further down, with the other screens.
 // The machine thread publishes into the feed, the main thread draws from it.
 static bool g_hasScoreboard = false;
+// --scoreboard-record: what the scoreboard was fed, for
+// ppuc-scoreboard-preview --replay. Written by the machine thread.
+static FILE* g_scoreboardRecord = nullptr;
+static std::mutex g_scoreboardRecordMutex;
+static uint64_t g_scoreboardRecordStartMs = 0;
+static scoreboard::Facts g_scoreboardRecordedFacts;
+
+static void RecordScoreboard(const std::string& what, const std::string& value)
+{
+  std::lock_guard<std::mutex> lock(g_scoreboardRecordMutex);
+  if (g_scoreboardRecord == nullptr)
+  {
+    return;
+  }
+  const uint64_t nowMs = SDL_GetTicks();
+  if (g_scoreboardRecordStartMs == 0)
+  {
+    g_scoreboardRecordStartMs = nowMs;
+  }
+  fprintf(g_scoreboardRecord, "%llu %s %s\n", static_cast<unsigned long long>(nowMs - g_scoreboardRecordStartMs),
+          what.c_str(), value.c_str());
+  // A few lines a second: flushed, so a run that is killed keeps its game.
+  fflush(g_scoreboardRecord);
+}
 static scoreboard::Layout g_scoreboardLayout;
 static std::string g_scoreboardFolder;
 static scoreboard::Feed g_scoreboardFeed;
@@ -7846,6 +7871,10 @@ static struct cag_option options[] = {
      .access_name = "bench-play",
      .value_name = "VALUE",
      .description = "With --bench: a script of what the player does (start, tap, hole, drain), see docs/EM_GAMES.md (optional)"},
+    {.identifier = '\x07',
+     .access_name = "scoreboard-record",
+     .value_name = "VALUE",
+     .description = "Write what the scoreboard shows to a timeline file, for ppuc-scoreboard-preview --replay (optional)"},
     {.identifier = ']',
      .access_name = "exit-after-ms",
      .value_name = "VALUE",
@@ -9016,6 +9045,14 @@ static void PublishScoreboardFacts()
     facts.ballVars[i] = game.GetBallVar(ballVars[i]);
   }
   g_scoreboardFeed.Publish(facts);
+  if (g_scoreboardRecord != nullptr)
+  {
+    for (const auto& [what, value] : scoreboard::DiffFacts(g_scoreboardRecordedFacts, facts, g_scoreboardLayout))
+    {
+      RecordScoreboard(what, value);
+    }
+    g_scoreboardRecordedFacts = facts;
+  }
 }
 
 // --bench, on the switch thread: the coils driven since the last pass reach the
@@ -9717,6 +9754,9 @@ int main(int argc, char** argv)
         break;
       case '\x05':
         opt_bench = true;
+        break;
+      case '\x07':
+        opt_scoreboard_record = cag_option_get_value(&cag_context);
         break;
       case '\x06':
         opt_bench = true;
@@ -10655,14 +10695,32 @@ int main(int argc, char** argv)
   }
   // A headless run (a desk, CI, a bench script) must not put a fullscreen
   // window over whatever screen the computer has.
-  if (opt_no_display && g_hasScoreboard)
+  // Recording, it is still fed, just never drawn.
+  if (opt_no_display && g_hasScoreboard && opt_scoreboard_record.empty())
   {
     printf("Scoreboard: not shown, --no-display\n");
     g_hasScoreboard = false;
   }
+  if (!opt_scoreboard_record.empty())
+  {
+    if (!g_hasScoreboard)
+    {
+      printf("--scoreboard-record: the game has no scoreboard to record\n");
+      return 1;
+    }
+    g_scoreboardRecord = fopen(opt_scoreboard_record.c_str(), "w");
+    if (g_scoreboardRecord == nullptr)
+    {
+      printf("--scoreboard-record: cannot write %s\n", opt_scoreboard_record.c_str());
+      return 1;
+    }
+    g_scoreboardFeed.SetObserver(RecordScoreboard);
+    printf("Scoreboard: recording to %s%s\n", opt_scoreboard_record.c_str(),
+           opt_no_display ? " (not shown, --no-display)" : "");
+  }
   // A scoreboard needs a window of its own only where no backglass is drawn.
-  const bool scoreboardWindow =
-      g_hasScoreboard && (pMediaPluginHost == nullptr || !pMediaPluginHost->HasBackglass());
+  const bool scoreboardWindow = g_hasScoreboard && !opt_no_display &&
+                                (pMediaPluginHost == nullptr || !pMediaPluginHost->HasBackglass());
 
 #ifndef PPUC_USE_KMSDMD
   if (opt_translite || opt_virtual_dmd || scoreboardWindow)
