@@ -27,6 +27,9 @@
 # --audio         keep the sound (AAC). Off by default: the game has its own.
 # --crf N         quality, lower is better and bigger (default 21)
 # --prefix TEXT   file name prefix for random clips (default "scene")
+# --fit           show the whole picture, with bars above and below (or at
+#                 the sides) inside the window, instead of filling the window
+#                 and cutting the picture's edges: for an intro with credits
 # --no-crop       keep black bars that are part of the picture. By default
 #                 they are found (a wide film inside a 16:9 file) and cut off
 #                 first, so the scene fills the window.
@@ -37,7 +40,7 @@
 set -u
 
 usage() {
-   sed -n '3,36p' "$0" | sed 's/^# \{0,1\}//'
+   sed -n '3,39p' "$0" | sed 's/^# \{0,1\}//'
    exit 2
 }
 
@@ -63,6 +66,7 @@ AUDIO=0
 CRF=21
 PREFIX="scene"
 CROP=1
+FIT=0
 
 while [ $# -gt 0 ]; do
    case "$1" in
@@ -78,6 +82,7 @@ while [ $# -gt 0 ]; do
       --crf) CRF="${2:-}"; shift 2 ;;
       --prefix) PREFIX="${2:-}"; shift 2 ;;
       --no-crop) CROP=0; shift ;;
+      --fit) FIT=1; shift ;;
       -h|--help) usage ;;
       *) die "unknown option $1" ;;
    esac
@@ -128,11 +133,18 @@ if [ "${CROP}" -eq 1 ]; then
    esac
 fi
 
+if [ "${FIT}" -eq 1 ]; then
+   SHAPE="scale=${W}:${H}:force_original_aspect_ratio=decrease:flags=lanczos,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:black"
+else
+   SHAPE="scale=${W}:${H}:force_original_aspect_ratio=increase:flags=lanczos,crop=${W}:${H}"
+fi
+
 made=0
 kept=0
 
 # Cover the window and crop: a 2.35:1 film loses its sides rather than gaining
-# black bars inside the frame. High profile, level 4.0: well within what the
+# black bars inside the frame. With --fit the other way round: all of the
+# picture, centred, the rest black. High profile, level 4.0: well within what the
 # Pi 4's decoder does in hardware. A keyframe every second keeps a jump into
 # a clip quick; +faststart lets PUP start playing before reading it all.
 encode() {
@@ -149,7 +161,7 @@ encode() {
    printf '%-24s from %8.1fs, %4.1fs\n' "${name}" "${start}" "${length}"
    if ! ffmpeg -hide_banner -loglevel error -nostdin -y \
          -ss "${start}" -t "${length}" -i "${INPUT}" \
-         -vf "${CROP_FILTER}scale=${W}:${H}:force_original_aspect_ratio=increase:flags=lanczos,crop=${W}:${H},fps=${FPS},format=yuv420p" \
+         -vf "${CROP_FILTER}${SHAPE},fps=${FPS},format=yuv420p" \
          -c:v libx264 -preset slow -crf "${CRF}" -profile:v high -level:v 4.0 \
          -g "${FPS}" -keyint_min "${FPS}" -sc_threshold 0 \
          "${audio_args[@]}" -movflags +faststart \

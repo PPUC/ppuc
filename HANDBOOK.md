@@ -886,7 +886,9 @@ tools/make-scenes.sh film.mkv pup/scenes --list scenes.txt   # name start length
 tools/make-scenes.sh film.mkv pup/scenes --random 20 --length 6
 ```
 
-A wide film is cut at the sides to fill the window, never stretched. Black
+A wide film is cut at the sides to fill the window, never stretched;
+`--fit` shows all of the picture instead, with bars inside the window, for an
+intro or anything with credits at its edges. Black
 bars that are part of the picture (a wide film inside a 16:9 file, as
 many copies are) are found and cut off first; `--no-crop` keeps them. For a
 short clip rather than a whole film, `--skip-start 5 --skip-end 5` keeps the
