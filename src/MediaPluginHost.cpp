@@ -644,6 +644,9 @@ private:
   bool loggedRendererContention_ = false;
   bool loggedB2SServerUnavailable_ = false;
   uint64_t lastBackglassDiagnosticMs_ = 0;
+  // Backglass frames at the display's refresh rate, at most 60 a second.
+  uint64_t backglassFrameNs_ = 1000000000ull / 60;
+  uint64_t nextBackglassFrameNs_ = 0;
 
   unsigned int getVpxApiId_ = 0;
   unsigned int getAudioSrcId_ = 0;
@@ -1213,6 +1216,21 @@ void MediaPluginHost::Impl::Process()
   if (!EnsureBackglassWindow())
   {
     return;
+  }
+  // The main loop comes round every few microseconds, and the renderer has
+  // no vsync to hold it: drawn on every pass, the backglass (PUP's videos and
+  // the scoreboard over them) was drawn and presented hundreds of times a
+  // second for videos that change thirty times, one CPU core flat out.
+  // Everything above still runs on every pass; only the drawing waits.
+  const uint64_t nowNs = SDL_GetTicksNS();
+  if (nowNs < nextBackglassFrameNs_)
+  {
+    return;
+  }
+  nextBackglassFrameNs_ += backglassFrameNs_;
+  if (nextBackglassFrameNs_ <= nowNs)
+  {
+    nextBackglassFrameNs_ = nowNs + backglassFrameNs_;  // late: no catching up
   }
 
   AncillaryRendererDef entries[8] = {};
@@ -1935,8 +1953,18 @@ bool MediaPluginHost::Impl::EnsureBackglassWindow()
     backglassWindow_ = nullptr;
     return false;
   }
-  std::printf("Media backglass renderer: %s\n",
-              SDL_GetRendererName(backglassRenderer_));
+  // The display's refresh rate, up to 60: more is never seen in a video of
+  // 30, and a callout moves smoothly at 60.
+  float refresh = 60.0f;
+  if (const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(backglassWindow_));
+      mode != nullptr && mode->refresh_rate > 1.0f)
+  {
+    refresh = std::min(mode->refresh_rate, 60.0f);
+  }
+  backglassFrameNs_ = static_cast<uint64_t>(1e9 / refresh);
+  nextBackglassFrameNs_ = 0;
+  std::printf("Media backglass renderer: %s, %.0f frames a second\n",
+              SDL_GetRendererName(backglassRenderer_), refresh);
   return true;
 }
 
