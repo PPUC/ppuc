@@ -244,6 +244,7 @@ class LuaRulesEngine
   static int LuaNvSet(lua_State* L);
   static int LuaExcludeFromSwitchReport(lua_State* L);
   static int LuaScoreboardSet(lua_State* L);
+  static int LuaScoreboardCallout(lua_State* L);
 
   lua_State* m_lua = nullptr;
   std::unordered_map<int, uint8_t> m_switchStates;

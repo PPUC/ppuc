@@ -90,6 +90,7 @@ ppuc.soundCommand(cmd [, board])
 ppuc.speech(text)
 ppuc.playSound(file)
 ppuc.scoreboardSet(name, value)
+ppuc.scoreboardCallout(text | {text, spot, style, size, ms, effect, priority})
 ppuc.effectTrigger(id, value)
 ppuc.effectTrigger(name, value)
 ppuc.suppressSwitch(number)
@@ -222,9 +223,25 @@ ppuc.scoreboardSet("jackpot", 25000000)       -- numbers work as numbers
 ppuc.scoreboardSet("mode", nil)               -- and nil takes it off
 ```
 
-It only hands the text over; the drawing is done elsewhere, at most once per
-frame. Without a scoreboard the call does nothing, so the same rules run on a
-machine without one.
+A callout puts a few words or a number over the scene for a moment:
+
+```lua
+ppuc.scoreboardCallout(10000000)                      -- "10,000,000", popping in
+ppuc.scoreboardCallout{text = "SILVER BULLET", effect = "shake", ms = 2000, priority = 5}
+ppuc.scoreboardCallout{text = "x2", spot = "low", effect = "slide"}
+```
+
+`effect` is `pop` (the default), `fade`, `slide` or `shake`; `ms` how long it
+shows (1500); `spot` one of the layout's callout spots (`center`, the
+window's middle, unless the layout moves it); `style` and `size` override the
+spot's. Every spot shows one callout at a time, so a word in the middle and a
+name under it can show together. A new callout replaces the one in its spot
+unless that one has the higher `priority`, so a jackpot is not cut short by
+the points of the next switch.
+
+Both only hand over; the drawing is done elsewhere, at most once per frame.
+Without a scoreboard the calls do nothing, so the same rules run on a machine
+without one.
 
 ## Playing Sounds
 

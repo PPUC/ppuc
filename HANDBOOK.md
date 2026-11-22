@@ -783,6 +783,23 @@ scoreboard:
   `ppuc.scoreboardSet`. `{player.rank:ranks}` turns a number into a name from
   a list. A name that means nothing shows as nothing.
 - **when** is `always`, `game` or `attract`.
+- **callouts** are the moments the rules put over the scene with
+  `ppuc.scoreboardCallout`: "10,000,000" for a shot, "SILVER BULLET" for an
+  award. They are made of the same burnt glyphs and move by the GPU alone,
+  so a callout costs no more than the score does. A layout names where they
+  go and which words to burn at load, so the first one shows at once:
+
+  ```yaml
+  callouts:
+    spots:
+      center: {x: 960, y: 470, size: 150, style: ember}   # the middle of the text
+      low: {x: 960, y: 730, size: 80, style: ember}
+    words: [SILVER BULLET, JACKPOT, EXTRA BALL]
+  ```
+
+  Without `spots`, `center` is the window's middle. A callout in the window
+  is shrunk to fit it and never drawn over the frame. A word not in `words`
+  still shows; it is burnt the first time, which takes a few milliseconds.
 - `x` of a text is where `align` puts it; `y` is the top of the letters.
 
 A mistake in the file is reported when the game starts, with the line, and
@@ -797,6 +814,9 @@ the art can be made and checked without a machine:
 ppuc-scoreboard-preview /path/to/game out.png --players 3 --current 2 \
     --var rank=4 --var bullets=0x93 --set "mode=Stakeout" --scene frame-of-a-video.png
 ```
+
+`--callout "SILVER BULLET" --callout-at 120 --effect shake` shows a callout
+as it is 120 ms after it started, to check how one moves frame by frame.
 
 It also prints the PUP `CustomPos` that puts a video exactly into the window.
 Make the scene videos the window's size (1280x720 for the layout above) and

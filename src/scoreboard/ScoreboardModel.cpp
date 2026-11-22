@@ -1,6 +1,7 @@
 #include "ScoreboardModel.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 
@@ -60,6 +61,14 @@ bool Source::Parse(const std::string& text, Source* out)
 
 void Layout::Finish()
 {
+  if (spots.count("center") == 0)
+  {
+    Spot center;
+    center.x = windowX + windowW / 2;
+    center.y = windowY + windowH / 2;
+    center.size = std::max(24, windowH / 6);
+    spots["center"] = center;
+  }
   CollectVars(&playerVarNames, &ballVarNames);
   if (styles.count("burnt") == 0)
   {
@@ -112,6 +121,12 @@ std::vector<std::string> Layout::Validate() const
   }
   if (logoSize < 48) problems.push_back("logo size below 48: the PPUC brand has to be readable");
   if (styles.count(logoStyle) == 0) problems.push_back("logo style '" + logoStyle + "' is not defined");
+  for (const auto& [name, spot] : spots)
+  {
+    if (styles.count(spot.style) == 0)
+      problems.push_back("callout spot '" + name + "': style '" + spot.style + "' is not defined");
+    if (spot.size <= 0) problems.push_back("callout spot '" + name + "': size must be positive");
+  }
 
   for (size_t i = 0; i < fields.size(); ++i)
   {
@@ -217,6 +232,96 @@ void Feed::SetValue(const std::string& name, const std::string& value)
     m_snapshot.values[name] = value;
   }
   ++m_snapshot.version;
+}
+
+void Feed::PushCallout(const Callout& callout)
+{
+  std::lock_guard<std::mutex> lock(m_mutex);
+  static constexpr size_t kMaxQueued = 8;
+  if (m_callouts.size() >= kMaxQueued) m_callouts.erase(m_callouts.begin());
+  m_callouts.push_back(callout);
+}
+
+void Feed::TakeCallouts(std::vector<Callout>* out)
+{
+  out->clear();
+  std::lock_guard<std::mutex> lock(m_mutex);
+  out->swap(m_callouts);
+}
+
+bool Feed::HasCallouts() const
+{
+  std::lock_guard<std::mutex> lock(m_mutex);
+  return !m_callouts.empty();
+}
+
+bool Callout::ParseEffect(const std::string& text, Effect* out)
+{
+  if (text == "pop")
+    *out = Effect::Pop;
+  else if (text == "fade")
+    *out = Effect::Fade;
+  else if (text == "slide")
+    *out = Effect::Slide;
+  else if (text == "shake")
+    *out = Effect::Shake;
+  else
+    return false;
+  return true;
+}
+
+static float Clamp01(float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); }
+// Fast start, soft landing.
+static float EaseOut(float t) { return 1.0f - (1.0f - t) * (1.0f - t) * (1.0f - t); }
+
+CalloutPose PoseAt(const Callout& callout, uint64_t elapsedMs)
+{
+  CalloutPose pose;
+  const float total = static_cast<float>(std::max<uint32_t>(callout.durationMs, 1));
+  const float t = static_cast<float>(elapsedMs);
+  if (t >= total) return pose;
+  pose.visible = true;
+  // In over the first 180 ms (or a fifth of a short callout), out over the
+  // last 300 ms (or a third).
+  const float in = std::min(180.0f, total / 5.0f);
+  const float out = std::min(300.0f, total / 3.0f);
+  const float rise = Clamp01(t / in);
+  const float fall = Clamp01((total - t) / out);
+  switch (callout.effect)
+  {
+    case Effect::Fade:
+      pose.alpha = std::min(rise, fall);
+      break;
+    case Effect::Slide:
+      pose.alpha = std::min(rise, fall);
+      pose.dy = (1.0f - EaseOut(rise)) * 0.8f;
+      break;
+    case Effect::Pop:
+    case Effect::Shake:
+      // From 1.6 times its size down to its size, with a small overshoot.
+      pose.scale = rise < 1.0f ? 1.6f - 0.7f * EaseOut(rise) : 0.9f;
+      if (rise >= 1.0f)
+      {
+        const float settle = Clamp01((t - in) / 120.0f);
+        pose.scale = 0.9f + 0.1f * EaseOut(settle);
+      }
+      pose.alpha = std::min(Clamp01(rise * 2.0f), fall);
+      if (callout.effect == Effect::Shake && rise >= 1.0f)
+      {
+        // Half a second of shaking after the landing, dying away.
+        const float since = t - in;
+        const float damp = Clamp01(1.0f - since / 500.0f);
+        pose.dx = 0.06f * damp * std::sin(since * 0.09f);
+        pose.dy = 0.03f * damp * std::sin(since * 0.13f + 1.0f);
+      }
+      break;
+  }
+  return pose;
+}
+
+bool CalloutReplaces(const Callout& showing, uint64_t elapsedMs, const Callout& incoming)
+{
+  return !PoseAt(showing, elapsedMs).visible || incoming.priority >= showing.priority;
 }
 
 bool Feed::ReadIfNewer(uint64_t version, Snapshot* out) const

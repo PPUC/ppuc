@@ -224,6 +224,30 @@ bool LoadLayout(const std::string& path, Layout* pLayout, std::string* pError)
         layout.lists[entry.first.as<std::string>()] = std::move(items);
       }
     }
+    if (const YAML::Node callouts = root["callouts"])
+    {
+      if (!callouts.IsMap()) Fail(callouts, "callouts must be a map");
+      if (const YAML::Node spots = callouts["spots"])
+      {
+        if (!spots.IsMap()) Fail(spots, "spots must be a map of names");
+        for (const auto& entry : spots)
+        {
+          const std::string name = entry.first.as<std::string>();
+          const auto existing = layout.spots.find(name);
+          Spot spot = existing != layout.spots.end() ? existing->second : Spot{};
+          spot.x = ReadInt(entry.second, "x", spot.x);
+          spot.y = ReadInt(entry.second, "y", spot.y);
+          spot.size = ReadInt(entry.second, "size", spot.size);
+          spot.style = ReadString(entry.second, "style", spot.style);
+          layout.spots[name] = spot;
+        }
+      }
+      if (const YAML::Node words = callouts["words"])
+      {
+        if (!words.IsSequence()) Fail(words, "words must be a list");
+        for (const auto& word : words) layout.calloutWords.push_back(word.as<std::string>());
+      }
+    }
     if (const YAML::Node fields = root["fields"])
     {
       if (!fields.IsSequence()) Fail(fields, "fields must be a list");

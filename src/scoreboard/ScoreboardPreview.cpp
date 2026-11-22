@@ -14,6 +14,11 @@
 //   --set name=text     a value the rules would set with ppuc.scoreboardSet
 //   --attract           as after a game, no game running
 //   --scene picture     shown in the window, standing in for a video frame
+//   --callout text      a callout, drawn as it is --callout-at ms after it
+//                       started (default 400: just landed)
+//   --callout-at ms
+//   --effect name       pop, fade, slide, shake
+//   --spot name         a callout spot of the layout (default center)
 //
 // Prints the PUP CustomPos that puts a video into the window.
 
@@ -45,7 +50,8 @@ static int Usage()
   std::fprintf(stderr,
                "usage: ppuc-scoreboard-preview <game folder> <out.png> [--size WxH] [--players N] [--current P]\n"
                "       [--ball B] [--credits C] [--score P=N] [--var name=N] [--ball-var name=N]\n"
-               "       [--set name=text] [--attract] [--scene picture]\n");
+               "       [--set name=text] [--attract] [--scene picture]\n"
+               "       [--callout text] [--callout-at ms] [--effect pop|fade|slide|shake] [--spot name]\n");
   return 2;
 }
 
@@ -78,6 +84,9 @@ int main(int argc, char** argv)
   facts.playerVars.assign(layout.playerVarNames.size(), 0);
   facts.ballVars.assign(layout.ballVarNames.size(), 0);
   std::string scene;
+  Callout callout;
+  bool hasCallout = false;
+  uint64_t calloutAt = 400;
 
   for (int i = 3; i < argc; ++i)
   {
@@ -124,6 +133,19 @@ int main(int argc, char** argv)
       facts.inGame = false;
     else if (arg == "--scene" && hasValue)
       scene = argv[++i];
+    else if (arg == "--callout" && hasValue)
+    {
+      callout.text = argv[++i];
+      hasCallout = true;
+    }
+    else if (arg == "--callout-at" && hasValue)
+      calloutAt = std::strtoull(argv[++i], nullptr, 10);
+    else if (arg == "--effect" && hasValue)
+    {
+      if (!Callout::ParseEffect(argv[++i], &callout.effect)) return Usage();
+    }
+    else if (arg == "--spot" && hasValue)
+      callout.spot = argv[++i];
     else
       return Usage();
   }
@@ -168,10 +190,11 @@ int main(int argc, char** argv)
       const SDL_FRect window{layout.windowX * sx, layout.windowY * sy, layout.windowW * sx, layout.windowH * sy};
       SDL_RenderTexture(renderer, sceneTexture, nullptr, &window);
     }
-    board.Draw(width, height, snapshot, sceneTexture == nullptr);
+    board.Draw(width, height, snapshot, sceneTexture == nullptr, calloutAt);
     // SDL batches draw calls; without this the time below is only the batching.
     SDL_FlushRenderer(renderer);
   };
+  if (hasCallout) board.StartCallout(callout, 0);
   const uint64_t started = SDL_GetTicksNS();
   drawFrame();
   const uint64_t firstNs = SDL_GetTicksNS() - started;

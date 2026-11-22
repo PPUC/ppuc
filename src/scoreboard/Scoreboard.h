@@ -43,7 +43,15 @@ class Board
   // On top of what the renderer holds, scaled from the layout's size to w x h.
   // `fillWindow`: put the idle picture into the window first, for when no
   // video plays behind the frame.
-  void Draw(int w, int h, const Snapshot& snapshot, bool fillWindow);
+  // `nowMs` moves the callout; any clock, as long as it is the one
+  // StartCallout was given.
+  void Draw(int w, int h, const Snapshot& snapshot, bool fillWindow, uint64_t nowMs);
+
+  // Shows a callout from `nowMs` on, unless one of higher priority is still
+  // showing in the same spot.
+  void StartCallout(const Callout& callout, uint64_t nowMs);
+  // A callout is moving: whoever draws only on change has to draw every frame.
+  bool Animating(uint64_t nowMs) const;
 
   // How many glyph textures exist, for the tests and the log.
   size_t GlyphCount() const;
@@ -67,6 +75,15 @@ class Board
   const Glyph* GetGlyph(Face* face, const std::string& style, int pixelSize, uint32_t codepoint);
   int MeasureText(const std::string& text, const std::string& style, int pixelSize);
   void DrawText(const std::string& text, const std::string& style, int pixelSize, float x, float y, Align align);
+  // Centred on cx, cy, scaled about that point, with an opacity.
+  void DrawPosed(const std::string& text, const std::string& style, int pixelSize, float cx, float cy, float scale,
+                 float alpha);
+  struct ActiveCallout
+  {
+    Callout callout;
+    uint64_t startMs = 0;
+  };
+  void DrawCallout(const ActiveCallout& active, float sx, float sy, uint64_t nowMs);
   void Prepare(const std::string& text, const std::string& style, int pixelSize);
   SDL_Texture* Picture(const std::string& name);
   bool MakeLogo(int pixelSize, std::string* pError);
@@ -82,6 +99,9 @@ class Board
   int m_logoPixels = 0;
   std::map<std::string, SDL_Texture*> m_pictures;
   std::map<std::pair<std::string, int>, Face> m_faces;
+  // One callout per spot: "PROMOTED" in the middle and the new rank under it
+  // show together; a second one for the same spot takes the first's place.
+  std::map<std::string, ActiveCallout> m_callouts;
   // Output size the glyphs were made for; a change remakes them.
   int m_outputW = 0;
   int m_outputH = 0;

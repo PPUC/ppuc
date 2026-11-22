@@ -128,6 +128,62 @@ enum class Corner
   BottomRight,
 };
 
+// A callout: a few words or a number over the scene for a moment --
+// "10,000,000" for a shot, "SILVER BULLET" for an award. Made of the same
+// burnt glyphs as the rest of the board and moved by the GPU alone: a zoom,
+// a fade, a slide or a shake is only a different place, size and opacity for
+// glyphs that already exist.
+enum class Effect
+{
+  Pop,    // zooms in from large and settles, then fades
+  Fade,   // fades in and out
+  Slide,  // rises into place, then fades
+  Shake,  // pops, then shakes: the big ones
+};
+
+// Where callouts go, by name. The layout's "center" is the window's middle
+// unless the layout says otherwise.
+struct Spot
+{
+  int x = 0;
+  int y = 0;  // the middle of the text, unlike a text field's top
+  int size = 120;
+  std::string style = "ember";
+};
+
+struct Callout
+{
+  std::string text;
+  std::string spot = "center";
+  std::string style;  // empty: the spot's
+  int size = 0;       // 0: the spot's
+  uint32_t durationMs = 1500;
+  Effect effect = Effect::Pop;
+  // A callout replaces the one showing unless that one's priority is higher,
+  // in which case the new one is dropped: a jackpot is not cut short by the
+  // points of the next switch.
+  int priority = 0;
+
+  // "pop", "fade", "slide", "shake".
+  static bool ParseEffect(const std::string& text, Effect* out);
+};
+
+// Where a callout is at `elapsedMs`: how big, how opaque, how far off its
+// spot. Pure, so the motion is tested rather than looked at.
+struct CalloutPose
+{
+  bool visible = false;
+  float scale = 1.0f;
+  float alpha = 1.0f;
+  float dx = 0.0f;  // in fractions of the text height
+  float dy = 0.0f;
+};
+CalloutPose PoseAt(const Callout& callout, uint64_t elapsedMs);
+// Whether `incoming` takes the place of `showing`, which started `elapsedMs`
+// ago: always once that one is over, otherwise unless it has the higher
+// priority.
+bool CalloutReplaces(const Callout& showing, uint64_t elapsedMs, const Callout& incoming);
+
 struct Layout
 {
   int width = 1920;
@@ -150,6 +206,10 @@ struct Layout
   // Named lists for {player.rank:ranks}: a number picks an entry.
   std::map<std::string, std::vector<std::string>> lists;
   std::vector<Field> fields;
+  std::map<std::string, Spot> spots;
+  // Words callouts will show, burnt at load so the first one does not wait.
+  // Digits and the comma are always ready.
+  std::vector<std::string> calloutWords;
 
   // The PlayerVar and BallVar names, in the order Facts carries them. Set by
   // Finish().
@@ -207,6 +267,12 @@ class Feed
   // Machine thread (the rules). An empty value removes it.
   void SetValue(const std::string& name, const std::string& value);
 
+  // Machine thread (the rules). Queued; the drawing thread takes them.
+  void PushCallout(const Callout& callout);
+  // Drawing thread: every callout pushed since the last call, oldest first.
+  void TakeCallouts(std::vector<Callout>* out);
+  bool HasCallouts() const;
+
   // Drawing thread: true, and a copy, when something changed since `version`.
   bool ReadIfNewer(uint64_t version, Snapshot* out) const;
   uint64_t Version() const;
@@ -216,6 +282,9 @@ class Feed
   std::vector<std::string> m_ballVarNames;
   mutable std::mutex m_mutex;
   Snapshot m_snapshot;
+  // Bounded: a rule calling out every switch of a frantic multiball must
+  // not grow a queue nobody shows.
+  std::vector<Callout> m_callouts;
 };
 
 // "12450000" -> "12,450,000".

@@ -270,6 +270,96 @@ void Board::DrawText(const std::string& text, const std::string& style, int pixe
   }
 }
 
+void Board::DrawPosed(const std::string& text, const std::string& style, int pixelSize, float cx, float cy,
+                      float scale, float alpha)
+{
+  Face* face = GetFace(style, pixelSize);
+  if (face == nullptr || text.empty() || alpha <= 0.0f) return;
+  const float width = static_cast<float>(MeasureText(text, style, pixelSize)) * scale;
+  // The glyph boxes are the font's line height; their middle is close enough
+  // to the middle of capitals and digits for a callout.
+  const Glyph* any = nullptr;
+  for (const uint32_t cp : DecodeUtf8(text))
+  {
+    any = GetGlyph(face, style, pixelSize, cp);
+    if (any->texture) break;
+  }
+  if (any == nullptr) return;
+  const float boxH = static_cast<float>(any->height - 2 * face->pad);
+  float pen = cx - width / 2.0f;
+  const float top = cy - boxH * scale / 2.0f;
+  const uint8_t a = static_cast<uint8_t>(std::clamp(alpha, 0.0f, 1.0f) * 255.0f + 0.5f);
+  for (const uint32_t cp : DecodeUtf8(text))
+  {
+    const Glyph* glyph = GetGlyph(face, style, pixelSize, cp);
+    if (glyph->texture)
+    {
+      SDL_SetTextureAlphaMod(glyph->texture, a);
+      const SDL_FRect dst{pen - face->pad * scale, top - face->pad * scale, glyph->width * scale,
+                          glyph->height * scale};
+      SDL_RenderTexture(m_renderer, glyph->texture, nullptr, &dst);
+      SDL_SetTextureAlphaMod(glyph->texture, 255);
+    }
+    pen += static_cast<float>(glyph->advance) * scale;
+  }
+}
+
+void Board::StartCallout(const Callout& callout, uint64_t nowMs)
+{
+  const std::string spot = m_layout.spots.count(callout.spot) ? callout.spot : "center";
+  auto it = m_callouts.find(spot);
+  if (it != m_callouts.end() && nowMs >= it->second.startMs &&
+      !CalloutReplaces(it->second.callout, nowMs - it->second.startMs, callout))
+  {
+    return;
+  }
+  ActiveCallout active;
+  active.callout = callout;
+  active.callout.spot = spot;
+  active.startMs = nowMs;
+  m_callouts[spot] = active;
+}
+
+bool Board::Animating(uint64_t nowMs) const
+{
+  for (const auto& [spot, active] : m_callouts)
+  {
+    if (nowMs >= active.startMs && PoseAt(active.callout, nowMs - active.startMs).visible) return true;
+  }
+  return false;
+}
+
+void Board::DrawCallout(const ActiveCallout& active, float sx, float sy, uint64_t nowMs)
+{
+  if (nowMs < active.startMs) return;
+  const Callout& callout = active.callout;
+  const CalloutPose pose = PoseAt(callout, nowMs - active.startMs);
+  if (!pose.visible) return;
+  const auto spotIt = m_layout.spots.find(callout.spot);
+  if (spotIt == m_layout.spots.end()) return;
+  const Spot& spot = spotIt->second;
+  const std::string& style = callout.style.empty() ? spot.style : callout.style;
+  const int px = PixelSize(callout.size > 0 ? callout.size : spot.size);
+  const float cx = spot.x * sx + pose.dx * px;
+  const float cy = spot.y * sy + pose.dy * px;
+  // A callout over the scene stays in the scene: shrunk to 90 % of the
+  // window's width when it is wider, and clipped there, so the zoom of a long
+  // word never paints over the frame.
+  const SDL_Rect window{static_cast<int>(m_layout.windowX * sx), static_cast<int>(m_layout.windowY * sy),
+                        static_cast<int>(m_layout.windowW * sx), static_cast<int>(m_layout.windowH * sy)};
+  const bool inWindow = cx >= window.x && cx < window.x + window.w && cy >= window.y && cy < window.y + window.h;
+  float fit = 1.0f;
+  if (inWindow)
+  {
+    const float width = static_cast<float>(MeasureText(callout.text, style, px));
+    const float room = window.w * 0.9f;
+    if (width > room) fit = room / width;
+    SDL_SetRenderClipRect(m_renderer, &window);
+  }
+  DrawPosed(callout.text, style, px, cx, cy, pose.scale * fit, pose.alpha);
+  if (inWindow) SDL_SetRenderClipRect(m_renderer, nullptr);
+}
+
 void Board::Prepare(const std::string& text, const std::string& style, int pixelSize)
 {
   Face* face = GetFace(style, pixelSize);
@@ -315,7 +405,7 @@ bool Board::MakeLogo(int pixelSize, std::string* pError)
   return m_logo != nullptr;
 }
 
-void Board::Draw(int w, int h, const Snapshot& snapshot, bool fillWindow)
+void Board::Draw(int w, int h, const Snapshot& snapshot, bool fillWindow, uint64_t nowMs)
 {
   if (m_renderer == nullptr || w <= 0 || h <= 0) return;
   if (w != m_outputW || h != m_outputH)
@@ -343,6 +433,13 @@ void Board::Draw(int w, int h, const Snapshot& snapshot, bool fillWindow)
       Prepare(field.format, field.style, px);
       for (const auto& [name, items] : m_layout.lists)
         for (const std::string& item : items) Prepare(item, field.style, px);
+    }
+    // Callouts: digits and the layout's words, at every spot's size.
+    for (const auto& [name, spot] : m_layout.spots)
+    {
+      const int px = PixelSize(spot.size);
+      Prepare("0123456789,", spot.style, px);
+      for (const std::string& word : m_layout.calloutWords) Prepare(word, spot.style, px);
     }
   }
 
@@ -414,6 +511,17 @@ void Board::Draw(int w, int h, const Snapshot& snapshot, bool fillWindow)
         break;
       }
     }
+  }
+
+  for (auto it = m_callouts.begin(); it != m_callouts.end();)
+  {
+    if (nowMs >= it->second.startMs && !PoseAt(it->second.callout, nowMs - it->second.startMs).visible)
+    {
+      it = m_callouts.erase(it);
+      continue;
+    }
+    DrawCallout(it->second, sx, sy, nowMs);
+    ++it;
   }
 
   // The brand last, so nothing can cover it.

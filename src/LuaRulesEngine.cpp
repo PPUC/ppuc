@@ -244,6 +244,7 @@ void LuaRulesEngine::RegisterApi()
   SetPpucFunction(m_lua, this, "nvSet", LuaNvSet);
   SetPpucFunction(m_lua, this, "excludeFromSwitchReport", LuaExcludeFromSwitchReport);
   SetPpucFunction(m_lua, this, "scoreboardSet", LuaScoreboardSet);
+  SetPpucFunction(m_lua, this, "scoreboardCallout", LuaScoreboardCallout);
 
   // Registered only when the ROM-less game is running, so `ppuc.game == nil` is
   // a reliable feature test for a script that must work under either engine.
@@ -1600,6 +1601,68 @@ int LuaRulesEngine::LuaScoreboardSet(lua_State* L)
   if (engine->m_pScoreboardFeed != nullptr)
   {
     engine->m_pScoreboardFeed->SetValue(name, value);
+  }
+  return 0;
+}
+
+// ppuc.scoreboardCallout(text) or ppuc.scoreboardCallout{text = ..., spot =
+// "center", style = "ember", size = 120, ms = 1500, effect = "pop" | "fade" |
+// "slide" | "shake", priority = 0}: a few words or a number over the scene for
+// a moment. A number gets its thousands separators. Queued for the drawing
+// thread like scoreboardSet; nothing is drawn here.
+int LuaRulesEngine::LuaScoreboardCallout(lua_State* L)
+{
+  auto* engine = FromLua(L);
+  scoreboard::Callout callout;
+  auto textOf = [L](int index) -> std::string
+  {
+    if (lua_type(L, index) == LUA_TNUMBER)
+    {
+      const lua_Integer n = lua_isinteger(L, index) ? lua_tointeger(L, index)
+                                                    : static_cast<lua_Integer>(lua_tonumber(L, index));
+      return scoreboard::FormatScore(n < 0 ? 0 : static_cast<uint64_t>(n));
+    }
+    size_t length = 0;
+    const char* text = luaL_tolstring(L, index, &length);
+    std::string out(text, length);
+    lua_pop(L, 1);
+    return out;
+  };
+  if (lua_istable(L, 1))
+  {
+    lua_getfield(L, 1, "text");
+    if (lua_isnil(L, -1)) return luaL_error(L, "scoreboardCallout: no text");
+    callout.text = textOf(lua_gettop(L));
+    lua_pop(L, 1);
+    lua_getfield(L, 1, "spot");
+    if (lua_isstring(L, -1)) callout.spot = lua_tostring(L, -1);
+    lua_pop(L, 1);
+    lua_getfield(L, 1, "style");
+    if (lua_isstring(L, -1)) callout.style = lua_tostring(L, -1);
+    lua_pop(L, 1);
+    lua_getfield(L, 1, "size");
+    if (lua_isnumber(L, -1)) callout.size = static_cast<int>(lua_tointeger(L, -1));
+    lua_pop(L, 1);
+    lua_getfield(L, 1, "ms");
+    if (lua_isnumber(L, -1)) callout.durationMs = static_cast<uint32_t>(std::max<lua_Integer>(1, lua_tointeger(L, -1)));
+    lua_pop(L, 1);
+    lua_getfield(L, 1, "priority");
+    if (lua_isnumber(L, -1)) callout.priority = static_cast<int>(lua_tointeger(L, -1));
+    lua_pop(L, 1);
+    lua_getfield(L, 1, "effect");
+    if (lua_isstring(L, -1) && !scoreboard::Callout::ParseEffect(lua_tostring(L, -1), &callout.effect))
+    {
+      return luaL_error(L, "scoreboardCallout: effect must be pop, fade, slide or shake");
+    }
+    lua_pop(L, 1);
+  }
+  else
+  {
+    callout.text = textOf(1);
+  }
+  if (engine->m_pScoreboardFeed != nullptr && !callout.text.empty())
+  {
+    engine->m_pScoreboardFeed->PushCallout(callout);
   }
   return 0;
 }

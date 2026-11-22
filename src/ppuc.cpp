@@ -6642,7 +6642,14 @@ static bool DrawScoreboardInto(SDL_Renderer* renderer, int w, int h, bool fillWi
         return false;
     }
     g_scoreboardFeed.ReadIfNewer(g_scoreboardSnapshot.version, &g_scoreboardSnapshot);
-    g_scoreboardBoard.Draw(w, h, g_scoreboardSnapshot, fillWindow);
+    const uint64_t nowMs = SDL_GetTicks();
+    static std::vector<scoreboard::Callout> callouts;
+    g_scoreboardFeed.TakeCallouts(&callouts);
+    for (const scoreboard::Callout& callout : callouts)
+    {
+        g_scoreboardBoard.StartCallout(callout, nowMs);
+    }
+    g_scoreboardBoard.Draw(w, h, g_scoreboardSnapshot, fillWindow, nowMs);
     return true;
 }
 
@@ -6756,7 +6763,8 @@ static bool ServiceScreenWanted()
 
 // The own-window path, for a game with a scoreboard and no backglass: the
 // scoreboard has the window whenever no tool wants it, and is drawn again when
-// what it shows changed, and once a second besides. Between those nothing is
+// what it shows changed, every frame while a callout moves, and once a second
+// besides. Between those nothing is
 // drawn at all -- without a video behind it, a frame that did not change is a
 // frame nobody needs.
 static void ServiceScoreboardWindow()
@@ -6774,7 +6782,16 @@ static void ServiceScoreboardWindow()
     }
     const uint64_t nowMs = SDL_GetTicks();
     const uint64_t version = g_scoreboardFeed.Version();
-    if (!g_scoreboardRedraw && version == g_scoreboardShownVersion && nowMs - g_scoreboardShownMs < 1000)
+    // A callout moves at 60 frames a second, and only while it moves.
+    const bool moving = g_scoreboardBoard.Animating(nowMs) || g_scoreboardFeed.HasCallouts();
+    if (moving)
+    {
+        if (nowMs - g_scoreboardShownMs < 16)
+        {
+            return;
+        }
+    }
+    else if (!g_scoreboardRedraw && version == g_scoreboardShownVersion && nowMs - g_scoreboardShownMs < 1000)
     {
         return;
     }

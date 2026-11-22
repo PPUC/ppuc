@@ -337,3 +337,118 @@ TEST_CASE("scoreboard: rules set values with ppuc.scoreboardSet")
   REQUIRE(feed.ReadIfNewer(snapshot.version, &snapshot));
   CHECK(snapshot.values.count("mode") == 0);
 }
+
+TEST_CASE("scoreboard: a callout pops in, settles, fades out")
+{
+  Callout pop;
+  pop.durationMs = 1500;
+  CHECK(PoseAt(pop, 0).visible);
+  CHECK(PoseAt(pop, 0).scale == doctest::Approx(1.6f));
+  CHECK(PoseAt(pop, 0).alpha == doctest::Approx(0.0f));
+  // Landed slightly small, then settled at its size.
+  CHECK(PoseAt(pop, 180).scale == doctest::Approx(0.9f));
+  CHECK(PoseAt(pop, 400).scale == doctest::Approx(1.0f));
+  CHECK(PoseAt(pop, 400).alpha == doctest::Approx(1.0f));
+  // Fading over the last 300 ms, gone at the end.
+  CHECK(PoseAt(pop, 1350).alpha == doctest::Approx(0.5f));
+  CHECK_FALSE(PoseAt(pop, 1500).visible);
+
+  Callout slide = pop;
+  slide.effect = Effect::Slide;
+  CHECK(PoseAt(slide, 0).dy > 0.5f);
+  CHECK(PoseAt(slide, 400).dy == doctest::Approx(0.0f));
+
+  Callout shake = pop;
+  shake.effect = Effect::Shake;
+  bool moved = false;
+  for (uint64_t t = 190; t < 600; t += 10) moved = moved || PoseAt(shake, t).dx != 0.0f;
+  CHECK(moved);
+  CHECK(PoseAt(shake, 900).dx == doctest::Approx(0.0f));
+
+  // A very short one still comes in and goes out.
+  Callout blink;
+  blink.durationMs = 200;
+  CHECK(PoseAt(blink, 100).visible);
+  CHECK(PoseAt(blink, 100).alpha > 0.0f);
+}
+
+TEST_CASE("scoreboard: a jackpot is not cut short by the next switch")
+{
+  Callout jackpot;
+  jackpot.priority = 10;
+  Callout points;
+  CHECK_FALSE(CalloutReplaces(jackpot, 500, points));
+  CHECK(CalloutReplaces(jackpot, 5000, points));  // it is over
+  CHECK(CalloutReplaces(points, 500, jackpot));
+  CHECK(CalloutReplaces(points, 500, points));    // equal: the newest wins
+}
+
+TEST_CASE("scoreboard: callouts queue for the drawing thread, a few at most")
+{
+  Feed feed;
+  for (int i = 0; i < 20; ++i)
+  {
+    Callout c;
+    c.text = std::to_string(i);
+    feed.PushCallout(c);
+  }
+  CHECK(feed.HasCallouts());
+  std::vector<Callout> taken;
+  feed.TakeCallouts(&taken);
+  REQUIRE(taken.size() == 8);
+  CHECK(taken.front().text == "12");
+  CHECK(taken.back().text == "19");
+  CHECK_FALSE(feed.HasCallouts());
+}
+
+TEST_CASE("scoreboard: the window's middle is a callout spot")
+{
+  Layout layout;
+  layout.font = "f.ttf";
+  layout.windowX = 320;
+  layout.windowY = 120;
+  layout.windowW = 1280;
+  layout.windowH = 720;
+  layout.Finish();
+  REQUIRE(layout.spots.count("center") == 1);
+  CHECK(layout.spots.at("center").x == 960);
+  CHECK(layout.spots.at("center").y == 480);
+  layout.spots["low"].style = "chalk";
+  CHECK(layout.Validate() == std::vector<std::string>{"callout spot 'low': style 'chalk' is not defined"});
+}
+
+TEST_CASE("scoreboard: rules call out with ppuc.scoreboardCallout")
+{
+  Feed feed;
+  ppuc_test::RulesHarness rules(R"(
+    function ppuc.onSwitchChanged(number, state)
+      if state == 0 then return end
+      if number == 1 then ppuc.scoreboardCallout(10000000) end
+      if number == 2 then
+        ppuc.scoreboardCallout{text = "SILVER BULLET", spot = "low", effect = "shake", ms = 2000, priority = 5}
+      end
+      if number == 3 then ppuc.scoreboardCallout{text = "x", effect = "wobble"} end
+    end
+  )");
+  rules.engine().SetScoreboardFeed(&feed);
+  REQUIRE(rules.Load() == "");
+  rules.engine().ProcessSwitchState(1, 1);
+  rules.engine().ProcessSwitchState(2, 1);
+  std::vector<Callout> taken;
+  feed.TakeCallouts(&taken);
+  REQUIRE(taken.size() == 2);
+  CHECK(taken[0].text == "10,000,000");
+  CHECK(taken[0].effect == Effect::Pop);
+  CHECK(taken[1].text == "SILVER BULLET");
+  CHECK(taken[1].spot == "low");
+  CHECK(taken[1].effect == Effect::Shake);
+  CHECK(taken[1].durationMs == 2000);
+  CHECK(taken[1].priority == 5);
+  // A wrong effect is a rules error like any other, named, and shows the
+  // first time it fires rather than as a silent pop.
+  rules.engine().ProcessSwitchState(3, 1);
+  feed.TakeCallouts(&taken);
+  CHECK(taken.empty());
+  CHECK(rules.engine().HasFatalError());
+  CHECK(rules.engine().GetFatalError().find("pop, fade, slide or shake") != std::string::npos);
+}
