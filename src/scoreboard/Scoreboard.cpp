@@ -257,32 +257,47 @@ int Board::MeasureText(const std::string& text, const std::string& style, int pi
   return width;
 }
 
-void Board::DrawText(const std::string& text, const std::string& style, int pixelSize, float x, float y, Align align)
+void Board::DrawText(const std::string& text, const std::string& style, int pixelSize, float x, float y, Align align,
+                     float room)
 {
   Face* face = GetFace(style, pixelSize);
   if (face == nullptr || text.empty()) return;
-  const int width = MeasureText(text, style, pixelSize);
+  const int natural = MeasureText(text, style, pixelSize);
+  // Shrunk textures rather than a smaller font: a score that grows past its
+  // room would otherwise burn a new set of glyphs in the middle of a game.
+  const float scale = room > 0.0f && natural > room ? room / static_cast<float>(natural) : 1.0f;
+  const float width = static_cast<float>(natural) * scale;
+  if (scale < 1.0f)
+  {
+    // The same middle of the line: the letters' box is the font's height.
+    const Glyph* any = GetGlyph(face, style, pixelSize, '0');
+    const float boxH = static_cast<float>(any->height - 2 * face->pad);
+    y += boxH * (1.0f - scale) / 2.0f;
+  }
   float pen = x;
-  if (align == Align::Center) pen -= static_cast<float>(width) / 2.0f;
-  if (align == Align::Right) pen -= static_cast<float>(width);
+  if (align == Align::Center) pen -= width / 2.0f;
+  if (align == Align::Right) pen -= width;
   // Shadows first, all of them, then the letters: a shadow falls on the wood,
   // never on the letter next to it.
   const float start = pen;
   for (int pass = face->shadowOffset != 0 ? 0 : 1; pass < 2; ++pass)
   {
     pen = start;
-    const float off = pass == 0 ? static_cast<float>(face->shadowOffset) : 0.0f;
+    const float off = pass == 0 ? static_cast<float>(face->shadowOffset) * scale : 0.0f;
     for (const uint32_t cp : DecodeUtf8(text))
     {
       const Glyph* glyph = GetGlyph(face, style, pixelSize, cp);
       SDL_Texture* texture = pass == 0 ? glyph->shadow : glyph->texture;
       if (texture)
       {
-        const SDL_FRect dst{std::round(pen) - face->pad + off, std::round(y) - face->pad + off,
-                            static_cast<float>(glyph->width), static_cast<float>(glyph->height)};
+        // Whole pixels at full size, so the burn stays crisp.
+        const float left = scale < 1.0f ? pen : std::round(pen);
+        const float top = scale < 1.0f ? y : std::round(y);
+        const SDL_FRect dst{left - face->pad * scale + off, top - face->pad * scale + off,
+                            static_cast<float>(glyph->width) * scale, static_cast<float>(glyph->height) * scale};
         SDL_RenderTexture(m_renderer, texture, nullptr, &dst);
       }
-      pen += static_cast<float>(glyph->advance);
+      pen += static_cast<float>(glyph->advance) * scale;
     }
   }
 }
@@ -529,12 +544,13 @@ void Board::DrawBoard(int w, int h, const Snapshot& snapshot, bool fillWindow, u
     switch (field.type)
     {
       case Field::Type::Text:
-        DrawText(ExpandText(field.text, m_layout, snapshot), field.style, px, x, y, field.align);
+        DrawText(ExpandText(field.text, m_layout, snapshot), field.style, px, x, y, field.align, field.width * sx);
         break;
       case Field::Type::CurrentScore:
         if (featured > 0)
         {
-          DrawText(FormatScore(snapshot.facts.scores[featured - 1]), field.style, px, x, y, field.align);
+          DrawText(FormatScore(snapshot.facts.scores[featured - 1]), field.style, px, x, y, field.align,
+                   field.width * sx);
         }
         break;
       case Field::Type::OtherScores:
@@ -550,7 +566,7 @@ void Board::DrawBoard(int w, int h, const Snapshot& snapshot, bool fillWindow, u
           if (n != std::string::npos) text.replace(n, 3, std::to_string(p));
           const size_t s = text.find("{score}");
           if (s != std::string::npos) text.replace(s, 7, FormatScore(snapshot.facts.scores[p - 1]));
-          DrawText(text, field.style, px, x + slot * (static_cast<float>(k) + 0.5f), y, Align::Center);
+          DrawText(text, field.style, px, x + slot * (static_cast<float>(k) + 0.5f), y, Align::Center, slot * 0.95f);
         }
         break;
       }

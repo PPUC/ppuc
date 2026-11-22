@@ -770,7 +770,7 @@ scoreboard:
   lists:
     ranks: [Rookie, Officer, Sergeant, Detective]
   fields:
-    - {type: current_score, x: 960, y: 846, size: 116, style: score}
+    - {type: current_score, x: 960, y: 846, size: 116, width: 720, style: score}
     - {type: other_scores, x: 330, y: 992, width: 1260, size: 44}
     - {type: text, when: game, text: "Player {player}", x: 342, y: 882, size: 40, align: left}
     - {type: text, when: game, text: "{player.rank:ranks}", x: 177, y: 714, size: 40}
@@ -789,6 +789,8 @@ scoreboard:
 
 - **current_score** is the player whose turn it is, large; after a game, the
   best score of it. **other_scores** spreads everybody else over its width.
+  A text or score wider than its field's `width` is drawn smaller to fit,
+  so a billion never runs into "Player 1" and "Ball 3" beside it.
 - **text** fills in `{ball}`, `{player}`, `{players}`, `{credits}`, `{score}`,
   `{score1}`..`{score4}`, `{player.NAME}` and `{ball.NAME}` (the game's
   `ppuc.game` variables), and `{value.NAME}`, which the rules set with

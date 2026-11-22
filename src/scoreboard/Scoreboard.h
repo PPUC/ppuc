@@ -78,7 +78,10 @@ class Board
   Face* GetFace(const std::string& style, int pixelSize);
   const Glyph* GetGlyph(Face* face, const std::string& style, int pixelSize, uint32_t codepoint);
   int MeasureText(const std::string& text, const std::string& style, int pixelSize);
-  void DrawText(const std::string& text, const std::string& style, int pixelSize, float x, float y, Align align);
+  // `room` above 0: a text wider than that is drawn smaller to fit, around the
+  // middle of its line, so a score never runs into the labels beside it.
+  void DrawText(const std::string& text, const std::string& style, int pixelSize, float x, float y, Align align,
+                float room = 0.0f);
   // Centred on cx, cy, scaled about that point, with an opacity.
   void DrawPosed(const std::string& text, const std::string& style, int pixelSize, float cx, float cy, float scale,
                  float alpha);
