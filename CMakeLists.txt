@@ -333,6 +333,10 @@ if(NOT (PLATFORM STREQUAL "win" OR PLATFORM STREQUAL "win-mingw"))
 endif()
 
 add_executable(ppuc-pinmame
+   src/Adjustments.cpp
+   src/CoinDoor.cpp
+   src/MachineState.cpp
+   src/SwitchReport.cpp
    src/AttractSlides.cpp
    src/BallTroughWatch.cpp
    src/HealthLog.cpp
@@ -842,6 +846,10 @@ if(PPUC_BUILD_TESTS)
    # reader, while map loading lives in PinmameNvramMapLoader.cpp and is not
    # part of this target.
    add_executable(ppuc_tests
+      src/Adjustments.cpp
+      src/CoinDoor.cpp
+      src/MachineState.cpp
+      src/SwitchReport.cpp
       src/RomSpeedTracker.cpp
       src/HealthLog.cpp
       src/AttractSlides.cpp
@@ -881,6 +889,7 @@ if(PPUC_BUILD_TESTS)
       tests/test_lua_rules_engine.cpp
       tests/test_altsound_command.cpp
       tests/test_thread_handoff.cpp
+      tests/test_machine_state.cpp
       tests/test_lua_rules_timing.cpp
       tests/test_pinmame_nvram_tracking.cpp
       tests/test_attract_slides.cpp

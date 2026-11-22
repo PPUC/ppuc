@@ -45,6 +45,7 @@ inline void PushLuaArg(lua_State* L, const LuaArg& arg)
     case LuaArg::Type::Integer: lua_pushinteger(L, arg.integer); break;
     case LuaArg::Type::String: lua_pushstring(L, arg.text.c_str()); break;
     case LuaArg::Type::Boolean: lua_pushboolean(L, arg.integer != 0); break;
+    case LuaArg::Type::Number: lua_pushnumber(L, arg.number); break;
   }
 }
 

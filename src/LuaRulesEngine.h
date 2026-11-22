@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -14,6 +15,9 @@
 
 class GameCore;
 class DmdCanvas;
+class Adjustments;
+class MachineMemory;
+class SwitchReport;
 
 struct lua_State;
 
@@ -93,6 +97,14 @@ class LuaRulesEngine
   // than an error naming the line.
   void SetGameCore(GameCore* pGameCore);
   void SetDmdCanvas(DmdCanvas* pCanvas);
+  // The operator's adjustments (ppuc.defineAdjustment, ppuc.adjustment), the
+  // rules' machine memory (ppuc.nvGet, ppuc.nvSet) and the switch report
+  // (ppuc.excludeFromSwitchReport). Without them the functions still exist:
+  // an adjustment then reads as its default and machine memory forgets on
+  // a restart, so a game runs the same on a bench without a game folder.
+  void SetAdjustments(Adjustments* pAdjustments);
+  void SetMachineMemory(MachineMemory* pMemory);
+  void SetSwitchReport(SwitchReport* pReport);
   GameCore* GetGameCore() const { return m_pGameCore; }
   DmdCanvas* GetDmdCanvas() const { return m_pDmdCanvas; }
 
@@ -218,6 +230,11 @@ class LuaRulesEngine
   static int LuaStopBlinkLamp(lua_State* L);
   static int LuaBallSave(lua_State* L);
   static int LuaSetGiProgram(lua_State* L);
+  static int LuaDefineAdjustment(lua_State* L);
+  static int LuaAdjustment(lua_State* L);
+  static int LuaNvGet(lua_State* L);
+  static int LuaNvSet(lua_State* L);
+  static int LuaExcludeFromSwitchReport(lua_State* L);
 
   lua_State* m_lua = nullptr;
   std::unordered_map<int, uint8_t> m_switchStates;
@@ -249,6 +266,13 @@ class LuaRulesEngine
   uint64_t m_nextScheduledSequence = 0;
   GameCore* m_pGameCore = nullptr;
   DmdCanvas* m_pDmdCanvas = nullptr;
+  Adjustments* m_pAdjustments = nullptr;
+  MachineMemory* m_pMemory = nullptr;
+  SwitchReport* m_pSwitchReport = nullptr;
+  // What the rules defined when there is no store, so ppuc.adjustment still
+  // answers with the default and machine memory lasts for the session.
+  std::unique_ptr<Adjustments> m_ownAdjustments;
+  std::unique_ptr<MachineMemory> m_ownMemory;
   // Recursive because a Lua handler may call ppuc.game.* which re-enters through
   // a query handler -- ppuc.game.startGame() reaching canStartGame is the
   // obvious case. Recursive costs nothing and removes a class of deadlock that

@@ -24,6 +24,8 @@ behavior:
 - delay work without blocking with `ppuc.after(...)`
 - suppress or later send physical switches to PinMAME
 - pulse coils and blink lamps as host-side interceptor output overrides
+- define the game's adjustments for the service menu with `ppuc.defineAdjustment(...)`
+- keep values across power cycles with `ppuc.nvSet(...)` / `ppuc.nvGet(...)`
 
 In the default `pinmame` engine the original ROM still owns scoring, original
 lamp logic, solenoid timing, switch matrix behavior, ball flow, and attract/game
@@ -134,7 +136,75 @@ end
 
 function ppuc.onRulesUpdate()
 end
+
+function ppuc.onAdjustmentChanged(name, value)
+end
 ```
+
+## Adjustments, Machine Memory and the Switch Report
+
+What a ROM keeps beside its audits, for a game whose rules are Lua. All three
+live in the game folder's `state/`, on the USB stick of a cabinet, and are
+written there by the main thread; nothing here ever waits for the stick.
+
+```lua
+-- Returns the value in force: the operator's, or the default.
+local difficulty = ppuc.defineAdjustment{
+  name = "gun_difficulty",          -- letters, digits, '_', '.', '-'
+  label = "Gun difficulty",         -- what the service menu shows
+  default = "Normal",
+  choices = {"Easy", "Normal", "Hard"},
+  about = "Hits on the gun target that light the award.",
+}
+ppuc.defineAdjustment{name = "ball_save_bonus", label = "Extra ball save",
+                      default = 2, min = 0, max = 10, step = 1, unit = "s"}
+ppuc.defineAdjustment{name = "gun_broken", label = "Gun out of order", default = false}
+
+ppuc.adjustment("gun_difficulty")    -- "Normal", or nil for a name nobody defined
+ppuc.adjustment("ball_save_seconds") -- PPUC's own adjustments read the same way
+
+function ppuc.onAdjustmentChanged(name, value)
+  -- an operator changed one in the service menu; PPUC's own included
+end
+```
+
+The kind follows the default: a number (with `min`, `max`, `step`, `unit`), a
+boolean, or a string, which needs `choices`. A definition that does not hold
+together (a default out of range, a choice that is not offered) is a load error
+naming it. The operator's value is kept by name: a game that adds, drops or
+reorders adjustments keeps everything already set, and a narrower range clamps
+a stored value rather than losing it. Defining the same name again, when the
+rules are loaded again, keeps the value.
+
+PPUC's own adjustments are `ball_save_seconds`, `tilt_warnings`,
+`balls_per_game`, `max_players`, `free_play`, `match` and
+`switch_report_games`, each only where it means something; see the handbook.
+
+Machine memory, for what outlives a game — an extra-ball level that adjusts
+itself, a champion's record:
+
+```lua
+ppuc.nvSet("eb_level", 3)            -- a number, a boolean or a string
+ppuc.nvGet("eb_level")               -- 3, or nil
+ppuc.nvSet("eb_level", nil)          -- forgets it
+```
+
+Set as often as you like: the values are written out at most every five
+seconds outside a game, once at the end of a game, and at exit — never during
+one, so no rule can make a frame wait for the stick.
+
+The switch report lists switches that have not changed for a number of games.
+Exclude the ones that may rightly sit still that long:
+
+```lua
+ppuc.excludeFromSwitchReport(5, 6, 77)  -- a coin switch, a wizard-mode target
+```
+
+The coin door and its buttons, the tilt and slam switches and the coin switches
+of a ROM-less game are excluded already.
+
+Without a game folder all of this still works, for the session: adjustments
+read as their defaults and machine memory is forgotten at exit.
 
 ## Playing Sounds
 

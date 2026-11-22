@@ -61,6 +61,13 @@ Repository-local reference documentation:
   PinMAME's output sampling). Nothing on the switch thread may wait for the
   main thread; see "Host threads" in `docs/STACK.md`.
 - `src/ThreadHandoff.h`: the queues the two threads meet in.
+- `src/MachineState.*`, `src/Adjustments.*`, `src/SwitchReport.*`: what a
+  machine keeps in the game folder's `state/` (on a cabinet, the USB stick):
+  the operator's adjustments (PPUC's own and those Lua defines), the rules'
+  machine memory (`ppuc.nvGet/nvSet`), and the switch report. Vendor-neutral,
+  standard library only, written by the main thread only.
+- `src/CoinDoor.*`: who the four coin door buttons belong to, decided on the
+  switch thread before the rules and the engine see them.
 - `src/GameEngine.h`: the engine seam. `GameEngine` (start/stop/update/poll/
   send-switch) and the `GameEngineHost` sink that everything else hangs off.
   Depends on nothing but the standard library, which is what lets `ppuc_tests`

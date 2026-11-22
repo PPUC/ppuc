@@ -42,6 +42,7 @@ flash/
   pup/               PUP video pack
   translite-on.png   the backglass image while a game is running
   translite-off.png  the backglass image in attract mode
+  state/             written by PPUC: adjustments, switch report, machine memory
 ```
 
 Start the machine with the folder, not with a pile of options:
@@ -57,6 +58,11 @@ The folder is produced by the **config tool**, the Drupal application where a
 machine is actually configured. Download it from a game's page as *Download
 Game Folder* and unpack it on the host. `io-boards.yaml` is the same file you
 get from *Download Game Config*, and the two are interchangeable.
+
+`state/` is the one part the config tool does not produce: PPUC writes the
+machine's adjustments, its switch report and what the rules remember there
+(section 5). Unpack a new export over the folder rather than replacing the
+folder, and they stay.
 
 ### Several games on one machine
 
@@ -308,13 +314,43 @@ a menu that silently rewrote it would lose that. To change the defaults, change
 
 ## 5. The service tools
 
-A cabinet has no keyboard in normal use. That is the point: plug one in and the
-machine grows a service menu, unplug it and nothing has changed.
+The service menu is reached from the **coin door**, as on the machine's original
+ROM, or from a keyboard plugged into the host.
+
+**From the coin door:** open the door and press **ENTER** (Begin Test). While
+the menu is up, the four buttons drive it and nothing else — the game never sees
+them:
+
+| button | what it does |
+|---|---|
+| **ENTER** | select; on a value, start changing it, and press again to keep it |
+| **UP** / **DOWN** | move; while a value is being changed, more and less |
+| **ESCAPE** | back — a value being changed is left as it was, a tool goes to the menu, the menu closes |
+
+With the door closed, or the menu closed, the buttons are the game's as always:
+UP and DOWN still change the volume on a WPC with the door open.
+
+The buttons are known for WPC (switches 5 to 8). Other machines name them in
+`ppuc.ini`, as `escape, down, up, enter` — the switch numbers from
+`io-boards.yaml`, 0 for a button the door does not have:
+
+```ini
+[Runtime]
+CoinDoorButtons = 5, 6, 7, 8
+```
+
+Without a door switch (`coinDoorClosedSwitch: 0`) the door counts as open, so
+ENTER always opens the menu. Without a screen for the menu — a machine whose only
+display is a real DMD, such as a ZeDMD — ENTER stays the game's; the menu on the
+DMD itself is not done yet.
+
+**From a keyboard:** plug one in and the machine grows a service menu, unplug it
+and nothing has changed.
 
 | key | what it does |
 |---|---|
 | **SPACE** | open the menu |
-| **cursor keys** | move |
+| **cursor keys** | move; left and right change a value straight away |
 | **ENTER** | select |
 | **ESC** | back — tool to menu, menu to game |
 | **Q** | quit PPUC, only when no menu is open |
@@ -323,7 +359,7 @@ Q is not ESC on purpose. A key that closes a menu in one place and kills the
 machine mid-game in another is the kind of difference nobody remembers with a
 ball in play.
 
-The menu has five entries:
+The menu has these entries:
 
 ### Switch and coil monitor
 
@@ -370,7 +406,7 @@ still works, but the game is running behind it.
 |---|---|
 | **cursor keys** | choose a device |
 | **ENTER** | fire it — a pulse for coils and flashers, on and off for lamps and GI |
-| **A** | walk through every device in turn; A again stops |
+| **A** | walk through every device in turn; A again stops (keyboard only) |
 | **ESC** | leave, which turns everything off and lets the game go |
 
 The switch test needs no cursor: press switches on the machine and watch them
@@ -385,7 +421,71 @@ test during a game never cuts power to the game.
 
 ### Volume
 
-The four levels and the music duck, for this session. See section 4.
+The four levels and the music duck, for this session. See section 4. From the
+coin door, ENTER on a level starts changing it, UP and DOWN change it, and ENTER
+or ESCAPE is done.
+
+### Adjustments
+
+Settings an owner changes at the machine, kept in the game folder's `state/` on
+the USB stick until changed again — across power cycles and a reflash of the SD
+card.
+
+PPUC's own come first, and only those that mean something on this machine:
+
+| adjustment | what it does | there when |
+|---|---|---|
+| Ball save | seconds a drained ball is given back, 0 is off | ball save is configured |
+| Tilt warnings | hits on the bob allowed before the ball tilts | a tilt switch is configured |
+| Balls per game | from the next game on | a ROM-less game |
+| Players | most players in one game | a ROM-less game |
+| Free play | start without credits | a ROM-less game |
+| Match | the match at the end of a game | a ROM-less game |
+| Switch report after | games a switch may sit still before it is reported, 0 is off | always |
+
+Then the game's own, marked *Game:*, which its rules define (section 7): a
+difficulty, a device out of order. A machine with a ROM keeps its game
+adjustments in the ROM's own menu, below.
+
+Their defaults are what the game folder says, so a machine nobody adjusted runs
+exactly as configured. A value somebody changed is drawn in blue, and the line
+below shows the default. **Restore all defaults** at the end undoes everything
+on the list, after asking.
+
+`state/adjustments.txt` lists only what differs from the default, one
+`name = value` per line. Deleting a line puts that adjustment back to its
+default.
+
+### Switch report
+
+The switches that have stopped working, as the original ROM reports them when
+the coin door opens. A switch that has not changed for a number of games
+(*Switch report after*, 10 unless adjusted) is almost always broken — an opto
+whose LED died reads closed forever, a rollover with a bent wire reads open
+forever — and neither stops a game, so nobody notices until a mode cannot be lit
+any more.
+
+- Only switches seen working at least once are listed. A switch that never moved
+  since the report started is far more often one nobody uses than a broken one;
+  the switch test is for checking a machine after setup.
+- A game counts once it has run for 30 seconds.
+- The coin door and its buttons, the tilt and slam switches and the coin
+  switches are never listed: they may rightly sit still for a hundred games. The
+  rules can add more (section 7).
+- A listed switch drops off the moment it changes, so a repaired switch reports
+  itself repaired.
+- **Reset the report** starts every switch from 0 games, after asking.
+
+When the coin door is opened and the report lists anything, the backbox screen
+says so for a few seconds. The menu shows the count beside the entry. The log
+names each switch when it is first listed and at every start.
+
+### ROM service menu
+
+Only on a machine with a ROM. Closes the PPUC menu and opens the ROM's own
+service menu, with its tests, audits and adjustments, on the DMD. The coin door
+buttons are the ROM's until the door is closed; open it again and ENTER brings
+the PPUC menu back.
 
 ### Restart PPUC / Power off
 
@@ -585,6 +685,12 @@ cycling or fading when several colored modes run at once. GI dimming keeps
 working on top of the color. This needs board firmware 0.5.9 or later on every
 board (see [section 9](#9-updating-board-firmware)), and each GI string wired as
 one LED segment.
+
+Rules can also define the game's own **adjustments**, which then appear in the
+service menu (section 5), remember values across power cycles (*machine
+memory*: an extra-ball level that adjusts itself, a champion's name), and take
+switches off the switch report that may rightly sit still for many games. Both
+are kept in the game folder's `state/`.
 
 Written up in [`docs/RULES_AND_EFFECTS.md`](docs/RULES_AND_EFFECTS.md) and
 [`docs/INTERCEPTOR.md`](docs/INTERCEPTOR.md). Flash's multiball is documented

@@ -1,10 +1,14 @@
 #include "LuaRulesEngine.h"
 
+#include "Adjustments.h"
 #include "LuaApiSupport.h"
 #include "LuaGameApi.h"
+#include "MachineState.h"
+#include "SwitchReport.h"
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <utility>
@@ -50,6 +54,8 @@ constexpr const char* kHandlerNames[] = {
     "onCreditsChanged",
     "onBallSaved",
     "onDmdFrame",
+    // An operator changed one of the game's adjustments at the machine.
+    "onAdjustmentChanged",
     // Query handlers: return a boolean.
     "canStartGame",
     "canAddPlayer",
@@ -230,6 +236,11 @@ void LuaRulesEngine::RegisterApi()
   SetPpucFunction(m_lua, this, "isButtonSwitch", LuaIsButtonSwitch);
   SetPpucFunction(m_lua, this, "holdBallSearch", LuaHoldBallSearch);
   SetPpucFunction(m_lua, this, "setGiProgram", LuaSetGiProgram);
+  SetPpucFunction(m_lua, this, "defineAdjustment", LuaDefineAdjustment);
+  SetPpucFunction(m_lua, this, "adjustment", LuaAdjustment);
+  SetPpucFunction(m_lua, this, "nvGet", LuaNvGet);
+  SetPpucFunction(m_lua, this, "nvSet", LuaNvSet);
+  SetPpucFunction(m_lua, this, "excludeFromSwitchReport", LuaExcludeFromSwitchReport);
 
   // Registered only when the ROM-less game is running, so `ppuc.game == nil` is
   // a reliable feature test for a script that must work under either engine.
@@ -371,6 +382,24 @@ bool LuaRulesEngine::CallHandler(const char* name, std::vector<LuaArg> args)
 void LuaRulesEngine::SetGameCore(GameCore* pGameCore) { m_pGameCore = pGameCore; }
 
 void LuaRulesEngine::SetDmdCanvas(DmdCanvas* pCanvas) { m_pDmdCanvas = pCanvas; }
+
+void LuaRulesEngine::SetAdjustments(Adjustments* pAdjustments)
+{
+  std::lock_guard<std::recursive_mutex> lock(m_mutex);
+  m_pAdjustments = pAdjustments;
+}
+
+void LuaRulesEngine::SetMachineMemory(MachineMemory* pMemory)
+{
+  std::lock_guard<std::recursive_mutex> lock(m_mutex);
+  m_pMemory = pMemory;
+}
+
+void LuaRulesEngine::SetSwitchReport(SwitchReport* pReport)
+{
+  std::lock_guard<std::recursive_mutex> lock(m_mutex);
+  m_pSwitchReport = pReport;
+}
 
 void LuaRulesEngine::CallGameHandler(const char* name, std::vector<LuaArg> args)
 {
@@ -1291,6 +1320,258 @@ int LuaRulesEngine::LuaBallSave(lua_State* L)
   {
     engine->m_actionCallback(RulesAction{RulesActionType::GrantBallSave, 0, 0,
                                          static_cast<uint32_t>(luaL_checkinteger(L, 1)), 0, 0});
+  }
+  return 0;
+}
+
+// ---- Adjustments, machine memory, switch report --------------------------
+
+static void PushStateValue(lua_State* L, const StateValue& value)
+{
+  switch (value.type)
+  {
+    case StateValue::Type::Number:
+    {
+      // An integer where it is one, so `== 3` and string.format("%d") behave.
+      if (std::floor(value.number) == value.number && std::fabs(value.number) < 9.0e15)
+      {
+        lua_pushinteger(L, static_cast<lua_Integer>(value.number));
+      }
+      else
+      {
+        lua_pushnumber(L, value.number);
+      }
+      return;
+    }
+    case StateValue::Type::Boolean:
+      lua_pushboolean(L, value.boolean ? 1 : 0);
+      return;
+    case StateValue::Type::String:
+      lua_pushlstring(L, value.text.data(), value.text.size());
+      return;
+  }
+  lua_pushnil(L);
+}
+
+// False for anything but a number, boolean or string.
+static bool ToStateValue(lua_State* L, int index, StateValue* value)
+{
+  switch (lua_type(L, index))
+  {
+    case LUA_TNUMBER:
+      *value = StateValue::Number(lua_tonumber(L, index));
+      return true;
+    case LUA_TBOOLEAN:
+      *value = StateValue::Boolean(lua_toboolean(L, index) != 0);
+      return true;
+    case LUA_TSTRING:
+    {
+      size_t length = 0;
+      const char* text = lua_tolstring(L, index, &length);
+      *value = StateValue::String(std::string(text, length));
+      return true;
+    }
+    default:
+      return false;
+  }
+}
+
+static std::string OptionalStringField(lua_State* L, int table, const char* field)
+{
+  lua_getfield(L, table, field);
+  std::string text;
+  if (lua_type(L, -1) == LUA_TSTRING)
+  {
+    text = lua_tostring(L, -1);
+  }
+  else if (!lua_isnil(L, -1))
+  {
+    lua_pop(L, 1);
+    luaL_error(L, "ppuc.defineAdjustment: '%s' must be a string", field);
+    return {};
+  }
+  lua_pop(L, 1);
+  return text;
+}
+
+static bool OptionalNumberField(lua_State* L, int table, const char* field, double* out)
+{
+  lua_getfield(L, table, field);
+  bool present = false;
+  if (lua_type(L, -1) == LUA_TNUMBER)
+  {
+    *out = lua_tonumber(L, -1);
+    present = true;
+  }
+  else if (!lua_isnil(L, -1))
+  {
+    lua_pop(L, 1);
+    luaL_error(L, "ppuc.defineAdjustment: '%s' must be a number", field);
+    return false;
+  }
+  lua_pop(L, 1);
+  return present;
+}
+
+// ppuc.defineAdjustment{name = "gun_difficulty", label = "Gun difficulty",
+//   default = "Normal", choices = {"Easy", "Normal", "Hard"}, about = "..."}
+// ppuc.defineAdjustment{name = "ball_save", label = "Ball save", default = 6,
+//   min = 0, max = 15, step = 1, unit = "s"}
+// ppuc.defineAdjustment{name = "gun_broken", label = "Gun out of order",
+//   default = false}
+//
+// Returns the value in force: the operator's, or the default. The kind follows
+// from the default: a number, a boolean, or a string (which needs choices).
+int LuaRulesEngine::LuaDefineAdjustment(lua_State* L)
+{
+  auto* engine = FromLua(L);
+  luaL_checktype(L, 1, LUA_TTABLE);
+
+  Adjustments::Definition d;
+  d.name = OptionalStringField(L, 1, "name");
+  d.label = OptionalStringField(L, 1, "label");
+  d.about = OptionalStringField(L, 1, "about");
+  d.unit = OptionalStringField(L, 1, "unit");
+  d.group = "Game";
+  if (d.label.empty())
+  {
+    d.label = d.name;
+  }
+
+  lua_getfield(L, 1, "default");
+  if (!ToStateValue(L, -1, &d.defaultValue))
+  {
+    return luaL_error(L, "ppuc.defineAdjustment: '%s' needs a default (a number, true/false, or a choice)",
+                      d.name.c_str());
+  }
+  lua_pop(L, 1);
+
+  switch (d.defaultValue.type)
+  {
+    case StateValue::Type::Number:
+    {
+      d.kind = Adjustments::Kind::Number;
+      d.min = d.defaultValue.number;
+      d.max = d.defaultValue.number;
+      OptionalNumberField(L, 1, "min", &d.min);
+      OptionalNumberField(L, 1, "max", &d.max);
+      OptionalNumberField(L, 1, "step", &d.step);
+      break;
+    }
+    case StateValue::Type::Boolean:
+      d.kind = Adjustments::Kind::Boolean;
+      break;
+    case StateValue::Type::String:
+    {
+      d.kind = Adjustments::Kind::Choice;
+      lua_getfield(L, 1, "choices");
+      if (lua_istable(L, -1))
+      {
+        const lua_Integer count = static_cast<lua_Integer>(lua_rawlen(L, -1));
+        for (lua_Integer i = 1; i <= count; ++i)
+        {
+          lua_rawgeti(L, -1, i);
+          if (lua_type(L, -1) != LUA_TSTRING)
+          {
+            return luaL_error(L, "ppuc.defineAdjustment: the choices of '%s' must be strings", d.name.c_str());
+          }
+          d.choices.emplace_back(lua_tostring(L, -1));
+          lua_pop(L, 1);
+        }
+      }
+      lua_pop(L, 1);
+      break;
+    }
+  }
+
+  if (engine->m_pAdjustments == nullptr)
+  {
+    if (!engine->m_ownAdjustments) engine->m_ownAdjustments = std::make_unique<Adjustments>();
+    engine->m_pAdjustments = engine->m_ownAdjustments.get();
+  }
+  std::string error;
+  if (!engine->m_pAdjustments->Define(d, &error))
+  {
+    return luaL_error(L, "ppuc.defineAdjustment: %s", error.c_str());
+  }
+  PushStateValue(L, engine->m_pAdjustments->Get(d.name));
+  return 1;
+}
+
+// ppuc.adjustment(name): the value in force, or nil for a name nobody defined.
+// Also reads PPUC's own machine adjustments ("ball_save_seconds", ...).
+int LuaRulesEngine::LuaAdjustment(lua_State* L)
+{
+  auto* engine = FromLua(L);
+  const std::string name = luaL_checkstring(L, 1);
+  if (engine->m_pAdjustments == nullptr || !engine->m_pAdjustments->Has(name))
+  {
+    lua_pushnil(L);
+    return 1;
+  }
+  PushStateValue(L, engine->m_pAdjustments->Get(name));
+  return 1;
+}
+
+// ppuc.nvGet(name): what ppuc.nvSet stored, or nil.
+int LuaRulesEngine::LuaNvGet(lua_State* L)
+{
+  auto* engine = FromLua(L);
+  const std::string name = luaL_checkstring(L, 1);
+  StateValue value;
+  if (engine->m_pMemory == nullptr || !engine->m_pMemory->Get(name, &value))
+  {
+    lua_pushnil(L);
+    return 1;
+  }
+  PushStateValue(L, value);
+  return 1;
+}
+
+// ppuc.nvSet(name, value): a number, a boolean or a string, kept over power
+// cycles; nil forgets it. Written to the USB stick by the main thread, never
+// here: this runs on a rules thread.
+int LuaRulesEngine::LuaNvSet(lua_State* L)
+{
+  auto* engine = FromLua(L);
+  const std::string name = luaL_checkstring(L, 1);
+  if (engine->m_pMemory == nullptr)
+  {
+    if (!engine->m_ownMemory) engine->m_ownMemory = std::make_unique<MachineMemory>();
+    engine->m_pMemory = engine->m_ownMemory.get();
+  }
+  if (lua_isnoneornil(L, 2))
+  {
+    engine->m_pMemory->Remove(name);
+    return 0;
+  }
+  StateValue value;
+  if (!ToStateValue(L, 2, &value))
+  {
+    return luaL_error(L, "ppuc.nvSet: '%s' takes a number, a boolean or a string", name.c_str());
+  }
+  std::string error;
+  if (!engine->m_pMemory->Set(name, value, &error))
+  {
+    return luaL_error(L, "ppuc.nvSet: %s", error.c_str());
+  }
+  return 0;
+}
+
+// ppuc.excludeFromSwitchReport(n, ...): switches that may sit still for many
+// games without being broken -- a coin switch on free play, a service button,
+// a target only a wizard mode uses.
+int LuaRulesEngine::LuaExcludeFromSwitchReport(lua_State* L)
+{
+  auto* engine = FromLua(L);
+  const int count = lua_gettop(L);
+  for (int i = 1; i <= count; ++i)
+  {
+    const int number = static_cast<int>(luaL_checkinteger(L, i));
+    if (engine->m_pSwitchReport != nullptr)
+    {
+      engine->m_pSwitchReport->Ignore(number);
+    }
   }
   return 0;
 }

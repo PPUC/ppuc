@@ -565,6 +565,12 @@ such a queue, not around it. The DMD used to be drawn from the one loop that
 also forwarded switches, and a busy animation or a page flip held every switch
 up behind it.
 
+The coin door buttons are decided on the switch thread too (`src/CoinDoor.*`):
+while the PPUC tools own them, they never reach the rules or the engine. Files
+on the USB stick (adjustments, machine memory, the switch report under the game
+folder's `state/`) are written by the main thread only; a rule's `ppuc.nvSet`
+only changes memory.
+
 **Effect stack**
 
 WS2812 strips are segmented: `WS2812FXEffect::deviceStackScope()` returns the

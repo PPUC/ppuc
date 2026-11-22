@@ -14,6 +14,8 @@
 #include <stdlib.h>
 
 #include <algorithm>
+#include <cmath>
+#include <functional>
 #include <atomic>
 #include <chrono>
 #include <climits>
@@ -57,7 +59,11 @@
 #include "AltSoundCommand.h"
 #include "AttractSlides.h"
 #include "BallTroughWatch.h"
+#include "Adjustments.h"
 #include "BoardFlipperGate.h"
+#include "CoinDoor.h"
+#include "MachineState.h"
+#include "SwitchReport.h"
 #include "HealthLog.h"
 #include "SwitchHold.h"
 #include "ThreadHandoff.h"
@@ -637,6 +643,31 @@ GameCore* g_pGameCore = nullptr;
 // Collected during option handling, loaded once the engine exists.
 std::vector<std::string> g_ruleScripts;
 
+// What the machine keeps on the USB stick, in the game folder's state/ (see
+// MachineState.h): the operator's adjustments, the rules' machine memory and
+// the switch report. Written by the main thread only.
+Adjustments g_adjustments;
+MachineMemory g_machineMemory;
+SwitchReport g_switchReport;
+std::string g_stateDirectory;
+// The four coin door buttons, decided on the switch thread (CoinDoor.h).
+CoinDoorRouter g_coinDoor;
+const char* opt_coin_door_buttons = nullptr;
+// The tools offer the ROM's own service menu only with a ROM, and only with an
+// ENTER to hand to it: a ROM-less game has no menu of its own, and a ROM's menu
+// without its buttons is a screen nobody can leave.
+bool g_romServiceMenuAvailable = false;
+// The configuration as the files say it, before the machine adjustments.
+TiltAssistConfig g_baseTiltAssist;
+BallSaveConfig g_baseBallSave;
+GameConfig g_baseGameConfig;
+bool g_hasGameConfig = false;
+// A game core changed at the machine, for the switch thread to hand over once
+// no game is running: balls per game must not change under the current ball.
+std::mutex g_pendingGameConfigMutex;
+std::unique_ptr<GameConfig> g_pendingGameConfig;
+std::atomic<bool> g_gameConfigPending{false};
+
 // Where the switch thread and the main thread meet. See ThreadHandoff.h and
 // RunSwitchThread().
 //
@@ -649,6 +680,8 @@ struct SwitchUiEvent
 {
   int number;
   uint8_t state;
+  // A coin door button the tools own: the rules and the engine never saw it.
+  bool tools = false;
 };
 HandoffQueue<SwitchUiEvent> g_switchUiEvents;
 // Switches the main thread injects (the keyboard), for the switch thread to
@@ -2329,6 +2362,8 @@ enum class OverlayScreen
     Confirm,
     Tests,
     Test,
+    Adjustments,
+    SwitchReport,
 };
 
 static OverlayScreen g_overlay = OverlayScreen::None;
@@ -2339,6 +2374,8 @@ static OverlayScreen g_overlay = OverlayScreen::None;
 struct HealthNotice
 {
   uint64_t untilMs = 0;
+  // The switch report borrows the same notice when the coin door opens.
+  std::string title = "TOO MANY BUS ERRORS";
   std::string detail;
   std::string hint;
 };
@@ -2979,6 +3016,11 @@ enum class OverlayAction
     // Opening a coil or flasher test while a ball is in play. The confirmation
     // is the same one the two destructive entries use.
     OpenTest,
+    // The ROM's own service menu: the coin door buttons go to the ROM until
+    // the door closes. No confirmation; it ends nothing.
+    RomServiceMenu,
+    ResetAdjustments,
+    ResetSwitchReport,
 };
 
 static int g_menuSelection = 0;
@@ -3015,11 +3057,48 @@ static const OverlayMenuItem kOverlayMenu[] = {
      OverlayAction::None},
     {"Volume", "Adjust levels for this session only", OverlayScreen::Volume, OverlayAction::None},
     {"Tests", "Switches, coils, lamps, GI and flashers", OverlayScreen::Tests, OverlayAction::None},
+    {"Adjustments", "Settings kept on the USB stick", OverlayScreen::Adjustments, OverlayAction::None},
+    {"Switch report", "Switches that stopped changing", OverlayScreen::SwitchReport, OverlayAction::None},
+    {"ROM service menu", "The game's own menu, until the coin door is closed", OverlayScreen::None,
+     OverlayAction::RomServiceMenu},
     {"Restart PPUC", "Stop the game and start it again", OverlayScreen::Confirm, OverlayAction::RestartPpuc},
     {"Power off", "Shut the machine down before switching it off", OverlayScreen::Confirm,
      OverlayAction::PowerOff},
 };
 static constexpr int kOverlayMenuCount = static_cast<int>(sizeof(kOverlayMenu) / sizeof(kOverlayMenu[0]));
+
+
+// The entries this machine has, as indexes into kOverlayMenu.
+static std::vector<int> VisibleOverlayMenu()
+{
+    std::vector<int> items;
+    for (int i = 0; i < kOverlayMenuCount; ++i)
+    {
+        if (kOverlayMenu[i].action == OverlayAction::RomServiceMenu && !g_romServiceMenuAvailable)
+        {
+            continue;
+        }
+        items.push_back(i);
+    }
+    return items;
+}
+
+// The adjustments screen: a list, and one value being edited at a time. A value
+// is edited on a copy and only stored on ENTER, so ESC leaves it as it was --
+// with four buttons and no keyboard, stepping through a value is easy to
+// overshoot, and giving up has to cost nothing.
+static int g_adjustSelection = 0;
+static bool g_adjustEditing = false;
+static StateValue g_adjustEditValue;
+// The switch report screen: the flagged switches, then "reset".
+static int g_reportSelection = 0;
+// Volume, edited the same way when only the coin door buttons are there: ENTER
+// starts and ends, UP and DOWN change it.
+static bool g_volumeEditing = false;
+
+// Defined with the machine state further down; the tools only call them.
+static void OnAdjustmentChanged(const std::string& name);
+static void SaveSwitchReportNow();
 
 // One section of the screen: a background of its own, a heading, and as many
 // columns of rows as fit.
@@ -3671,33 +3750,201 @@ static SDL_FRect DrawOverlayPanel(int w, int h, int rows, const char* title, flo
     return panel;
 }
 
-static void RenderOverlayMenu(int w, int h)
+// How many rows of a list fit on a screen `h` high. A backbox screen can be
+// 480 lines; the panel's heading and help take their share first.
+static int OverlayRowsThatFit(int h)
+{
+    return std::max(3, (h - 24 - kOverlayPanelTop - kOverlayPanelFooter) / kOverlayRowHeight);
+}
+
+// The first row to draw so that `selection` stays in a window of `visible`
+// rows, scrolled as little as possible around the middle.
+static int OverlayFirstRow(int selection, int count, int visible)
+{
+    if (count <= visible)
+    {
+        return 0;
+    }
+    return std::clamp(selection - visible / 2, 0, count - visible);
+}
+
+// One row of a list: the marker, the label, and an optional value on the right.
+static void DrawOverlayRow(const SDL_FRect& panel, int y, bool selected, const char* label, const char* value,
+                           SDL_Color valueColour)
 {
     const SDL_Color white{235, 235, 235, 255};
     const SDL_Color dim{140, 140, 150, 255};
     const SDL_Color amber{255, 200, 70, 255};
-
-    const SDL_FRect panel = DrawOverlayPanel(w, h, kOverlayMenuCount, "PPUC TOOLS");
-
-    for (int i = 0; i < kOverlayMenuCount; ++i)
+    if (selected)
     {
-        const bool selected = i == g_menuSelection;
-        const int y = static_cast<int>(panel.y) + kOverlayPanelTop + i * kOverlayRowHeight;
-        if (selected)
+        SDL_SetRenderDrawColor(g_uiRenderer, 44, 48, 62, 255);
+        const SDL_FRect row{panel.x + 16.0f, static_cast<float>(y) - 6.0f, panel.w - 32.0f, 44.0f};
+        SDL_RenderFillRect(g_uiRenderer, &row);
+    }
+    DrawFirmwareTextLeft(selected ? ">" : " ", pFirmwareFontSmall, static_cast<int>(panel.x) + 32, y,
+                         selected ? amber : dim);
+    DrawFirmwareTextLeft(label, pFirmwareFontSmall, static_cast<int>(panel.x) + 64, y, selected ? white : dim);
+    if (value != nullptr && value[0] != '\0')
+    {
+        DrawFirmwareTextLeft(value, pFirmwareFontSmall, static_cast<int>(panel.x + panel.w) - 280, y, valueColour);
+    }
+}
+
+static void RenderOverlayMenu(int w, int h)
+{
+    const SDL_Color dim{140, 140, 150, 255};
+    const SDL_Color amber{255, 200, 70, 255};
+
+    const std::vector<int> items = VisibleOverlayMenu();
+    const int count = static_cast<int>(items.size());
+    g_menuSelection = std::clamp(g_menuSelection, 0, count - 1);
+    const int visible = std::min(count, OverlayRowsThatFit(h));
+    const int first = OverlayFirstRow(g_menuSelection, count, visible);
+    const SDL_FRect panel = DrawOverlayPanel(w, h, visible, "PPUC TOOLS");
+
+    const size_t flagged = g_switchReport.GetFlagged().size();
+    for (int row = 0; row < visible; ++row)
+    {
+        const int i = first + row;
+        const OverlayMenuItem& item = kOverlayMenu[items[i]];
+        const int y = static_cast<int>(panel.y) + kOverlayPanelTop + row * kOverlayRowHeight;
+        std::string value;
+        // The report says how many switches it has, so it is noticed without
+        // being opened.
+        if (item.opens == OverlayScreen::SwitchReport && flagged != 0)
         {
-            SDL_SetRenderDrawColor(g_uiRenderer, 44, 48, 62, 255);
-            const SDL_FRect row{panel.x + 16.0f, static_cast<float>(y) - 6.0f, panel.w - 32.0f, 44.0f};
-            SDL_RenderFillRect(g_uiRenderer, &row);
+            value = std::to_string(flagged) + (flagged == 1 ? " switch" : " switches");
         }
-        DrawFirmwareTextLeft(selected ? ">" : " ", pFirmwareFontSmall, static_cast<int>(panel.x) + 32, y,
-                             selected ? amber : dim);
-        DrawFirmwareTextLeft(kOverlayMenu[i].label, pFirmwareFontSmall, static_cast<int>(panel.x) + 64, y,
-                             selected ? white : dim);
+        DrawOverlayRow(panel, y, i == g_menuSelection, item.label, value.c_str(), amber);
     }
 
-    const int helpY = static_cast<int>(panel.y) + kOverlayPanelTop + kOverlayMenuCount * kOverlayRowHeight + 12;
-    DrawFirmwareText(kOverlayMenu[g_menuSelection].hint, pFirmwareFontSmall, w / 2, helpY, dim);
-    DrawFirmwareText("cursor keys move    ENTER selects    ESC closes", pFirmwareFontSmall, w / 2, helpY + 40, dim);
+    const int helpY = static_cast<int>(panel.y) + kOverlayPanelTop + visible * kOverlayRowHeight + 12;
+    DrawFirmwareText(kOverlayMenu[items[g_menuSelection]].hint, pFirmwareFontSmall, w / 2, helpY, dim);
+    DrawFirmwareText("up/down move    ENTER selects    ESC closes", pFirmwareFontSmall, w / 2, helpY + 40, dim);
+}
+
+// Every adjustment, the machine's first, then the game's, then a way back to
+// the defaults.
+static void RenderOverlayAdjustments(int w, int h)
+{
+    const SDL_Color white{235, 235, 235, 255};
+    const SDL_Color dim{140, 140, 150, 255};
+    const SDL_Color amber{255, 200, 70, 255};
+    const SDL_Color changed{120, 200, 255, 255};
+
+    const std::vector<Adjustments::Entry> entries = g_adjustments.List();
+    const int count = static_cast<int>(entries.size()) + 1;
+    g_adjustSelection = std::clamp(g_adjustSelection, 0, count - 1);
+    const int visible = std::min(count, OverlayRowsThatFit(h));
+    const int first = OverlayFirstRow(g_adjustSelection, count, visible);
+    const SDL_FRect panel = DrawOverlayPanel(w, h, visible, "ADJUSTMENTS", 900.0f);
+
+    for (int row = 0; row < visible; ++row)
+    {
+        const int i = first + row;
+        const int y = static_cast<int>(panel.y) + kOverlayPanelTop + row * kOverlayRowHeight;
+        const bool selected = i == g_adjustSelection;
+        if (i == count - 1)
+        {
+            DrawOverlayRow(panel, y, selected, "Restore all defaults", nullptr, dim);
+            continue;
+        }
+        const Adjustments::Entry& entry = entries[i];
+        std::string label = entry.definition.label;
+        if (entry.definition.group == "Game")
+        {
+            label = "Game: " + label;
+        }
+        std::string value;
+        SDL_Color colour = selected ? white : dim;
+        if (selected && g_adjustEditing)
+        {
+            value = "< " + Adjustments::Display(entry.definition, g_adjustEditValue) + " >";
+            colour = amber;
+        }
+        else
+        {
+            value = Adjustments::Display(entry.definition, entry.value);
+            // A value somebody changed stands out from the defaults.
+            if (entry.value != entry.definition.defaultValue)
+            {
+                colour = changed;
+            }
+        }
+        DrawOverlayRow(panel, y, selected, label.c_str(), value.c_str(), colour);
+    }
+
+    const int helpY = static_cast<int>(panel.y) + kOverlayPanelTop + visible * kOverlayRowHeight + 12;
+    std::string about = "Factory defaults for everything on this list";
+    if (g_adjustSelection < count - 1)
+    {
+        const Adjustments::Entry& entry = entries[g_adjustSelection];
+        about = entry.definition.about;
+        if (entry.value != entry.definition.defaultValue)
+        {
+            about += (about.empty() ? "" : "  ") + std::string("Default: ") +
+                     Adjustments::Display(entry.definition, entry.definition.defaultValue);
+        }
+    }
+    DrawFirmwareText(about.c_str(), pFirmwareFontSmall, w / 2, helpY, dim);
+    DrawFirmwareText(g_adjustEditing ? "up/down changes    ENTER keeps    ESC cancels"
+                                     : "up/down move    ENTER changes    ESC goes back",
+                     pFirmwareFontSmall, w / 2, helpY + 40, dim);
+}
+
+// The switches that stopped changing, worst first, then a way to start over.
+static void RenderOverlaySwitchReport(int w, int h)
+{
+    const SDL_Color dim{140, 140, 150, 255};
+    const SDL_Color amber{255, 200, 70, 255};
+    const SDL_Color green{70, 210, 100, 255};
+
+    const auto flagged = g_switchReport.GetFlagged();
+    // Nothing to report is a row too, so the screen says so instead of being
+    // empty.
+    const int reportRows = flagged.empty() ? 1 : static_cast<int>(flagged.size());
+    const int count = reportRows + 1;
+    g_reportSelection = std::clamp(g_reportSelection, flagged.empty() ? 1 : 0, count - 1);
+    const int visible = std::min(count, OverlayRowsThatFit(h));
+    const int first = OverlayFirstRow(g_reportSelection, count, visible);
+    const SDL_FRect panel = DrawOverlayPanel(w, h, visible, "SWITCH REPORT", 900.0f);
+
+    char line[160];
+    for (int row = 0; row < visible; ++row)
+    {
+        const int i = first + row;
+        const int y = static_cast<int>(panel.y) + kOverlayPanelTop + row * kOverlayRowHeight;
+        if (i == count - 1)
+        {
+            DrawOverlayRow(panel, y, i == g_reportSelection, "Reset the report", nullptr, dim);
+        }
+        else if (flagged.empty())
+        {
+            DrawFirmwareTextLeft("No switch needs checking", pFirmwareFontSmall, static_cast<int>(panel.x) + 64, y,
+                                 green);
+        }
+        else
+        {
+            const SwitchReport::Flagged& entry = flagged[i];
+            snprintf(line, sizeof(line), "%d  %s", entry.number, entry.description.c_str());
+            const std::string games = std::to_string(entry.idleGames) + " games";
+            DrawOverlayRow(panel, y, i == g_reportSelection, line, games.c_str(), amber);
+        }
+    }
+
+    const int helpY = static_cast<int>(panel.y) + kOverlayPanelTop + visible * kOverlayRowHeight + 12;
+    const uint32_t threshold = g_switchReport.GetThresholdGames();
+    if (threshold == 0)
+    {
+        snprintf(line, sizeof(line), "Off: see Switch report after in Adjustments");
+    }
+    else
+    {
+        snprintf(line, sizeof(line), "%u games counted, listed after %u without a change",
+                 g_switchReport.GetGamesCounted(), threshold);
+    }
+    DrawFirmwareText(line, pFirmwareFontSmall, w / 2, helpY, dim);
+    DrawFirmwareText("up/down move    ENTER selects    ESC goes back", pFirmwareFontSmall, w / 2, helpY + 40, dim);
 }
 
 static void RenderOverlayVolume(int w, int h)
@@ -3739,13 +3986,14 @@ static void RenderOverlayVolume(int w, int h)
 
         snprintf(line, sizeof(line), "%3u%%", static_cast<unsigned>(g_runtimeVolumes[i]));
         DrawFirmwareTextLeft(line, pFirmwareFontSmall, static_cast<int>(barX + barW) + 20, y,
-                             selected ? white : dim);
+                             selected ? (g_volumeEditing ? amber : white) : dim);
     }
 
     const int helpY = static_cast<int>(panel.y) + kOverlayPanelTop + 4 * kOverlayRowHeight + 12;
     DrawFirmwareText("this session only -- ppuc.ini is not changed", pFirmwareFontSmall, w / 2, helpY, dim);
-    DrawFirmwareText("up/down chooses    left/right adjusts    ESC goes back", pFirmwareFontSmall, w / 2, helpY + 40,
-                     dim);
+    DrawFirmwareText(g_volumeEditing ? "up/down adjusts    ENTER or ESC done"
+                                     : "up/down chooses    left/right or ENTER adjusts    ESC goes back",
+                     pFirmwareFontSmall, w / 2, helpY + 40, dim);
 }
 
 // Closing gives the screen back to whatever had it.
@@ -3899,6 +4147,10 @@ static const char* PendingActionLabel()
             return "Power off the machine?";
         case OverlayAction::OpenTest:
             return "A game is in progress. Open this test?";
+        case OverlayAction::ResetAdjustments:
+            return "Restore every adjustment to its default?";
+        case OverlayAction::ResetSwitchReport:
+            return "Reset the switch report?";
         default:
             return "Are you sure?";
     }
@@ -3925,6 +4177,14 @@ static void RenderOverlayConfirm(int w, int h)
         // ball somewhere on the playfield.
         consequence = "The game freezes and coils fire. It resumes when you leave.";
     }
+    else if (g_pendingAction == OverlayAction::ResetAdjustments)
+    {
+        consequence = "Everything set at the machine is undone.";
+    }
+    else if (g_pendingAction == OverlayAction::ResetSwitchReport)
+    {
+        consequence = "Every switch starts again from 0 games.";
+    }
     DrawFirmwareText(consequence, pFirmwareFontSmall, w / 2, static_cast<int>(panel.y) + 136, dim);
 
     // No on the left, and selected to begin with: the harmless answer is the
@@ -3944,7 +4204,7 @@ static void RenderOverlayConfirm(int w, int h)
         DrawFirmwareTextLeft(options[i], pFirmwareFontSmall, x, y, selected ? (i == 1 ? amber : white) : dim);
     }
 
-    DrawFirmwareText("left/right chooses    ENTER confirms    ESC goes back", pFirmwareFontSmall, w / 2,
+    DrawFirmwareText("up/down chooses    ENTER confirms    ESC goes back", pFirmwareFontSmall, w / 2,
                      static_cast<int>(panel.y + panel.h) - 46, dim);
 }
 
@@ -3980,14 +4240,114 @@ static void PerformPendingAction()
             }
             return;
         }
+        case OverlayAction::ResetAdjustments:
+        {
+            g_pendingAction = OverlayAction::None;
+            printf("PPUC: every adjustment restored to its default from the tools menu\n");
+            for (const Adjustments::Entry& entry : g_adjustments.List())
+            {
+                if (entry.value != entry.definition.defaultValue)
+                {
+                    g_adjustments.ResetToDefault(entry.definition.name);
+                    OnAdjustmentChanged(entry.definition.name);
+                }
+            }
+            g_overlay = OverlayScreen::Adjustments;
+            return;
+        }
+        case OverlayAction::ResetSwitchReport:
+            g_pendingAction = OverlayAction::None;
+            printf("PPUC: switch report reset from the tools menu\n");
+            g_switchReport.Reset();
+            SaveSwitchReportNow();
+            g_switchReport.TakeDirty();
+            g_overlay = OverlayScreen::SwitchReport;
+            return;
         default:
             return;
     }
     running = false;
 }
 
+// Where a confirmation goes back to when the answer is no.
+static OverlayScreen ConfirmOrigin()
+{
+    switch (g_pendingAction)
+    {
+        case OverlayAction::OpenTest:
+            return OverlayScreen::Tests;
+        case OverlayAction::ResetAdjustments:
+            return OverlayScreen::Adjustments;
+        case OverlayAction::ResetSwitchReport:
+            return OverlayScreen::SwitchReport;
+        default:
+            return OverlayScreen::Menu;
+    }
+}
+
+static void AskToConfirm(OverlayAction action)
+{
+    g_pendingAction = action;
+    g_confirmYes = false;
+    g_overlay = OverlayScreen::Confirm;
+}
+
+// The ROM's own service menu: the tools close, ENTER is pressed on the ROM's
+// behalf -- the press that opened the tools never reached it -- and the buttons
+// stay the ROM's until the coin door is closed.
+static void EnterRomServiceMenu()
+{
+    const int enter = g_coinDoor.Buttons().numbers[CoinDoorButtons::Enter];
+    CloseOverlay();
+    g_coinDoor.SetPassthrough(true);
+    g_coinDoor.SetToolsOpen(false);
+    if (enter != 0)
+    {
+        g_injectedSwitches.Push({enter, 1});
+        g_injectedSwitches.Push({enter, 0});
+    }
+    printf("PPUC: the coin door buttons are the ROM's until the coin door is closed\n");
+}
+
+// The adjustment the selection is on, or empty on the "restore" row.
+static std::string SelectedAdjustmentName()
+{
+    const std::vector<Adjustments::Entry> entries = g_adjustments.List();
+    if (g_adjustSelection < 0 || g_adjustSelection >= static_cast<int>(entries.size()))
+    {
+        return {};
+    }
+    return entries[g_adjustSelection].definition.name;
+}
+
+static void StepAdjustmentEdit(int direction)
+{
+    const std::string name = SelectedAdjustmentName();
+    if (name.empty())
+    {
+        return;
+    }
+    if (!g_adjustEditing)
+    {
+        g_adjustEditing = true;
+        g_adjustEditValue = g_adjustments.Get(name);
+    }
+    g_adjustEditValue = g_adjustments.Stepped(name, g_adjustEditValue, direction);
+}
+
+static void StepVolume(int step)
+{
+    const int level = std::clamp(static_cast<int>(g_runtimeVolumes[g_volumeSelection]) + step, 0, 100);
+    g_runtimeVolumes[g_volumeSelection] = static_cast<uint8_t>(level);
+    ApplyRuntimeVolumes();
+}
+
 // True when the key was the overlay's business, so the game bindings below it
 // never see a keystroke meant for a menu.
+//
+// The coin door buttons arrive here too, as ESC, UP, DOWN and ENTER: every
+// screen can be used with those four alone. Where the keyboard has LEFT and
+// RIGHT to change a value, ENTER starts changing it and UP and DOWN do the rest.
 static bool HandleOverlayKey(SDL_Keycode key)
 {
     if (g_overlay == OverlayScreen::None)
@@ -4017,6 +4377,21 @@ static bool HandleOverlayKey(SDL_Keycode key)
                 CloseServiceTest();
                 g_overlay = OverlayScreen::Tests;
             }
+            else if (g_overlay == OverlayScreen::Adjustments && g_adjustEditing)
+            {
+                // Cancelled: the stored value never changed.
+                g_adjustEditing = false;
+            }
+            else if (g_overlay == OverlayScreen::Volume && g_volumeEditing)
+            {
+                g_volumeEditing = false;
+            }
+            else if (g_overlay == OverlayScreen::Confirm)
+            {
+                g_overlay = ConfirmOrigin();
+                g_pendingTestIndex = -1;
+                g_pendingAction = OverlayAction::None;
+            }
             else
             {
                 if (g_overlay == OverlayScreen::Monitor)
@@ -4033,11 +4408,43 @@ static bool HandleOverlayKey(SDL_Keycode key)
             const int delta = key == SDLK_UP ? -1 : 1;
             if (g_overlay == OverlayScreen::Menu)
             {
-                g_menuSelection = (g_menuSelection + delta + kOverlayMenuCount) % kOverlayMenuCount;
+                const int count = static_cast<int>(VisibleOverlayMenu().size());
+                g_menuSelection = (g_menuSelection + delta + count) % count;
             }
             else if (g_overlay == OverlayScreen::Volume)
             {
-                g_volumeSelection = (g_volumeSelection + delta + kVolumeCount) % kVolumeCount;
+                if (g_volumeEditing)
+                {
+                    StepVolume(-delta * 5);
+                }
+                else
+                {
+                    g_volumeSelection = (g_volumeSelection + delta + kVolumeCount) % kVolumeCount;
+                }
+            }
+            else if (g_overlay == OverlayScreen::Adjustments)
+            {
+                if (g_adjustEditing)
+                {
+                    // UP is more, as on every coin door.
+                    StepAdjustmentEdit(-delta);
+                }
+                else
+                {
+                    const int count = static_cast<int>(g_adjustments.List().size()) + 1;
+                    g_adjustSelection = (g_adjustSelection + delta + count) % count;
+                }
+            }
+            else if (g_overlay == OverlayScreen::SwitchReport)
+            {
+                const int flagged = static_cast<int>(g_switchReport.GetFlagged().size());
+                const int count = (flagged == 0 ? 1 : flagged) + 1;
+                g_reportSelection = (g_reportSelection + delta + count) % count;
+                if (flagged == 0)
+                {
+                    // Only the reset row can be chosen.
+                    g_reportSelection = count - 1;
+                }
             }
             else if (g_overlay == OverlayScreen::Monitor && !g_coilMonitorEntries.empty())
             {
@@ -4068,6 +4475,11 @@ static bool HandleOverlayKey(SDL_Keycode key)
                 g_confirmYes = key == SDLK_RIGHT;
                 return true;
             }
+            if (g_overlay == OverlayScreen::Adjustments)
+            {
+                StepAdjustmentEdit(key == SDLK_RIGHT ? 1 : -1);
+                return true;
+            }
             if (g_overlay == OverlayScreen::Test && !g_serviceTest.rows.empty())
             {
                 const int count = static_cast<int>(g_serviceTest.rows.size());
@@ -4091,10 +4503,7 @@ static bool HandleOverlayKey(SDL_Keycode key)
             {
                 return true;
             }
-            const int step = key == SDLK_LEFT ? -5 : 5;
-            const int level = std::clamp(static_cast<int>(g_runtimeVolumes[g_volumeSelection]) + step, 0, 100);
-            g_runtimeVolumes[g_volumeSelection] = static_cast<uint8_t>(level);
-            ApplyRuntimeVolumes();
+            StepVolume(key == SDLK_LEFT ? -5 : 5);
             return true;
         }
 
@@ -4102,9 +4511,59 @@ static bool HandleOverlayKey(SDL_Keycode key)
         case SDLK_KP_ENTER:
             if (g_overlay == OverlayScreen::Menu)
             {
-                g_pendingAction = kOverlayMenu[g_menuSelection].action;
+                const std::vector<int> items = VisibleOverlayMenu();
+                const OverlayMenuItem& item = kOverlayMenu[items[std::clamp(g_menuSelection, 0,
+                                                                            static_cast<int>(items.size()) - 1)]];
+                if (item.action == OverlayAction::RomServiceMenu)
+                {
+                    EnterRomServiceMenu();
+                    return true;
+                }
+                g_pendingAction = item.action;
                 g_confirmYes = false;
-                g_overlay = kOverlayMenu[g_menuSelection].opens;
+                g_adjustEditing = false;
+                g_volumeEditing = false;
+                g_overlay = item.opens;
+            }
+            else if (g_overlay == OverlayScreen::Volume)
+            {
+                g_volumeEditing = !g_volumeEditing;
+            }
+            else if (g_overlay == OverlayScreen::Adjustments)
+            {
+                const std::string name = SelectedAdjustmentName();
+                if (name.empty())
+                {
+                    AskToConfirm(OverlayAction::ResetAdjustments);
+                }
+                else if (!g_adjustEditing)
+                {
+                    g_adjustEditing = true;
+                    g_adjustEditValue = g_adjustments.Get(name);
+                }
+                else
+                {
+                    g_adjustEditing = false;
+                    const StateValue before = g_adjustments.Get(name);
+                    std::string error;
+                    if (!g_adjustments.Set(name, g_adjustEditValue, nullptr, &error))
+                    {
+                        printf("PPUC: %s\n", error.c_str());
+                    }
+                    else if (g_adjustments.Get(name) != before)
+                    {
+                        OnAdjustmentChanged(name);
+                    }
+                }
+            }
+            else if (g_overlay == OverlayScreen::SwitchReport)
+            {
+                const int flagged = static_cast<int>(g_switchReport.GetFlagged().size());
+                const int count = (flagged == 0 ? 1 : flagged) + 1;
+                if (g_reportSelection == count - 1)
+                {
+                    AskToConfirm(OverlayAction::ResetSwitchReport);
+                }
             }
             else if (g_overlay == OverlayScreen::Monitor)
             {
@@ -4124,13 +4583,12 @@ static bool HandleOverlayKey(SDL_Keycode key)
                 {
                     PerformPendingAction();
                 }
-                else if (g_pendingAction == OverlayAction::OpenTest)
+                else
                 {
-                    // Said no to a test: back to the list it was chosen from,
-                    // not out to the menu.
+                    // Said no: back to where it was asked from.
+                    g_overlay = ConfirmOrigin();
                     g_pendingTestIndex = -1;
                     g_pendingAction = OverlayAction::None;
-                    g_overlay = OverlayScreen::Tests;
                     return true;
                 }
                 if (g_overlay == OverlayScreen::Confirm)
@@ -4153,6 +4611,71 @@ static bool HandleOverlayKey(SDL_Keycode key)
             // menu.
             return true;
     }
+}
+
+// A coin door button the switch thread gave the tools (CoinDoor.h). Only the
+// presses: a release means nothing to a menu.
+static void HandleCoinDoorButton(int number, uint8_t state)
+{
+    if (state == 0)
+    {
+        return;
+    }
+    const int button = g_coinDoor.Buttons().ButtonFor(number);
+    if (g_overlay == OverlayScreen::None)
+    {
+        if (button == CoinDoorButtons::Enter)
+        {
+            printf("PPUC: tools menu opened from the coin door\n");
+            g_menuSelection = 0;
+            g_overlay = OverlayScreen::Menu;
+        }
+        return;
+    }
+    static const SDL_Keycode kKeys[CoinDoorButtons::Count] = {SDLK_ESCAPE, SDLK_DOWN, SDLK_UP, SDLK_RETURN};
+    if (button >= 0 && button < CoinDoorButtons::Count)
+    {
+        HandleOverlayKey(kKeys[button]);
+    }
+}
+
+static SDL_Window* OverlayHostWindow();
+
+// Whether the tools have a screen to appear on: a backglass, a translite, or
+// any display SDL can open a window on, the virtual DMD's included.
+//
+// TODO: a machine whose only display is a real DMD (a ZeDMD, a PIN2DMD) has
+// none, and keeps ENTER for the game. The tools would need drawing at 128x32
+// or 256x64 into libdmdutil for those.
+static bool ToolsHaveScreen()
+{
+    if (opt_no_display)
+    {
+        return false;
+    }
+    if (OverlayHostWindow() != nullptr)
+    {
+        return true;
+    }
+    static int s_displays = -1;
+    if (s_displays < 0)
+    {
+        s_displays = 0;
+        if (SDL_InitSubSystem(SDL_INIT_VIDEO))
+        {
+            int count = 0;
+            SDL_DisplayID* displays = SDL_GetDisplays(&count);
+            SDL_free(displays);
+            s_displays = count;
+            SDL_QuitSubSystem(SDL_INIT_VIDEO);
+        }
+        if (s_displays == 0 && g_coinDoor.Buttons().Any())
+        {
+            printf("PPUC: no screen for the tools, so the coin door's ENTER stays the game's "
+                   "(the tools on a DMD alone are still to do)\n");
+        }
+    }
+    return s_displays > 0;
 }
 
 // Draws the current tool into `renderer`, and nothing else: no clear unless
@@ -4202,6 +4725,14 @@ static void DrawOverlayInto(SDL_Renderer* renderer, int w, int h, bool clearFirs
     else if (g_overlay == OverlayScreen::Confirm)
     {
         RenderOverlayConfirm(w, h);
+    }
+    else if (g_overlay == OverlayScreen::Adjustments)
+    {
+        RenderOverlayAdjustments(w, h);
+    }
+    else if (g_overlay == OverlayScreen::SwitchReport)
+    {
+        RenderOverlaySwitchReport(w, h);
     }
 }
 
@@ -5369,6 +5900,328 @@ static void ServiceNvramSave(GameEngine* pEngine)
   pEngine->SaveNvram(kNvramSaveIdleMs);
 }
 
+// ---- The machine's state on the USB stick ----------------------------------
+//
+// Adjustments, machine memory and the switch report live in the game folder's
+// state/ (MachineState.h). Everything here runs on the main thread: a file write
+// with its flush can take a USB stick tens of milliseconds, and the switch
+// thread must never wait for one.
+
+static const char* const kAdjustmentsFile = "adjustments.txt";
+static const char* const kMachineMemoryFile = "memory.txt";
+static const char* const kSwitchReportFile = "switch-report.txt";
+// The rules may set machine memory as often as they like. Outside a game it is
+// written at most this often; during one, only once the game is over, so a
+// rule cannot make the screens wait for the stick mid-ball.
+static constexpr uint64_t kMachineMemoryWriteMs = 5000;
+static uint64_t g_machineMemoryWriteAtMs = 0;
+static bool g_machineMemoryPending = false;
+static bool g_lastGameInProgressForState = false;
+
+static std::string StateFilePath(const char* file)
+{
+  if (g_stateDirectory.empty())
+  {
+    return {};
+  }
+  return (std::filesystem::path(g_stateDirectory) / file).string();
+}
+
+static void LoadStateFile(const char* file, const std::function<void(const StateEntries&)>& apply)
+{
+  const std::string path = StateFilePath(file);
+  std::string content;
+  std::string error;
+  // A file that is not there is a machine that never kept anything yet.
+  if (path.empty() || !MachineState::ReadFile(path, &content, &error))
+  {
+    return;
+  }
+  int bad = 0;
+  apply(MachineState::Parse(content, &bad));
+  if (bad != 0)
+  {
+    printf("PPUC: skipped %d unreadable line(s) in %s\n", bad, path.c_str());
+  }
+}
+
+static void WriteStateFile(const char* file, const StateEntries& entries, const char* header)
+{
+  const std::string path = StateFilePath(file);
+  if (path.empty())
+  {
+    return;
+  }
+  std::string error;
+  if (!MachineState::WriteFileAtomically(path, MachineState::Format(entries, header), &error))
+  {
+    printf("PPUC: could not save %s: %s\n", file, error.c_str());
+  }
+}
+
+static void SaveAdjustmentsNow()
+{
+  WriteStateFile(kAdjustmentsFile, g_adjustments.Save(),
+                 "PPUC adjustments, as set at the machine. Only values that differ from\n"
+                 "the default are listed; delete a line to go back to the default.");
+}
+
+static void SaveSwitchReportNow()
+{
+  WriteStateFile(kSwitchReportFile, g_switchReport.Save(),
+                 "PPUC switch report: games counted, and per switch seen working the\n"
+                 "games it has sat through since it last changed.");
+}
+
+static void SaveMachineMemoryNow()
+{
+  WriteStateFile(kMachineMemoryFile, g_machineMemory.Save(),
+                 "PPUC machine memory: what the game's rules keep (ppuc.nvSet).");
+}
+
+static void SetUpMachineState()
+{
+  g_stateDirectory = MachineState::StateDirectory(HasOptionValue(opt_game_folder) ? opt_game_folder : "");
+  if (g_stateDirectory.empty())
+  {
+    printf("PPUC: no game folder, so adjustments, machine memory and the switch report last only this session\n");
+    return;
+  }
+  LoadStateFile(kAdjustmentsFile, [](const StateEntries& entries) { g_adjustments.Load(entries); });
+  LoadStateFile(kMachineMemoryFile, [](const StateEntries& entries) { g_machineMemory.Load(entries); });
+  LoadStateFile(kSwitchReportFile, [](const StateEntries& entries) { g_switchReport.Load(entries); });
+  printf("PPUC: machine state in %s\n", g_stateDirectory.c_str());
+}
+
+static void DefineMachineNumber(const char* name, const char* label, const char* about, double defaultValue, double min,
+                                double max, const char* unit)
+{
+  Adjustments::Definition d;
+  d.name = name;
+  d.label = label;
+  d.about = about;
+  d.group = "Machine";
+  d.kind = Adjustments::Kind::Number;
+  d.min = min;
+  d.max = max;
+  d.step = 1;
+  d.unit = unit;
+  d.defaultValue = StateValue::Number(std::clamp(defaultValue, min, max));
+  std::string error;
+  if (!g_adjustments.Define(d, &error))
+  {
+    printf("PPUC: %s\n", error.c_str());
+  }
+}
+
+static void DefineMachineFlag(const char* name, const char* label, const char* about, bool defaultValue)
+{
+  Adjustments::Definition d;
+  d.name = name;
+  d.label = label;
+  d.about = about;
+  d.group = "Machine";
+  d.kind = Adjustments::Kind::Boolean;
+  d.defaultValue = StateValue::Boolean(defaultValue);
+  std::string error;
+  if (!g_adjustments.Define(d, &error))
+  {
+    printf("PPUC: %s\n", error.c_str());
+  }
+}
+
+// PPUC's own adjustments, for what PPUC does whatever the game: only those that
+// mean something on this machine. The defaults are what the game folder's files
+// say, so a machine nobody adjusted runs exactly as configured.
+static void DefineMachineAdjustments()
+{
+  if (g_playfieldAssistEnabled && g_baseBallSave.enabled)
+  {
+    DefineMachineNumber("ball_save_seconds", "Ball save", "How long a drained ball is given back. 0 turns it off.",
+                        std::round(g_baseBallSave.durationMs / 1000.0), 0, 30, "s");
+  }
+  if (g_playfieldAssistEnabled && !g_baseTiltAssist.switches.empty())
+  {
+    DefineMachineNumber("tilt_warnings", "Tilt warnings", "Hits on the tilt bob allowed before the ball tilts.",
+                        g_baseTiltAssist.warnings, 0, 5, "");
+  }
+  if (g_hasGameConfig)
+  {
+    DefineMachineNumber("balls_per_game", "Balls per game", "Takes effect with the next game.",
+                        g_baseGameConfig.ballsPerGame, 1, 10, "");
+    DefineMachineNumber("max_players", "Players", "Most players one game can have.", g_baseGameConfig.maxPlayers, 1,
+                        std::max<int>(1, g_baseGameConfig.maxPlayers), "");
+    DefineMachineFlag("free_play", "Free play", "Start without credits.", g_baseGameConfig.freePlay);
+    DefineMachineFlag("match", "Match", "The match at the end of a game.", g_baseGameConfig.match.enabled);
+  }
+  DefineMachineNumber("switch_report_games", "Switch report after",
+                      "Games a switch may sit still before it is reported. 0 turns the report off.", 10, 0, 50,
+                      "games");
+}
+
+// The machine adjustments into what they adjust. Returns the game core's
+// configuration as adjusted; at startup the caller hands it to the engine, later
+// it goes to the switch thread, which applies it between games.
+static GameConfig ApplyMachineAdjustments(bool startup)
+{
+  if (g_playfieldAssistEnabled)
+  {
+    TiltAssistConfig tilt = g_baseTiltAssist;
+    BallSaveConfig ballSave = g_baseBallSave;
+    if (g_adjustments.Has("tilt_warnings"))
+    {
+      tilt.warnings = static_cast<uint8_t>(g_adjustments.GetNumber("tilt_warnings", tilt.warnings));
+    }
+    if (g_adjustments.Has("ball_save_seconds"))
+    {
+      const double seconds = g_adjustments.GetNumber("ball_save_seconds", ballSave.durationMs / 1000.0);
+      ballSave.enabled = seconds > 0;
+      ballSave.durationMs = static_cast<uint32_t>(seconds * 1000.0);
+    }
+    std::lock_guard<std::mutex> lock(g_playfieldAssistMutex);
+    g_playfieldAssist.SetTiltConfig(tilt);
+    g_playfieldAssist.SetBallSaveConfig(ballSave);
+  }
+  g_switchReport.SetThresholdGames(static_cast<uint32_t>(g_adjustments.GetNumber("switch_report_games", 10)));
+
+  GameConfig game = g_baseGameConfig;
+  if (g_hasGameConfig)
+  {
+    game.ballsPerGame = static_cast<uint8_t>(g_adjustments.GetNumber("balls_per_game", game.ballsPerGame));
+    game.maxPlayers = static_cast<uint8_t>(g_adjustments.GetNumber("max_players", game.maxPlayers));
+    game.freePlay = g_adjustments.GetBoolean("free_play", game.freePlay);
+    game.match.enabled = g_adjustments.GetBoolean("match", game.match.enabled);
+    if (!startup)
+    {
+      std::lock_guard<std::mutex> lock(g_pendingGameConfigMutex);
+      g_pendingGameConfig = std::make_unique<GameConfig>(game);
+      g_gameConfigPending.store(true, std::memory_order_release);
+    }
+  }
+  return game;
+}
+
+// An adjustment changed at the machine: into effect, onto the stick, and to the
+// rules.
+static void OnAdjustmentChanged(const std::string& name)
+{
+  ApplyMachineAdjustments(false);
+  SaveAdjustmentsNow();
+  g_adjustments.TakeDirty();
+  const StateValue value = g_adjustments.Get(name);
+  printf("PPUC: adjustment %s = %s\n", name.c_str(), g_adjustments.Display(name).c_str());
+  if (pLuaRulesEngine)
+  {
+    switch (value.type)
+    {
+      case StateValue::Type::Number:
+        if (std::floor(value.number) == value.number)
+        {
+          pLuaRulesEngine->CallGameHandler("onAdjustmentChanged", {name, static_cast<long long>(value.number)});
+        }
+        else
+        {
+          pLuaRulesEngine->CallGameHandler("onAdjustmentChanged", {name, value.number});
+        }
+        break;
+      case StateValue::Type::Boolean:
+        pLuaRulesEngine->CallGameHandler("onAdjustmentChanged", {name, value.boolean});
+        break;
+      case StateValue::Type::String:
+        pLuaRulesEngine->CallGameHandler("onAdjustmentChanged", {name, value.text});
+        break;
+    }
+  }
+}
+
+// The switches the report watches, and those it must not: the coin door and its
+// buttons, the tilt and slam switches, coins. All of them can sit still for a
+// hundred games on a machine that is perfectly fine.
+static void SetUpSwitchReport()
+{
+  if (pPpuc == nullptr)
+  {
+    return;
+  }
+  for (const PPUCSwitch& sw : pPpuc->GetSwitches())
+  {
+    g_switchReport.Track(sw.number, sw.description);
+  }
+  std::vector<int> ignored;
+  ignored.push_back(pPpuc->GetCoinDoorClosedSwitch());
+  for (const int number : g_coinDoor.Buttons().numbers) ignored.push_back(number);
+  for (const int number : g_baseTiltAssist.switches) ignored.push_back(number);
+  for (const int number : g_baseTiltAssist.slamSwitches) ignored.push_back(number);
+  if (g_hasGameConfig)
+  {
+    for (const int number : g_baseGameConfig.coinSwitches) ignored.push_back(number);
+    ignored.push_back(g_baseGameConfig.serviceCreditSwitch);
+  }
+  for (const int number : ignored)
+  {
+    if (number != 0)
+    {
+      g_switchReport.Ignore(number);
+    }
+  }
+
+  const auto flagged = g_switchReport.GetFlagged();
+  if (!flagged.empty())
+  {
+    printf("PPUC: switch report: %zu switch(es) to check\n", flagged.size());
+    for (const auto& entry : flagged)
+    {
+      printf("PPUC:   switch %d (%s): no change in %u games\n", entry.number, entry.description.c_str(),
+             entry.idleGames);
+    }
+  }
+}
+
+// Main loop: games for the switch report, and whatever is waiting to be written.
+// `force` at exit writes everything still pending.
+static void ServiceMachineState(bool force)
+{
+  const uint64_t nowMs = SDL_GetTicks();
+  const bool gameRunning = g_gameInProgress.load(std::memory_order_acquire);
+  bool gameEnded = false;
+  if (gameRunning != g_lastGameInProgressForState)
+  {
+    g_lastGameInProgressForState = gameRunning;
+    if (gameRunning)
+    {
+      g_switchReport.NoteGameStarted(nowMs);
+    }
+    else
+    {
+      gameEnded = true;
+      for (const auto& entry : g_switchReport.NoteGameEnded(nowMs))
+      {
+        printf("PPUC: switch report: switch %d (%s) has not changed in %u games\n", entry.number,
+               entry.description.c_str(), entry.idleGames);
+      }
+    }
+  }
+
+  if (g_adjustments.TakeDirty())
+  {
+    SaveAdjustmentsNow();
+  }
+  if ((gameEnded || force) && g_switchReport.TakeDirty())
+  {
+    SaveSwitchReportNow();
+  }
+  if (g_machineMemory.TakeDirty())
+  {
+    g_machineMemoryPending = true;
+  }
+  if (g_machineMemoryPending && (force || gameEnded || (!gameRunning && nowMs >= g_machineMemoryWriteAtMs)))
+  {
+    SaveMachineMemoryNow();
+    g_machineMemoryPending = false;
+    g_machineMemoryWriteAtMs = nowMs + kMachineMemoryWriteMs;
+  }
+}
+
 // Every switch state the ROM engine is told about goes through here, so that a
 // state stays long enough for the ROM to accept it. See SwitchHold.h.
 //
@@ -5769,7 +6622,7 @@ static void DrawHealthNoticeInto(SDL_Renderer* renderer, int w, int h, bool clea
         widest = lineW;
     }
     const SDL_FRect panel =
-        DrawOverlayPanel(w, h, 2, "TOO MANY BUS ERRORS", static_cast<float>(widest) + 64.0f);
+        DrawOverlayPanel(w, h, 2, g_healthNotice.title.c_str(), static_cast<float>(widest) + 64.0f);
     int y = static_cast<int>(panel.y) + kOverlayPanelTop;
     DrawFirmwareText(g_healthNotice.detail.c_str(), pFirmwareFontLarge, w / 2, y, amber);
     y += kOverlayRowHeight;
@@ -5924,6 +6777,10 @@ static void NoteSongPickerSwitch(int, uint8_t) {}
 static void ServiceSongPicker() {}
 static void ReleaseSlideTexture() {}
 static bool HandleOverlayKey(SDL_Keycode) { return false; }
+// TODO: the tools have no screen on this path, so the coin door's ENTER stays
+// the game's.
+static void HandleCoinDoorButton(int, uint8_t) {}
+static bool ToolsHaveScreen() { return false; }
 static void CloseFirmwareScreen() {}
 struct FirmwareScreen
 {
@@ -6297,6 +7154,7 @@ static void ServiceHealthLog(bool busUp)
   if (reason == HealthSchedule::Reason::TooManyErrors)
   {
     g_healthNotice.untilMs = nowMs + kHealthNoticeMs;
+    g_healthNotice.title = "TOO MANY BUS ERRORS";
     g_healthNotice.detail = std::to_string(g_healthSchedule->ErrorsInWindow()) + " in the last minute";
     g_healthNotice.hint = "Details are in the PPUC log";
   }
@@ -7693,17 +8551,49 @@ static bool VirtualDmdYieldsToOverlay(SDL_Window* dmdWindow)
 }
 #endif
 
+// What a WPC shows when its coin door is opened: the switches to check. For a
+// few seconds on the backbox screen, so whoever opened the door for something
+// else learns of them too; the full list is in the tools.
+static void NoteSwitchReportCoinDoor(int number, uint8_t state)
+{
+  const int doorSwitch = pPpuc != nullptr ? pPpuc->GetCoinDoorClosedSwitch() : 0;
+  if (doorSwitch == 0 || number != doorSwitch || state != 0)
+  {
+    return;
+  }
+  const size_t flagged = g_switchReport.GetFlagged().size();
+  if (flagged == 0)
+  {
+    return;
+  }
+  printf("PPUC: coin door opened, switch report: %zu switch(es) to check\n", flagged);
+  g_healthNotice.title = "SWITCH REPORT";
+  g_healthNotice.detail = std::to_string(flagged) + (flagged == 1 ? " switch to check" : " switches to check");
+  g_healthNotice.hint = g_coinDoor.Buttons().numbers[CoinDoorButtons::Enter] != 0 && ToolsHaveScreen()
+                            ? "ENTER opens the PPUC tools"
+                            : "See Switch report in the PPUC tools";
+  g_healthNotice.untilMs = SDL_GetTicks() + 8000;
+}
+
 // The main thread's half of a switch change: what it means to the screens,
 // the buttons that steer them, and the coin door the NVRAM and the health log
 // watch. The switch thread has already passed the change to the rules and the
 // engine; nothing here can hold that up.
-static void HandleSwitchOnMainThread(int number, uint8_t newSwitchState)
+static void HandleSwitchOnMainThread(int number, uint8_t newSwitchState, bool forTools)
 {
   // Before any suppression: the screen answers what the machine is
   // doing, not what the engine was told about it.
   NoteSwitchMonitorState(number, newSwitchState);
   NoteNvramCoinDoorSwitch(number, newSwitchState);
   NoteHealthCoinDoorSwitch(number, newSwitchState);
+  g_switchReport.NoteChange(number);
+  NoteSwitchReportCoinDoor(number, newSwitchState);
+  if (forTools)
+  {
+    // A coin door button the tools own. Nothing below is about buttons.
+    HandleCoinDoorButton(number, newSwitchState);
+    return;
+  }
   // The slideshow. The two navigation buttons steer it; the other
   // buttons take it down.
   //
@@ -7955,8 +8845,28 @@ static void RunSwitchThread(GameEngine* pEngine, BallSearchRunner& ballSearchRun
       const int number = switchState->number;
       const uint8_t newSwitchState = switchState->state == 0 ? 0 : 1;
       delete switchState;
+      // The coin door buttons first: while the tools own them, the rules and
+      // the engine must not see them at all.
+      if (g_coinDoor.OnSwitch(number, newSwitchState) == CoinDoorRouter::Route::Tools)
+      {
+        g_switchUiEvents.Push(SwitchUiEvent{number, newSwitchState, true});
+        continue;
+      }
       HandleSwitchOnSwitchThread(pEngine, ballSearchRunner, ballSearchDelayMs, number, newSwitchState);
       g_switchUiEvents.Push(SwitchUiEvent{number, newSwitchState});
+    }
+
+    // The game core as adjusted at the machine, once no game is running.
+    if (engineHere && g_gameConfigPending.load(std::memory_order_acquire) && g_pGameCore != nullptr &&
+        g_pGameCore->IsAttract())
+    {
+      std::lock_guard<std::mutex> lock(g_pendingGameConfigMutex);
+      if (g_pendingGameConfig)
+      {
+        g_pGameCore->SetConfig(*g_pendingGameConfig);
+        g_pendingGameConfig.reset();
+      }
+      g_gameConfigPending.store(false, std::memory_order_release);
     }
 
     ApplyBoardFlipperChange(pPpuc, g_boardFlipperGate.Update(BoardFlipperGateNowMs()));
@@ -8371,6 +9281,8 @@ int main(int argc, char** argv)
           opt_coil_hold_frames = static_cast<uint8_t>(atoi(value.c_str()));
         else if (key == "CloseCoinDoor")
           opt_close_coin_door = ParseIniBool(value);
+        else if (key == "CoinDoorButtons")
+          opt_coin_door_buttons = DuplicateOptionalIniString(value);
         else if (key == "HardReset")
           opt_hard_reset = ParseIniBool(value);
         else if (key == "NvramSave")
@@ -9051,7 +9963,38 @@ int main(int argc, char** argv)
                BallSaveStartName(g_playfieldAssist.GetBallSaveConfig().startOn));
       }
     }
+    g_baseTiltAssist = tiltAssist;
+    g_baseBallSave = ballSave;
   }
+
+  // The coin door buttons: [Runtime] CoinDoorButtons, else what the platform's
+  // door has. Without them ENTER cannot open the tools; SPACE still does.
+  {
+    CoinDoorButtons buttons = CoinDoorButtons::ForPlatform(pPpuc->GetPlatform());
+    if (HasOptionValue(opt_coin_door_buttons))
+    {
+      std::string buttonsError;
+      if (!CoinDoorButtons::Parse(opt_coin_door_buttons, &buttons, &buttonsError))
+      {
+        printf("[Runtime] CoinDoorButtons: %s\n", buttonsError.c_str());
+        return 1;
+      }
+    }
+    g_coinDoor.Configure(buttons, pPpuc->GetCoinDoorClosedSwitch());
+    if (buttons.Any())
+    {
+      printf("Coin door buttons: %s; with the door open ENTER opens the PPUC tools\n", buttons.Describe().c_str());
+    }
+  }
+
+  // Adjustments, machine memory and the switch report from the USB stick, and
+  // the machine adjustments into the configuration before anything uses it.
+  g_romServiceMenuAvailable = !useScriptEngine && g_coinDoor.Buttons().numbers[CoinDoorButtons::Enter] != 0;
+  g_baseGameConfig = g_gameConfig;
+  g_hasGameConfig = useScriptEngine && g_gameConfig.enabled;
+  SetUpMachineState();
+  DefineMachineAdjustments();
+  g_gameConfig = ApplyMachineAdjustments(true);
 
   if (opt_rom)
   {
@@ -9611,6 +10554,9 @@ int main(int argc, char** argv)
   {
     pLuaRulesEngine = std::make_unique<LuaRulesEngine>();
     pLuaRulesEngine->SetDebug(opt_debug || opt_debug_effects);
+    pLuaRulesEngine->SetAdjustments(&g_adjustments);
+    pLuaRulesEngine->SetMachineMemory(&g_machineMemory);
+    pLuaRulesEngine->SetSwitchReport(&g_switchReport);
     pLuaRulesEngine->SetSwitchGroups(pPpuc->GetSwitchGroups());
     pLuaRulesEngine->SetActionCallback(
         [](const RulesAction& action)
@@ -10227,6 +11173,9 @@ int main(int argc, char** argv)
     }
   }
 
+  // After the rules: they may exclude switches of their own.
+  SetUpSwitchReport();
+
   // Rules-injected switches go to whichever engine is running.
   g_interceptorOutputs.sendSwitch = [&pEngine](int number, uint8_t state)
   { SendSwitchToEngine(pEngine.get(), number, state); };
@@ -10379,14 +11328,19 @@ int main(int argc, char** argv)
       g_switchUiEvents.TakeAll(switchUiBatch);
       for (const SwitchUiEvent& change : switchUiBatch)
       {
-        HandleSwitchOnMainThread(change.number, change.state);
+        HandleSwitchOnMainThread(change.number, change.state, change.tools);
       }
       g_mainThreadTasks.RunAll();
+      // Whatever the switches and the keyboard did to the tools, for the next
+      // coin door button the switch thread decides about.
+      g_coinDoor.SetToolsOpen(g_overlay != OverlayScreen::None);
+      g_coinDoor.SetToolsAvailable(ToolsHaveScreen());
       if (opt_nvram_save)
       {
         ServiceNvramSave(pEngine.get());
       }
       ServiceHealthLog(!opt_no_serial);
+      ServiceMachineState(false);
       stallWatch.Phase("switches");
 
       // Runs in both loop phases, before the readiness gate: the engine has its
@@ -10741,6 +11695,9 @@ int main(int argc, char** argv)
     // Before anything below tears down what it uses: the engine, libppuc.
     switchThreadStop.store(true, std::memory_order_release);
     switchThread.join();
+    // Both exits below: the rules cannot write machine memory any more, and
+    // the emergency one skips everything after it.
+    ServiceMachineState(true);
 
     if (shutdown_requested && opt_serum)
     {
