@@ -198,8 +198,8 @@ void Layout::CollectVars(std::vector<std::string>* playerVars, std::vector<std::
 bool Facts::operator==(const Facts& other) const
 {
   return hasGame == other.hasGame && inGame == other.inGame && players == other.players && current == other.current &&
-         ball == other.ball && credits == other.credits && scores == other.scores && playerVars == other.playerVars &&
-         ballVars == other.ballVars;
+         ball == other.ball && credits == other.credits && freePlay == other.freePlay && scores == other.scores &&
+         playerVars == other.playerVars && ballVars == other.ballVars;
 }
 
 void Feed::SetVars(std::vector<std::string> playerVars, std::vector<std::string> ballVars)
@@ -319,6 +319,7 @@ std::vector<std::pair<std::string, std::string>> DiffFacts(const Facts& before, 
   if (after.current != before.current) put("current", after.current);
   if (after.ball != before.ball) put("ball", after.ball);
   if (after.credits != before.credits) put("credits", after.credits);
+  if (after.freePlay != before.freePlay) put("freeplay", after.freePlay ? 1 : 0);
   for (size_t i = 0; i < after.scores.size(); ++i)
   {
     if (after.scores[i] != before.scores[i])
@@ -510,6 +511,11 @@ static std::string SourceText(const Source& source, const std::string& list, con
     return FormatScore(static_cast<uint64_t>(value < 0 ? 0 : value));
   }
   return std::to_string(value);
+}
+
+const std::string& FieldText(const Field& field, const Snapshot& snapshot)
+{
+  return snapshot.facts.freePlay && !field.freePlayText.empty() ? field.freePlayText : field.text;
 }
 
 std::string ExpandText(const std::string& text, const Layout& layout, const Snapshot& snapshot)

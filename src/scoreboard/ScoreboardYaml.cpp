@@ -140,6 +140,7 @@ Field ReadField(const YAML::Node& node)
   field.style = ReadString(node, "style", "burnt");
   field.text = ReadString(node, "text", "");
   field.format = ReadString(node, "format", field.format);
+  field.freePlayText = ReadString(node, "free_play", "");
 
   if (field.type == Field::Type::Icons)
   {

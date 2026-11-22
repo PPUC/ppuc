@@ -9028,6 +9028,7 @@ static void PublishScoreboardFacts()
   facts.current = game.GetCurrentPlayer();
   facts.ball = game.GetCurrentBall();
   facts.credits = game.GetCredits();
+  facts.freePlay = game.GetConfig().freePlay;
   for (uint8_t p = 1; p <= 4; ++p)
   {
     facts.scores[p - 1] = p <= facts.players ? game.GetScore(p) : 0;

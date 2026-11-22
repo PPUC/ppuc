@@ -232,6 +232,33 @@ TEST_CASE("scoreboard: PUP CustomPos for the window")
   CHECK(PupCustomPos(layout, 2, 2560, 1080) == "2,25.000,5.000,50.000,66.667");
 }
 
+TEST_CASE("scoreboard: a field can say Free Play instead of a credit count")
+{
+  Field credits;
+  credits.type = Field::Type::Text;
+  credits.text = "Credits {credits}";
+  credits.freePlayText = "Free Play";
+  Layout layout;
+  Snapshot snapshot;
+  snapshot.facts.credits = 0;
+  CHECK(ExpandText(FieldText(credits, snapshot), layout, snapshot) == "Credits 0");
+  snapshot.facts.freePlay = true;
+  CHECK(ExpandText(FieldText(credits, snapshot), layout, snapshot) == "Free Play");
+  // A field without a free play text says what it always says.
+  Field ball;
+  ball.text = "Ball {ball}";
+  snapshot.facts.ball = 2;
+  CHECK(ExpandText(FieldText(ball, snapshot), layout, snapshot) == "Ball 2");
+
+  // It is a fact like any other: recorded, and a change is a change.
+  Facts before, after;
+  after.freePlay = true;
+  CHECK(before != after);
+  const auto changes = DiffFacts(before, after, layout);
+  REQUIRE(changes.size() == 1);
+  CHECK(changes[0] == std::make_pair(std::string("freeplay"), std::string("1")));
+}
+
 TEST_CASE("scoreboard: a recorded game reads back")
 {
   Callout callout;

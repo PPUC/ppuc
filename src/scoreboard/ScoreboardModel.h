@@ -90,6 +90,9 @@ struct Field
   std::string style = "burnt";
 
   std::string text;  // Text
+  // Text: shown instead of `text` while the machine is on free play, where a
+  // credit count means nothing ("Free Play" rather than "Credits 0").
+  std::string freePlayText;
   // OtherScores: one entry, "{n}" the player, "{score}" the score.
   std::string format = "P{n}  {score}";
 
@@ -243,6 +246,7 @@ struct Facts
   uint8_t current = 0;
   uint8_t ball = 0;
   uint16_t credits = 0;
+  bool freePlay = false;  // no credits needed: "Credits 0" would mislead
   std::array<uint64_t, 4> scores{0, 0, 0, 0};
   // In the order of the layout's CollectVars().
   std::vector<int64_t> playerVars;
@@ -314,6 +318,9 @@ bool ParseTimelineCallout(const std::string& spec, Callout* out);
 // current, ball, credits, ingame, score1..4, var.<name>, ballvar.<name>.
 std::vector<std::pair<std::string, std::string>> DiffFacts(const Facts& before, const Facts& after,
                                                            const Layout& layout);
+
+// What a Text field says now, before its {placeholders} are filled in.
+const std::string& FieldText(const Field& field, const Snapshot& snapshot);
 
 // "12450000" -> "12,450,000".
 std::string FormatScore(uint64_t score);

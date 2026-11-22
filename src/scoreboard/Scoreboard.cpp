@@ -511,6 +511,7 @@ void Board::DrawBoard(int w, int h, const Snapshot& snapshot, bool fillWindow, u
       const int px = PixelSize(field.size);
       Prepare("0123456789,PS ", field.style, px);
       Prepare(field.text, field.style, px);
+      Prepare(field.freePlayText, field.style, px);
       Prepare(field.format, field.style, px);
       for (const auto& [name, items] : m_layout.lists)
         for (const std::string& item : items) Prepare(item, field.style, px);
@@ -544,7 +545,8 @@ void Board::DrawBoard(int w, int h, const Snapshot& snapshot, bool fillWindow, u
     switch (field.type)
     {
       case Field::Type::Text:
-        DrawText(ExpandText(field.text, m_layout, snapshot), field.style, px, x, y, field.align, field.width * sx);
+        DrawText(ExpandText(FieldText(field, snapshot), m_layout, snapshot), field.style, px, x, y, field.align,
+                 field.width * sx);
         break;
       case Field::Type::CurrentScore:
         if (featured > 0)

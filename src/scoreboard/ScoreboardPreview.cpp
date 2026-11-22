@@ -13,6 +13,7 @@
 //   --ball-var name=N   a ball variable
 //   --set name=text     a value the rules would set with ppuc.scoreboardSet
 //   --attract           as after a game, no game running
+//   --free-play         the machine runs free play
 //   --scene picture     shown in the window, standing in for a video frame
 //   --callout text      a callout, drawn as it is --callout-at ms after it
 //                       started (default 400: just landed)
@@ -123,6 +124,8 @@ bool Apply(const TimelineEvent& event, const Layout& layout, Snapshot* snapshot,
     facts.ball = static_cast<uint8_t>(number);
   else if (w == "credits")
     facts.credits = static_cast<uint16_t>(number);
+  else if (w == "freeplay")
+    facts.freePlay = number != 0;
   else if (w == "ingame")
     facts.inGame = number != 0;
   else if (w.size() == 6 && w.compare(0, 5, "score") == 0 && w[5] >= '1' && w[5] <= '4')
@@ -157,7 +160,7 @@ static int Usage()
 {
   std::fprintf(stderr,
                "usage: ppuc-scoreboard-preview <game folder> <out.png> [--size WxH] [--players N] [--current P]\n"
-               "       [--ball B] [--credits C] [--score P=N] [--var name=N] [--ball-var name=N]\n"
+               "       [--ball B] [--credits C] [--free-play] [--score P=N] [--var name=N] [--ball-var name=N]\n"
                "       [--set name=text] [--attract] [--scene picture]\n"
                "       [--callout text] [--callout-at ms] [--effect pop|fade|slide|shake] [--spot name]\n"
                "       [--replay timeline --frames folder [--fps n] [--transparent]]\n");
@@ -244,6 +247,8 @@ int main(int argc, char** argv)
       snapshot.values[name] = value;
     else if (arg == "--attract")
       facts.inGame = false;
+    else if (arg == "--free-play")
+      facts.freePlay = true;
     else if (arg == "--scene" && hasValue)
       scene = argv[++i];
     else if (arg == "--callout" && hasValue)
@@ -384,8 +389,9 @@ int main(int argc, char** argv)
     std::fflush(stdout);
     IMG_SavePNG(surface, outPath.c_str());
     // On stderr: stdout may be the video.
-    std::fprintf(stderr, "replayed %zu changes into %d frames at %d fps in %s (%.1f s to draw and save)\n", events.size(), frame,
-                fps, toStdout ? "stdout" : framesDir.c_str(), (SDL_GetTicksNS() - started) / 1e9);
+    std::fprintf(stderr, "replayed %zu changes into %d frames at %d fps in %s (%.1f s to draw and save)\n",
+                 events.size(), frame, fps, toStdout ? "stdout" : framesDir.c_str(),
+                 (SDL_GetTicksNS() - started) / 1e9);
     board.Unload();
     SDL_DestroyRenderer(renderer);
     SDL_DestroySurface(surface);

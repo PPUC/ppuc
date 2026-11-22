@@ -797,6 +797,9 @@ scoreboard:
   `ppuc.scoreboardSet`. `{player.rank:ranks}` turns a number into a name from
   a list. A name that means nothing shows as nothing.
 - **when** is `always`, `game` or `attract`.
+- **free_play** on a text: what it says instead while the machine runs free
+  play, `{type: text, text: "Credits {credits}", free_play: "Free Play"}`,
+  so the sign does not say "Credits 0" on a machine that needs none.
 - A style's **shadow** is drawn under its letters, offset down and right:
   `opacity` 0 to 1, `offset` and `softness` as parts of the letter size,
   `color`. It is made once with the letters, like the scorch, so it costs a
