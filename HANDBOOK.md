@@ -818,6 +818,12 @@ ppuc-scoreboard-preview /path/to/game out.png --players 3 --current 2 \
 `--callout "SILVER BULLET" --callout-at 120 --effect shake` shows a callout
 as it is 120 ms after it started, to check how one moves frame by frame.
 
+`--replay timeline.txt --frames folder` draws a whole recorded game, one PNG
+per frame, callouts moving and all; ffmpeg makes a video of it. A timeline
+has one change per line (`17840 value.mode Car Chase`, `28600 callout
+text=PROMOTED|effect=pop`); wpc-re's scenario runner writes one from the Lua
+game in its simulator.
+
 It also prints the PUP `CustomPos` that puts a video exactly into the window.
 Make the scene videos the window's size (1280x720 for the layout above) and
 they play without being scaled, which is the cheapest thing the screen can do.

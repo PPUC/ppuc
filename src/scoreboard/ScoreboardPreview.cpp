@@ -19,10 +19,25 @@
 //   --callout-at ms
 //   --effect name       pop, fade, slide, shake
 //   --spot name         a callout spot of the layout (default center)
+//   --replay timeline   plays a recorded game instead: one PNG per frame
+//   --frames folder     where the replay's frames go (frame00001.png, ...)
+//   --fps n             replay frame rate (default 30)
+//   --transparent       leave the window see-through, to lay the frames over
+//                       a video afterwards
+//
+// A timeline has one change per line, "<ms> <what> <value>", in time order:
+//   0     players 2          current, ball, credits, ingame (0/1) alike
+//   1200  score1 5000000     score1..score4
+//   1300  var.bullets 3      a player variable; ballvar.<name> a ball one
+//   1300  value.mode Car Chase
+//   1400  callout text=SILVER BULLET|effect=slide|spot=center|priority=2|ms=1500
 //
 // Prints the PUP CustomPos that puts a video into the window.
 
 #include <cstdio>
+#include <fstream>
+#include <sstream>
+#include <vector>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -45,13 +60,140 @@ static bool SplitAssign(const char* text, std::string* name, std::string* value)
   return !name->empty();
 }
 
+namespace
+{
+
+struct TimelineEvent
+{
+  uint64_t ms = 0;
+  std::string what;
+  std::string value;
+};
+
+bool ReadTimeline(const std::string& path, std::vector<TimelineEvent>* out, std::string* error)
+{
+  std::ifstream in(path);
+  if (!in)
+  {
+    *error = path + ": cannot read";
+    return false;
+  }
+  std::string line;
+  int lineNo = 0;
+  while (std::getline(in, line))
+  {
+    ++lineNo;
+    if (line.empty() || line[0] == '#') continue;
+    std::istringstream fields(line);
+    TimelineEvent event;
+    if (!(fields >> event.ms >> event.what))
+    {
+      *error = path + " line " + std::to_string(lineNo) + ": expected '<ms> <what> <value>'";
+      return false;
+    }
+    std::getline(fields, event.value);
+    const size_t start = event.value.find_first_not_of(' ');
+    event.value = start == std::string::npos ? std::string() : event.value.substr(start);
+    out->push_back(event);
+  }
+  return true;
+}
+
+// "text=SILVER BULLET|effect=slide|spot=low|priority=2|ms=1500"
+bool ParseCallout(const std::string& spec, Callout* out)
+{
+  Callout callout;
+  std::stringstream parts(spec);
+  std::string part;
+  while (std::getline(parts, part, '|'))
+  {
+    const size_t eq = part.find('=');
+    if (eq == std::string::npos) return false;
+    const std::string key = part.substr(0, eq);
+    const std::string value = part.substr(eq + 1);
+    if (key == "text")
+      callout.text = value;
+    else if (key == "spot")
+      callout.spot = value;
+    else if (key == "style")
+      callout.style = value;
+    else if (key == "size")
+      callout.size = std::atoi(value.c_str());
+    else if (key == "ms")
+      callout.durationMs = static_cast<uint32_t>(std::atoi(value.c_str()));
+    else if (key == "priority")
+      callout.priority = std::atoi(value.c_str());
+    else if (key == "effect")
+    {
+      if (!Callout::ParseEffect(value, &callout.effect)) return false;
+    }
+    else
+      return false;
+  }
+  *out = callout;
+  return !callout.text.empty();
+}
+
+void SetVar(const std::vector<std::string>& names, std::vector<int64_t>* values, const std::string& name,
+            int64_t value)
+{
+  for (size_t i = 0; i < names.size(); ++i)
+    if (names[i] == name) (*values)[i] = value;
+}
+
+// One timeline change, applied to what the board shows. False for a line
+// that means nothing.
+bool Apply(const TimelineEvent& event, const Layout& layout, Snapshot* snapshot, Board* board)
+{
+  Facts& facts = snapshot->facts;
+  const int64_t number = std::strtoll(event.value.c_str(), nullptr, 10);
+  const std::string& w = event.what;
+  if (w == "players")
+    facts.players = static_cast<uint8_t>(number);
+  else if (w == "current")
+    facts.current = static_cast<uint8_t>(number);
+  else if (w == "ball")
+    facts.ball = static_cast<uint8_t>(number);
+  else if (w == "credits")
+    facts.credits = static_cast<uint16_t>(number);
+  else if (w == "ingame")
+    facts.inGame = number != 0;
+  else if (w.size() == 6 && w.compare(0, 5, "score") == 0 && w[5] >= '1' && w[5] <= '4')
+    facts.scores[w[5] - '1'] = static_cast<uint64_t>(number < 0 ? 0 : number);
+  else if (w.compare(0, 4, "var.") == 0)
+    SetVar(layout.playerVarNames, &facts.playerVars, w.substr(4), number);
+  else if (w.compare(0, 8, "ballvar.") == 0)
+    SetVar(layout.ballVarNames, &facts.ballVars, w.substr(8), number);
+  else if (w.compare(0, 6, "value.") == 0)
+  {
+    if (event.value.empty())
+      snapshot->values.erase(w.substr(6));
+    else
+      snapshot->values[w.substr(6)] = event.value;
+  }
+  else if (w == "callout")
+  {
+    Callout callout;
+    if (!ParseCallout(event.value, &callout)) return false;
+    board->StartCallout(callout, event.ms);
+    return true;
+  }
+  else
+    return false;
+  ++snapshot->version;
+  return true;
+}
+
+}  // namespace
+
 static int Usage()
 {
   std::fprintf(stderr,
                "usage: ppuc-scoreboard-preview <game folder> <out.png> [--size WxH] [--players N] [--current P]\n"
                "       [--ball B] [--credits C] [--score P=N] [--var name=N] [--ball-var name=N]\n"
                "       [--set name=text] [--attract] [--scene picture]\n"
-               "       [--callout text] [--callout-at ms] [--effect pop|fade|slide|shake] [--spot name]\n");
+               "       [--callout text] [--callout-at ms] [--effect pop|fade|slide|shake] [--spot name]\n"
+               "       [--replay timeline --frames folder [--fps n] [--transparent]]\n");
   return 2;
 }
 
@@ -87,6 +229,10 @@ int main(int argc, char** argv)
   Callout callout;
   bool hasCallout = false;
   uint64_t calloutAt = 400;
+  std::string replayPath;
+  std::string framesDir;
+  int fps = 30;
+  bool transparent = false;
 
   for (int i = 3; i < argc; ++i)
   {
@@ -146,6 +292,14 @@ int main(int argc, char** argv)
     }
     else if (arg == "--spot" && hasValue)
       callout.spot = argv[++i];
+    else if (arg == "--replay" && hasValue)
+      replayPath = argv[++i];
+    else if (arg == "--frames" && hasValue)
+      framesDir = argv[++i];
+    else if (arg == "--fps" && hasValue)
+      fps = std::max(1, std::atoi(argv[++i]));
+    else if (arg == "--transparent")
+      transparent = true;
     else
       return Usage();
   }
@@ -194,6 +348,66 @@ int main(int argc, char** argv)
     // SDL batches draw calls; without this the time below is only the batching.
     SDL_FlushRenderer(renderer);
   };
+  if (!replayPath.empty())
+  {
+    std::vector<TimelineEvent> events;
+    if (!ReadTimeline(replayPath, &events, &error))
+    {
+      std::fprintf(stderr, "%s\n", error.c_str());
+      return 1;
+    }
+    if (framesDir.empty())
+    {
+      std::fprintf(stderr, "--replay needs --frames\n");
+      return 2;
+    }
+    std::filesystem::create_directories(framesDir);
+    // A replay starts from nothing: no game, the timeline says what there is.
+    snapshot = Snapshot{};
+    snapshot.facts.hasGame = true;
+    snapshot.facts.playerVars.assign(layout.playerVarNames.size(), 0);
+    snapshot.facts.ballVars.assign(layout.ballVarNames.size(), 0);
+    const uint64_t endMs = events.empty() ? 0 : events.back().ms + 2500;
+    size_t next = 0;
+    int frame = 0;
+    const uint64_t started = SDL_GetTicksNS();
+    for (uint64_t t = 0; t <= endMs; t = static_cast<uint64_t>(++frame) * 1000 / fps)
+    {
+      while (next < events.size() && events[next].ms <= t)
+      {
+        if (!Apply(events[next], layout, &snapshot, &board))
+        {
+          std::fprintf(stderr, "%s: cannot use '%s %s'\n", replayPath.c_str(), events[next].what.c_str(),
+                       events[next].value.c_str());
+        }
+        ++next;
+      }
+      if (transparent)
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+      else
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+      SDL_RenderClear(renderer);
+      board.Draw(width, height, snapshot, !transparent, t);
+      SDL_FlushRenderer(renderer);
+      char name[32];
+      std::snprintf(name, sizeof(name), "frame%05d.png", frame + 1);
+      if (!IMG_SavePNG(surface, (std::filesystem::path(framesDir) / name).string().c_str()))
+      {
+        std::fprintf(stderr, "%s: %s\n", name, SDL_GetError());
+        return 1;
+      }
+    }
+    IMG_SavePNG(surface, outPath.c_str());
+    std::printf("replayed %zu changes into %d frames at %d fps in %s (%.1f s to draw and save)\n", events.size(),
+                frame, fps, framesDir.c_str(), (SDL_GetTicksNS() - started) / 1e9);
+    board.Unload();
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroySurface(surface);
+    TTF_Quit();
+    SDL_Quit();
+    return 0;
+  }
+
   if (hasCallout) board.StartCallout(callout, 0);
   const uint64_t started = SDL_GetTicksNS();
   drawFrame();
