@@ -31,8 +31,8 @@ struct Source
   {
     None,
     Ball,
-    Player,       // the current player's number, 1-4
-    Players,      // how many are playing
+    Player,   // the current player's number, 1-4
+    Players,  // how many are playing
     Credits,
     Score,        // the current player's score
     PlayerScore,  // `index` 1-4
@@ -310,7 +310,10 @@ int FeaturedPlayer(const Snapshot& snapshot);
 std::vector<uint32_t> DecodeUtf8(const std::string& text);
 
 // For the PUP pack: the screen position that puts a video exactly in the
-// window, as PUP's CustomPos wants it ("screen,x%,y%,w%,h%").
-std::string PupCustomPos(const Layout& layout, int pupScreen);
+// window, as PUP's CustomPos wants it ("screen,x%,y%,w%,h%"). PUP counts in
+// parts of the whole screen, so on a screen of another shape than the board
+// (screenW x screenH, a 21:9 monitor) the window sits elsewhere: the board is
+// drawn as large as fits, in the middle. 0 x 0: a screen of the board's shape.
+std::string PupCustomPos(const Layout& layout, int pupScreen, int screenW = 0, int screenH = 0);
 
 }  // namespace scoreboard

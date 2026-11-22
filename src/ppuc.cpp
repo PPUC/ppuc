@@ -6650,6 +6650,19 @@ static bool DrawScoreboardInto(SDL_Renderer* renderer, int w, int h, bool fillWi
         g_scoreboardBoard.StartCallout(callout, nowMs);
     }
     g_scoreboardBoard.Draw(w, h, g_scoreboardSnapshot, fillWindow, nowMs);
+    // A screen of another shape than the board (a 21:9 monitor) puts the scene
+    // window elsewhere in PUP's terms, so the pack's CustomPos must say so.
+    static int reportedW = 0, reportedH = 0;
+    const scoreboard::Layout& layout = g_scoreboardBoard.GetLayout();
+    if ((w != reportedW || h != reportedH) &&
+        static_cast<int64_t>(w) * layout.height != static_cast<int64_t>(h) * layout.width)
+    {
+        reportedW = w;
+        reportedH = h;
+        printf("Scoreboard: the screen is %dx%d, not of the board's shape (%dx%d); the board is centred with black "
+               "bars, and the PUP scene screen wants CustomPos %s\n",
+               w, h, layout.width, layout.height, scoreboard::PupCustomPos(layout, 2, w, h).c_str());
+    }
     return true;
 }
 

@@ -1,6 +1,5 @@
-#include "doctest.h"
-
 #include "RulesFixture.h"
+#include "doctest.h"
 #include "scoreboard/BurnEffect.h"
 #include "scoreboard/ScoreboardModel.h"
 
@@ -227,6 +226,10 @@ TEST_CASE("scoreboard: PUP CustomPos for the window")
   layout.windowW = 1280;
   layout.windowH = 720;
   CHECK(PupCustomPos(layout, 2) == "2,16.667,5.000,66.667,66.667");
+  CHECK(PupCustomPos(layout, 2, 1920, 1080) == "2,16.667,5.000,66.667,66.667");
+  // A 21:9 screen: the board is 1920 wide in the middle of 2560, so the
+  // window moves right by 320 and is narrower in parts of the screen.
+  CHECK(PupCustomPos(layout, 2, 2560, 1080) == "2,25.000,5.000,50.000,66.667");
 }
 
 TEST_CASE("scoreboard: UTF-8")
@@ -380,7 +383,7 @@ TEST_CASE("scoreboard: a jackpot is not cut short by the next switch")
   CHECK_FALSE(CalloutReplaces(jackpot, 500, points));
   CHECK(CalloutReplaces(jackpot, 5000, points));  // it is over
   CHECK(CalloutReplaces(points, 500, jackpot));
-  CHECK(CalloutReplaces(points, 500, points));    // equal: the newest wins
+  CHECK(CalloutReplaces(points, 500, points));  // equal: the newest wins
 }
 
 TEST_CASE("scoreboard: callouts queue for the drawing thread, a few at most")

@@ -179,7 +179,6 @@ static bool Coverage(TTF_Font* font, const char* utf8, std::vector<uint8_t>* out
   return true;
 }
 
-
 static std::string EncodeUtf8(uint32_t cp)
 {
   std::string s;
@@ -270,8 +269,8 @@ void Board::DrawText(const std::string& text, const std::string& style, int pixe
   }
 }
 
-void Board::DrawPosed(const std::string& text, const std::string& style, int pixelSize, float cx, float cy,
-                      float scale, float alpha)
+void Board::DrawPosed(const std::string& text, const std::string& style, int pixelSize, float cx, float cy, float scale,
+                      float alpha)
 {
   Face* face = GetFace(style, pixelSize);
   if (face == nullptr || text.empty() || alpha <= 0.0f) return;
@@ -408,6 +407,45 @@ bool Board::MakeLogo(int pixelSize, std::string* pError)
 void Board::Draw(int w, int h, const Snapshot& snapshot, bool fillWindow, uint64_t nowMs)
 {
   if (m_renderer == nullptr || w <= 0 || h <= 0) return;
+  // The board keeps its own shape: on a screen of another shape (a 21:9
+  // monitor, a 4:3 one) it is the largest board that fits, in the middle, and
+  // the rest is black. Stretched, the frame would widen while the type and the
+  // brand, made at the board's height, would not, and the logo would leave its
+  // plate.
+  const float fit = std::min(static_cast<float>(w) / static_cast<float>(m_layout.width),
+                             static_cast<float>(h) / static_cast<float>(m_layout.height));
+  const int bw = std::max(1, static_cast<int>(std::lround(m_layout.width * fit)));
+  const int bh = std::max(1, static_cast<int>(std::lround(m_layout.height * fit)));
+  const int bx = (w - bw) / 2;
+  const int by = (h - bh) / 2;
+  if (bw == w && bh == h)
+  {
+    DrawBoard(w, h, snapshot, fillWindow, nowMs);
+    return;
+  }
+  Uint8 r = 0, g = 0, b = 0, a = 0;
+  SDL_GetRenderDrawColor(m_renderer, &r, &g, &b, &a);
+  SDL_SetRenderDrawColor(m_renderer, 0, 0, 0, 255);
+  // Opaque even over a backglass video: whatever plays there was not made for
+  // the strips beside the board.
+  const SDL_FRect bars[2] = {
+      bw < w ? SDL_FRect{0, 0, static_cast<float>(bx), static_cast<float>(h)}
+             : SDL_FRect{0, 0, static_cast<float>(w), static_cast<float>(by)},
+      bw < w ? SDL_FRect{static_cast<float>(bx + bw), 0, static_cast<float>(w - bx - bw), static_cast<float>(h)}
+             : SDL_FRect{0, static_cast<float>(by + bh), static_cast<float>(w), static_cast<float>(h - by - bh)}};
+  SDL_RenderFillRects(m_renderer, bars, 2);
+  SDL_SetRenderDrawColor(m_renderer, r, g, b, a);
+
+  // Everything below draws in board coordinates; a clip rectangle a callout
+  // sets is relative to this viewport too.
+  const SDL_Rect viewport{bx, by, bw, bh};
+  SDL_SetRenderViewport(m_renderer, &viewport);
+  DrawBoard(bw, bh, snapshot, fillWindow, nowMs);
+  SDL_SetRenderViewport(m_renderer, nullptr);
+}
+
+void Board::DrawBoard(int w, int h, const Snapshot& snapshot, bool fillWindow, uint64_t nowMs)
+{
   if (w != m_outputW || h != m_outputH)
   {
     // A new output size: glyphs and the brand are remade at the size they will
@@ -448,8 +486,7 @@ void Board::Draw(int w, int h, const Snapshot& snapshot, bool fillWindow, uint64
 
   if (fillWindow && m_idle)
   {
-    const SDL_FRect window{m_layout.windowX * sx, m_layout.windowY * sy, m_layout.windowW * sx,
-                           m_layout.windowH * sy};
+    const SDL_FRect window{m_layout.windowX * sx, m_layout.windowY * sy, m_layout.windowW * sx, m_layout.windowH * sy};
     SDL_RenderTexture(m_renderer, m_idle, nullptr, &window);
   }
   if (m_frame) SDL_RenderTexture(m_renderer, m_frame, nullptr, nullptr);

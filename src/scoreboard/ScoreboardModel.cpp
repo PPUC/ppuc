@@ -197,9 +197,9 @@ void Layout::CollectVars(std::vector<std::string>* playerVars, std::vector<std::
 
 bool Facts::operator==(const Facts& other) const
 {
-  return hasGame == other.hasGame && inGame == other.inGame && players == other.players &&
-         current == other.current && ball == other.ball && credits == other.credits && scores == other.scores &&
-         playerVars == other.playerVars && ballVars == other.ballVars;
+  return hasGame == other.hasGame && inGame == other.inGame && players == other.players && current == other.current &&
+         ball == other.ball && credits == other.credits && scores == other.scores && playerVars == other.playerVars &&
+         ballVars == other.ballVars;
 }
 
 void Feed::SetVars(std::vector<std::string> playerVars, std::vector<std::string> ballVars)
@@ -384,9 +384,8 @@ int64_t SourceValue(const Source& source, const Layout& layout, const Snapshot& 
       return source.index >= 1 && source.index <= 4 ? static_cast<int64_t>(facts.scores[source.index - 1]) : 0;
     case Source::Kind::PlayerVar:
     case Source::Kind::BallVar:
-      return source.kind == Source::Kind::PlayerVar
-                 ? VarValue(layout.playerVarNames, facts.playerVars, source.name)
-                 : VarValue(layout.ballVarNames, facts.ballVars, source.name);
+      return source.kind == Source::Kind::PlayerVar ? VarValue(layout.playerVarNames, facts.playerVars, source.name)
+                                                    : VarValue(layout.ballVarNames, facts.ballVars, source.name);
     case Source::Kind::Value:
     {
       const auto it = snapshot.values.find(source.name);
@@ -552,12 +551,22 @@ std::vector<uint32_t> DecodeUtf8(const std::string& text)
   return out;
 }
 
-std::string PupCustomPos(const Layout& layout, int pupScreen)
+std::string PupCustomPos(const Layout& layout, int pupScreen, int screenW, int screenH)
 {
+  double sw = layout.width, sh = layout.height, fit = 1.0, bx = 0.0, by = 0.0;
+  if (screenW > 0 && screenH > 0)
+  {
+    sw = screenW;
+    sh = screenH;
+    // The same fit as Board::Draw.
+    fit = std::min(sw / layout.width, sh / layout.height);
+    bx = std::floor((sw - std::lround(layout.width * fit)) / 2.0);
+    by = std::floor((sh - std::lround(layout.height * fit)) / 2.0);
+  }
   char text[96];
-  std::snprintf(text, sizeof(text), "%d,%.3f,%.3f,%.3f,%.3f", pupScreen, 100.0 * layout.windowX / layout.width,
-                100.0 * layout.windowY / layout.height, 100.0 * layout.windowW / layout.width,
-                100.0 * layout.windowH / layout.height);
+  std::snprintf(text, sizeof(text), "%d,%.3f,%.3f,%.3f,%.3f", pupScreen, 100.0 * (bx + layout.windowX * fit) / sw,
+                100.0 * (by + layout.windowY * fit) / sh, 100.0 * layout.windowW * fit / sw,
+                100.0 * layout.windowH * fit / sh);
   return text;
 }
 

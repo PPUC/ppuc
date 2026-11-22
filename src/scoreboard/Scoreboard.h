@@ -40,7 +40,9 @@ class Board
   SDL_Renderer* Renderer() const { return m_renderer; }
   const Layout& GetLayout() const { return m_layout; }
 
-  // On top of what the renderer holds, scaled from the layout's size to w x h.
+  // On top of what the renderer holds, scaled from the layout's size to the
+  // largest rectangle of the layout's shape that fits w x h, in the middle; the
+  // strips beside it (a 21:9 screen) or above and below are painted black.
   // `fillWindow`: put the idle picture into the window first, for when no
   // video plays behind the frame.
   // `nowMs` moves the callout; any clock, as long as it is the one
@@ -60,7 +62,7 @@ class Board
   struct Glyph
   {
     SDL_Texture* texture = nullptr;
-    int width = 0;   // the texture, scorch included
+    int width = 0;  // the texture, scorch included
     int height = 0;
     int advance = 0;
   };
@@ -88,6 +90,8 @@ class Board
   SDL_Texture* Picture(const std::string& name);
   bool MakeLogo(int pixelSize, std::string* pError);
   int PixelSize(int layoutSize) const;
+  // Draw() inside the board's own rectangle, w x h of the layout's shape.
+  void DrawBoard(int w, int h, const Snapshot& snapshot, bool fillWindow, uint64_t nowMs);
 
   Layout m_layout;
   std::string m_folder;

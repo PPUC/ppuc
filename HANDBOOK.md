@@ -805,6 +805,14 @@ scoreboard:
 A mistake in the file is reported when the game starts, with the line, and
 the game plays without the scoreboard.
 
+The board keeps the shape of its `size`. On a screen of another shape, a
+21:9 monitor for example, it is drawn as large as fits, in the middle, with
+black bars beside it; nothing is stretched. PUP places the scene video in
+parts of the whole screen, so such a screen needs its own `CustomPos`:
+`ppuc-pinmame` prints the right one when it starts drawing
+("the PUP scene screen wants CustomPos ..."), and the preview prints it for
+`--size 2560x1080`.
+
 #### Making the art
 
 `ppuc-scoreboard-preview` draws a layout into a PNG with made-up scores, so
@@ -824,7 +832,8 @@ has one change per line (`17840 value.mode Car Chase`, `28600 callout
 text=PROMOTED|effect=pop`); wpc-re's scenario runner writes one from the Lua
 game in its simulator.
 
-It also prints the PUP `CustomPos` that puts a video exactly into the window.
+It also prints the PUP `CustomPos` that puts a video exactly into the window
+on a screen of `--size`.
 Make the scene videos the window's size (1280x720 for the layout above) and
 they play without being scaled, which is the cheapest thing the screen can do.
 

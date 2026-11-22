@@ -35,13 +35,13 @@
 // Prints the PUP CustomPos that puts a video into the window.
 
 #include <cstdio>
-#include <fstream>
-#include <sstream>
-#include <vector>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <string>
+#include <vector>
 
 #include "SDL3/SDL.h"
 #include "SDL3_image/SDL_image.h"
@@ -134,8 +134,7 @@ bool ParseCallout(const std::string& spec, Callout* out)
   return !callout.text.empty();
 }
 
-void SetVar(const std::vector<std::string>& names, std::vector<int64_t>* values, const std::string& name,
-            int64_t value)
+void SetVar(const std::vector<std::string>& names, std::vector<int64_t>* values, const std::string& name, int64_t value)
 {
   for (size_t i = 0; i < names.size(); ++i)
     if (names[i] == name) (*values)[i] = value;
@@ -398,8 +397,8 @@ int main(int argc, char** argv)
       }
     }
     IMG_SavePNG(surface, outPath.c_str());
-    std::printf("replayed %zu changes into %d frames at %d fps in %s (%.1f s to draw and save)\n", events.size(),
-                frame, fps, framesDir.c_str(), (SDL_GetTicksNS() - started) / 1e9);
+    std::printf("replayed %zu changes into %d frames at %d fps in %s (%.1f s to draw and save)\n", events.size(), frame,
+                fps, framesDir.c_str(), (SDL_GetTicksNS() - started) / 1e9);
     board.Unload();
     SDL_DestroyRenderer(renderer);
     SDL_DestroySurface(surface);
@@ -424,9 +423,10 @@ int main(int argc, char** argv)
     std::fprintf(stderr, "%s: %s\n", outPath.c_str(), SDL_GetError());
     return 1;
   }
-  std::printf("wrote %s (%dx%d), %zu glyphs prepared in %.1f ms, a frame after that %.2f ms (software renderer, no GPU)\n",
-              outPath.c_str(), width, height, board.GlyphCount(), firstNs / 1e6, secondNs / 1e6);
-  std::printf("PUP CustomPos for the scene screen: %s\n", PupCustomPos(layout, 2).c_str());
+  std::printf(
+      "wrote %s (%dx%d), %zu glyphs prepared in %.1f ms, a frame after that %.2f ms (software renderer, no GPU)\n",
+      outPath.c_str(), width, height, board.GlyphCount(), firstNs / 1e6, secondNs / 1e6);
+  std::printf("PUP CustomPos for the scene screen: %s\n", PupCustomPos(layout, 2, width, height).c_str());
   board.Unload();
   SDL_DestroyRenderer(renderer);
   SDL_DestroySurface(surface);
