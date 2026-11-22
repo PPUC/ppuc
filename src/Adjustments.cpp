@@ -110,6 +110,13 @@ bool Adjustments::Has(const std::string& name) const
   return m_entries.count(name) != 0;
 }
 
+std::string Adjustments::GroupOf(const std::string& name) const
+{
+  std::lock_guard<std::mutex> lock(m_mutex);
+  auto it = m_entries.find(name);
+  return it == m_entries.end() ? std::string() : it->second.definition.group;
+}
+
 StateValue Adjustments::Get(const std::string& name) const
 {
   std::lock_guard<std::mutex> lock(m_mutex);

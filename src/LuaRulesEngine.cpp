@@ -1489,6 +1489,14 @@ int LuaRulesEngine::LuaDefineAdjustment(lua_State* L)
     if (!engine->m_ownAdjustments) engine->m_ownAdjustments = std::make_unique<Adjustments>();
     engine->m_pAdjustments = engine->m_ownAdjustments.get();
   }
+  // A name PPUC already defines for the machine is the same setting, not a
+  // second one: a game that declares "balls_per_game" reads PPUC's, and the
+  // service menu shows it once.
+  if (engine->m_pAdjustments->GroupOf(d.name) == "Machine")
+  {
+    PushStateValue(L, engine->m_pAdjustments->Get(d.name));
+    return 1;
+  }
   std::string error;
   if (!engine->m_pAdjustments->Define(d, &error))
   {

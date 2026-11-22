@@ -69,6 +69,8 @@ class Adjustments
   bool Define(Definition definition, std::string* error);
 
   bool Has(const std::string& name) const;
+  // The group a defined adjustment is in, or empty.
+  std::string GroupOf(const std::string& name) const;
   // The default when not defined: callers check Has() first.
   StateValue Get(const std::string& name) const;
   double GetNumber(const std::string& name, double fallback) const;

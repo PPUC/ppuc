@@ -477,3 +477,28 @@ TEST_CASE("Without a store, adjustments read as their default and memory lasts t
   )");
   CHECK(rules.Load() == "");
 }
+
+TEST_CASE("A game's adjustment with a machine adjustment's name is the machine's")
+{
+  Adjustments adjustments;
+  Adjustments::Definition machine;
+  machine.name = "balls_per_game";
+  machine.label = "Balls per game";
+  machine.group = "Machine";
+  machine.kind = Adjustments::Kind::Number;
+  machine.min = 1;
+  machine.max = 10;
+  machine.defaultValue = StateValue::Number(3);
+  std::string error;
+  REQUIRE(adjustments.Define(machine, &error));
+  REQUIRE(adjustments.Set("balls_per_game", StateValue::Number(5), nullptr, &error));
+
+  ppuc_test::RulesHarness rules(R"(
+    balls = ppuc.defineAdjustment{name = "balls_per_game", label = "Balls", default = 3, min = 1, max = 5}
+    assert(balls == 5)
+  )");
+  rules.engine().SetAdjustments(&adjustments);
+  REQUIRE(rules.Load() == "");
+  CHECK(adjustments.GroupOf("balls_per_game") == "Machine");
+  CHECK(adjustments.List().size() == 1);
+}

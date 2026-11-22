@@ -179,6 +179,8 @@ rules are loaded again, keeps the value.
 PPUC's own adjustments are `ball_save_seconds`, `tilt_warnings`,
 `balls_per_game`, `max_players`, `free_play`, `match` and
 `switch_report_games`, each only where it means something; see the handbook.
+A game that defines one of these names gets PPUC's: the same setting, listed
+once, and `ppuc.defineAdjustment` returns its value.
 
 Machine memory, for what outlives a game — an extra-ball level that adjusts
 itself, a champion's record:
