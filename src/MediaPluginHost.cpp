@@ -16,6 +16,7 @@
 #include <limits>
 #include <map>
 #include <mutex>
+#include <thread>
 #include <optional>
 #include <utility>
 #include <unordered_map>
@@ -343,6 +344,47 @@ struct HostTexture
   VPXTextureFormat sdlTextureFormat = VPXTEXFMT_sRGBA8;
   bool dirty = false;
 };
+
+namespace
+{
+// The thread that draws: the only one that may touch an SDL renderer.
+std::thread::id g_drawingThread;
+// Textures a plugin freed on a thread of its own, for the drawing thread to
+// destroy before its next frame. PUP frees a video's frames on its command
+// thread when one clip replaces another; destroying the SDL texture there
+// flushed and changed the renderer while the main thread drew with it, and
+// the process died about twice in three scene changes.
+std::mutex g_deadTexturesMutex;
+std::vector<HostTexture*> g_deadTextures;
+
+void DestroyHostTexture(HostTexture* hostTexture)
+{
+  if (hostTexture->sdlTexture != nullptr)
+  {
+    if (hostTexture->sdlRenderer != nullptr)
+    {
+      SDL_FlushRenderer(hostTexture->sdlRenderer);
+    }
+    SDL_DestroyTexture(hostTexture->sdlTexture);
+    hostTexture->sdlTexture = nullptr;
+    hostTexture->sdlRenderer = nullptr;
+  }
+  delete hostTexture;
+}
+
+void DestroyDeadTextures()
+{
+  std::vector<HostTexture*> dead;
+  {
+    std::lock_guard<std::mutex> lock(g_deadTexturesMutex);
+    dead.swap(g_deadTextures);
+  }
+  for (HostTexture* hostTexture : dead)
+  {
+    DestroyHostTexture(hostTexture);
+  }
+}
+}  // namespace
 
 int BytesPerPixel(VPXTextureFormat format)
 {
@@ -781,6 +823,8 @@ bool MediaPluginHost::Impl::Initialize(const Options& options,
   pinmameAudioSrc_.desc = "PPUC game audio";
   pinmameAudioSrc_.target = CTLPI_AUDIO_TARGET_BACKGLASS;
 
+  // The thread that initializes is the one that draws (the main loop).
+  g_drawingThread = std::this_thread::get_id();
   initialized_ = true;
   return true;
 }
@@ -794,6 +838,8 @@ void MediaPluginHost::Impl::Shutdown()
 
   OnGameEnd();
   ReleaseB2SServer();
+  // While the renderer they belong to still exists.
+  DestroyDeadTextures();
   DestroyBackglassWindow();
 
   // PluginBus unloads the plugins and clears the script registries; it
@@ -1100,6 +1146,8 @@ void MediaPluginHost::Impl::Process()
   {
     return;
   }
+  // Before anything draws this frame.
+  DestroyDeadTextures();
   if (debugAudio_ && audioOutput_ != nullptr)
   {
     const uint64_t nowMs = SDL_GetTicks();
@@ -1552,17 +1600,13 @@ void MediaPluginHost::Impl::DeleteTexture(VPXTexture texture)
   {
     return;
   }
-  if (hostTexture->sdlTexture != nullptr)
+  if (g_drawingThread == std::thread::id() || std::this_thread::get_id() == g_drawingThread)
   {
-    if (hostTexture->sdlRenderer != nullptr)
-    {
-      SDL_FlushRenderer(hostTexture->sdlRenderer);
-    }
-    SDL_DestroyTexture(hostTexture->sdlTexture);
-    hostTexture->sdlTexture = nullptr;
-    hostTexture->sdlRenderer = nullptr;
+    DestroyHostTexture(hostTexture);
+    return;
   }
-  delete hostTexture;
+  std::lock_guard<std::mutex> lock(g_deadTexturesMutex);
+  g_deadTextures.push_back(hostTexture);
 }
 
 int MediaPluginHost::Impl::RenderBackglass(VPXRenderContext2D*, void*)
