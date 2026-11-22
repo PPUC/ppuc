@@ -227,6 +227,15 @@ struct Layout
   std::map<std::string, Style> styles;
   // Named lists for {player.rank:ranks}: a number picks an entry.
   std::map<std::string, std::vector<std::string>> lists;
+  // The layout's words in other languages, by language code, chosen by the
+  // value `language` the rules set (ppuc.scoreboardSet("language", "de")).
+  // Without one, or for a language not here, the layout's own words show.
+  struct Translation
+  {
+    std::string thousands = ",";               // 10.000.000 in German
+    std::map<std::string, std::string> texts;  // the layout's text -> this language's
+  };
+  std::map<std::string, Translation> translations;
   std::vector<Field> fields;
   std::map<std::string, Spot> spots;
   // Words callouts will show, burnt at load so the first one does not wait.
@@ -333,8 +342,18 @@ std::vector<std::pair<std::string, std::string>> DiffFacts(const Facts& before, 
 // What a Text field says now, before its {placeholders} are filled in.
 const std::string& FieldText(const Field& field, const Snapshot& snapshot);
 
-// "12450000" -> "12,450,000".
-std::string FormatScore(uint64_t score);
+// "12450000" -> "12,450,000"; with "." as the separator "12.450.000".
+std::string FormatScore(uint64_t score, const std::string& separator = ",");
+
+// The translation the snapshot's language picks, or none.
+const Layout::Translation* TranslationFor(const Layout& layout, const Snapshot& snapshot);
+// A layout text in the snapshot's language: its translation, or itself.
+const std::string& Translate(const Layout& layout, const Snapshot& snapshot, const std::string& text);
+// The thousands separator of the snapshot's language.
+std::string ThousandsSeparator(const Layout& layout, const Snapshot& snapshot);
+// A callout the rules sent as a number ("10,000,000") with the language's
+// separator; any other text as it is. The rules translate their own words.
+std::string LocalizeNumber(const Layout& layout, const Snapshot& snapshot, const std::string& text);
 // {placeholders} in a Text field filled from a snapshot. Unknown ones are left
 // out rather than shown, so a typo shows as a gap and not as braces on a
 // machine's screen.

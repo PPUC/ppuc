@@ -395,7 +395,7 @@ bool Board::Animating(uint64_t nowMs) const
   return false;
 }
 
-void Board::DrawCallout(const ActiveCallout& active, float sx, float sy, uint64_t nowMs)
+void Board::DrawCallout(const ActiveCallout& active, const Snapshot& snapshot, float sx, float sy, uint64_t nowMs)
 {
   if (nowMs < active.startMs) return;
   const Callout& callout = active.callout;
@@ -406,6 +406,7 @@ void Board::DrawCallout(const ActiveCallout& active, float sx, float sy, uint64_
   const Spot& spot = spotIt->second;
   const std::string& style = callout.style.empty() ? spot.style : callout.style;
   const int px = PixelSize(callout.size > 0 ? callout.size : spot.size);
+  const std::string text = LocalizeNumber(m_layout, snapshot, callout.text);
   const float cx = spot.x * sx + pose.dx * px;
   const float cy = spot.y * sy + pose.dy * px;
   // A callout over the scene stays in the scene: shrunk to 90 % of the
@@ -417,12 +418,12 @@ void Board::DrawCallout(const ActiveCallout& active, float sx, float sy, uint64_
   float fit = 1.0f;
   if (inWindow)
   {
-    const float width = static_cast<float>(MeasureText(callout.text, style, px));
+    const float width = static_cast<float>(MeasureText(text, style, px));
     const float room = window.w * 0.9f;
     if (width > room) fit = room / width;
     SDL_SetRenderClipRect(m_renderer, &window);
   }
-  DrawPosed(callout.text, style, px, cx, cy, pose.scale * fit, pose.alpha, &callout, nowMs - active.startMs);
+  DrawPosed(text, style, px, cx, cy, pose.scale * fit, pose.alpha, &callout, nowMs - active.startMs);
   if (inWindow) SDL_SetRenderClipRect(m_renderer, nullptr);
 }
 
@@ -539,6 +540,10 @@ void Board::DrawBoard(int w, int h, const Snapshot& snapshot, bool fillWindow, u
       Prepare("0123456789,PS ", field.style, px);
       Prepare(field.text, field.style, px);
       Prepare(field.freePlayText, field.style, px);
+      Prepare(".", field.style, px);
+      // Every language's words, so switching at the machine is instant.
+      for (const auto& [lang, translation] : m_layout.translations)
+        for (const auto& [from, to] : translation.texts) Prepare(to, field.style, px);
       Prepare(field.format, field.style, px);
       for (const auto& [name, items] : m_layout.lists)
         for (const std::string& item : items) Prepare(item, field.style, px);
@@ -572,14 +577,14 @@ void Board::DrawBoard(int w, int h, const Snapshot& snapshot, bool fillWindow, u
     switch (field.type)
     {
       case Field::Type::Text:
-        DrawText(ExpandText(FieldText(field, snapshot), m_layout, snapshot), field.style, px, x, y, field.align,
-                 field.width * sx);
+        DrawText(ExpandText(Translate(m_layout, snapshot, FieldText(field, snapshot)), m_layout, snapshot), field.style,
+                 px, x, y, field.align, field.width * sx);
         break;
       case Field::Type::CurrentScore:
         if (featured > 0)
         {
-          DrawText(FormatScore(snapshot.facts.scores[featured - 1]), field.style, px, x, y, field.align,
-                   field.width * sx);
+          DrawText(FormatScore(snapshot.facts.scores[featured - 1], ThousandsSeparator(m_layout, snapshot)),
+                   field.style, px, x, y, field.align, field.width * sx);
         }
         break;
       case Field::Type::OtherScores:
@@ -590,11 +595,12 @@ void Board::DrawBoard(int w, int h, const Snapshot& snapshot, bool fillWindow, u
         for (size_t k = 0; k < others.size(); ++k)
         {
           const int p = others[k];
-          std::string text = field.format;
+          std::string text = Translate(m_layout, snapshot, field.format);
           const size_t n = text.find("{n}");
           if (n != std::string::npos) text.replace(n, 3, std::to_string(p));
           const size_t s = text.find("{score}");
-          if (s != std::string::npos) text.replace(s, 7, FormatScore(snapshot.facts.scores[p - 1]));
+          if (s != std::string::npos)
+            text.replace(s, 7, FormatScore(snapshot.facts.scores[p - 1], ThousandsSeparator(m_layout, snapshot)));
           DrawText(text, field.style, px, x + slot * (static_cast<float>(k) + 0.5f), y, Align::Center, slot * 0.95f);
         }
         break;
@@ -630,7 +636,7 @@ void Board::DrawBoard(int w, int h, const Snapshot& snapshot, bool fillWindow, u
       it = m_callouts.erase(it);
       continue;
     }
-    DrawCallout(it->second, sx, sy, nowMs);
+    DrawCallout(it->second, snapshot, sx, sy, nowMs);
     ++it;
   }
 

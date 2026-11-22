@@ -259,6 +259,45 @@ TEST_CASE("scoreboard: a field can say Free Play instead of a credit count")
   CHECK(changes[0] == std::make_pair(std::string("freeplay"), std::string("1")));
 }
 
+TEST_CASE("scoreboard: the layout's words in the rules' language")
+{
+  Layout layout;
+  layout.lists["ranks"] = {"Rookie", "Officer"};
+  Layout::Translation de;
+  de.thousands = ".";
+  de.texts = {{"Player {player}", "Spieler {player}"}, {"Officer", "Polizist"}, {"P{n}  {score}", "S{n}  {score}"}};
+  layout.translations["de"] = de;
+  layout.playerVarNames = {"rank"};
+
+  Snapshot snapshot;
+  snapshot.facts.players = 2;
+  snapshot.facts.current = 2;
+  snapshot.facts.scores = {1234567, 0, 0, 0};
+  snapshot.facts.playerVars = {1};
+
+  // No language set: the layout's own words, commas.
+  CHECK(ExpandText(Translate(layout, snapshot, "Player {player}"), layout, snapshot) == "Player 2");
+  CHECK(ExpandText("{player.rank:ranks}", layout, snapshot) == "Officer");
+  CHECK(ExpandText("{score1}", layout, snapshot) == "1,234,567");
+  CHECK(LocalizeNumber(layout, snapshot, "10,000,000") == "10,000,000");
+
+  snapshot.values["language"] = "de";
+  CHECK(ExpandText(Translate(layout, snapshot, "Player {player}"), layout, snapshot) == "Spieler 2");
+  CHECK(ExpandText("{player.rank:ranks}", layout, snapshot) == "Polizist");
+  CHECK(ExpandText("{score1}", layout, snapshot) == "1.234.567");
+  CHECK(FormatScore(1234567, ThousandsSeparator(layout, snapshot)) == "1.234.567");
+  CHECK(Translate(layout, snapshot, "P{n}  {score}") == "S{n}  {score}");
+  // A word without a translation stays; a callout number gets dots, words not.
+  CHECK(Translate(layout, snapshot, "Bonus") == "Bonus");
+  CHECK(LocalizeNumber(layout, snapshot, "10,000,000") == "10.000.000");
+  CHECK(LocalizeNumber(layout, snapshot, "SHERIFFSTERN") == "SHERIFFSTERN");
+
+  // A language the layout does not know: its own words.
+  snapshot.values["language"] = "fr";
+  CHECK(Translate(layout, snapshot, "Player {player}") == "Player {player}");
+  CHECK(ExpandText("{score1}", layout, snapshot) == "1,234,567");
+}
+
 TEST_CASE("scoreboard: a recorded game reads back")
 {
   Callout callout;

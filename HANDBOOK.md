@@ -797,6 +797,24 @@ scoreboard:
   `ppuc.scoreboardSet`. `{player.rank:ranks}` turns a number into a name from
   a list. A name that means nothing shows as nothing.
 - **when** is `always`, `game` or `attract`.
+- **translations** give the layout's words in other languages, chosen by the
+  game's rules (an operator setting such as *Language* in the service menu):
+
+  ```yaml
+  translations:
+    de:
+      thousands: "."              # 10.000.000
+      texts:
+        "Player {player}": "Spieler {player}"
+        Game Over: Spiel vorbei
+        Officer: Polizist           # list items are translated too
+  ```
+
+  A word without a translation shows as it is; a text or list item is
+  translated whole, before its `{placeholders}` are filled in. Callouts and
+  mode names come from the rules, which translate their own. Scores and
+  number callouts use the language's separator. Every language's words are
+  burnt at load, so a change at the machine shows at once.
 - **free_play** on a text: what it says instead while the machine runs free
   play, `{type: text, text: "Credits {credits}", free_play: "Free Play"}`,
   so the sign does not say "Credits 0" on a machine that needs none.

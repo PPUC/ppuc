@@ -91,7 +91,7 @@ class Board
     Callout callout;
     uint64_t startMs = 0;
   };
-  void DrawCallout(const ActiveCallout& active, float sx, float sy, uint64_t nowMs);
+  void DrawCallout(const ActiveCallout& active, const Snapshot& snapshot, float sx, float sy, uint64_t nowMs);
   void Prepare(const std::string& text, const std::string& style, int pixelSize);
   SDL_Texture* Picture(const std::string& name);
   bool MakeLogo(int pixelSize, std::string* pError);

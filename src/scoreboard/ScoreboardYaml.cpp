@@ -234,6 +234,24 @@ bool LoadLayout(const std::string& path, Layout* pLayout, std::string* pError)
         layout.lists[entry.first.as<std::string>()] = std::move(items);
       }
     }
+    if (const YAML::Node translations = root["translations"])
+    {
+      if (!translations.IsMap()) Fail(translations, "translations must be a map of language codes");
+      for (const auto& entry : translations)
+      {
+        const YAML::Node node = entry.second;
+        if (!node.IsMap()) Fail(node, "a translation must be a map: thousands, texts");
+        Layout::Translation translation;
+        translation.thousands = ReadString(node, "thousands", translation.thousands);
+        if (const YAML::Node texts = node["texts"])
+        {
+          if (!texts.IsMap()) Fail(texts, "texts must map the layout's words to this language's");
+          for (const auto& text : texts)
+            translation.texts[text.first.as<std::string>()] = text.second.as<std::string>();
+        }
+        layout.translations[entry.first.as<std::string>()] = std::move(translation);
+      }
+    }
     if (const YAML::Node callouts = root["callouts"])
     {
       if (!callouts.IsMap()) Fail(callouts, "callouts must be a map");

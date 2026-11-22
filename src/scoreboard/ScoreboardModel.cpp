@@ -464,15 +464,53 @@ uint64_t Feed::Version() const
   return m_snapshot.version;
 }
 
-std::string FormatScore(uint64_t score)
+std::string FormatScore(uint64_t score, const std::string& separator)
 {
   std::string digits = std::to_string(score);
   std::string out;
   const int n = static_cast<int>(digits.size());
   for (int i = 0; i < n; ++i)
   {
-    if (i > 0 && (n - i) % 3 == 0) out += ',';
+    if (i > 0 && (n - i) % 3 == 0) out += separator;
     out += digits[i];
+  }
+  return out;
+}
+
+const Layout::Translation* TranslationFor(const Layout& layout, const Snapshot& snapshot)
+{
+  const auto lang = snapshot.values.find("language");
+  if (lang == snapshot.values.end()) return nullptr;
+  const auto it = layout.translations.find(lang->second);
+  return it == layout.translations.end() ? nullptr : &it->second;
+}
+
+const std::string& Translate(const Layout& layout, const Snapshot& snapshot, const std::string& text)
+{
+  const Layout::Translation* translation = TranslationFor(layout, snapshot);
+  if (translation == nullptr) return text;
+  const auto it = translation->texts.find(text);
+  return it == translation->texts.end() ? text : it->second;
+}
+
+std::string ThousandsSeparator(const Layout& layout, const Snapshot& snapshot)
+{
+  const Layout::Translation* translation = TranslationFor(layout, snapshot);
+  return translation == nullptr ? std::string(",") : translation->thousands;
+}
+
+std::string LocalizeNumber(const Layout& layout, const Snapshot& snapshot, const std::string& text)
+{
+  if (text.empty() || text.find_first_not_of("0123456789,") != std::string::npos) return text;
+  const std::string separator = ThousandsSeparator(layout, snapshot);
+  if (separator == ",") return text;
+  std::string out;
+  for (const char c : text)
+  {
+    if (c == ',')
+      out += separator;
+    else
+      out += c;
   }
   return out;
 }
@@ -534,11 +572,11 @@ static std::string SourceText(const Source& source, const std::string& list, con
   {
     const auto it = layout.lists.find(list);
     if (it == layout.lists.end() || value < 0 || value >= static_cast<int64_t>(it->second.size())) return {};
-    return it->second[static_cast<size_t>(value)];
+    return Translate(layout, snapshot, it->second[static_cast<size_t>(value)]);
   }
   if (source.kind == Source::Kind::Score || source.kind == Source::Kind::PlayerScore)
   {
-    return FormatScore(static_cast<uint64_t>(value < 0 ? 0 : value));
+    return FormatScore(static_cast<uint64_t>(value < 0 ? 0 : value), ThousandsSeparator(layout, snapshot));
   }
   return std::to_string(value);
 }
