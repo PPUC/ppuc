@@ -334,6 +334,10 @@ endif()
 
 add_executable(ppuc-pinmame
    src/Adjustments.cpp
+   src/scoreboard/BurnEffect.cpp
+   src/scoreboard/Scoreboard.cpp
+   src/scoreboard/ScoreboardModel.cpp
+   src/scoreboard/ScoreboardYaml.cpp
    src/CoinDoor.cpp
    src/MachineState.cpp
    src/SwitchReport.cpp
@@ -729,6 +733,31 @@ else()
 endif()
 endif()
 
+# Draws a game's scoreboard.yaml into a PNG with made-up scores, for whoever
+# makes the art and for checking a layout without a machine. Needs SDL_ttf,
+# like the scoreboard itself.
+if(PPUC_HAVE_SDL3_TTF AND NOT (PLATFORM STREQUAL "win" OR PLATFORM STREQUAL "win-mingw"))
+   add_executable(ppuc-scoreboard-preview
+      src/scoreboard/BurnEffect.cpp
+      src/scoreboard/Scoreboard.cpp
+      src/scoreboard/ScoreboardModel.cpp
+      src/scoreboard/ScoreboardYaml.cpp
+      src/scoreboard/ScoreboardPreview.cpp
+   )
+   target_include_directories(ppuc-scoreboard-preview PUBLIC ${PPUC_INCLUDE_DIRS})
+   target_compile_definitions(ppuc-scoreboard-preview PRIVATE PPUC_HAS_SDL3_TTF)
+   target_link_directories(ppuc-scoreboard-preview PUBLIC
+      third-party/build-libs/${PLATFORM}-${ARCH}
+      third-party/runtime-libs/${PLATFORM}-${ARCH}
+   )
+   target_link_libraries(ppuc-scoreboard-preview LINK_PUBLIC
+      SDL3
+      SDL3_image
+      SDL3_ttf
+      ${PPUC_YAML_CPP_LINK_LIBRARY}
+   )
+endif()
+
 if(PPUC_BUILD_BACKBOX)
 add_executable(ppuc-backbox
    src/backbox.cpp
@@ -847,6 +876,8 @@ if(PPUC_BUILD_TESTS)
    # part of this target.
    add_executable(ppuc_tests
       src/Adjustments.cpp
+      src/scoreboard/BurnEffect.cpp
+      src/scoreboard/ScoreboardModel.cpp
       src/CoinDoor.cpp
       src/MachineState.cpp
       src/SwitchReport.cpp
@@ -905,6 +936,7 @@ if(PPUC_BUILD_TESTS)
       tests/test_segment_digit_decode.cpp
       tests/test_board_type_check.cpp
       tests/test_uf2_image.cpp
+      tests/test_scoreboard.cpp
    )
 
    target_include_directories(ppuc_tests PRIVATE ${PPUC_INCLUDE_DIRS} tests)

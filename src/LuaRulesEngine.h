@@ -18,6 +18,10 @@ class DmdCanvas;
 class Adjustments;
 class MachineMemory;
 class SwitchReport;
+namespace scoreboard
+{
+class Feed;
+}
 
 struct lua_State;
 
@@ -105,6 +109,10 @@ class LuaRulesEngine
   void SetAdjustments(Adjustments* pAdjustments);
   void SetMachineMemory(MachineMemory* pMemory);
   void SetSwitchReport(SwitchReport* pReport);
+  // Where ppuc.scoreboardSet(name, value) goes. Without a scoreboard the
+  // function exists and does nothing, so one set of rules runs on a machine
+  // with a scoreboard and on one without.
+  void SetScoreboardFeed(scoreboard::Feed* pFeed);
   GameCore* GetGameCore() const { return m_pGameCore; }
   DmdCanvas* GetDmdCanvas() const { return m_pDmdCanvas; }
 
@@ -235,6 +243,7 @@ class LuaRulesEngine
   static int LuaNvGet(lua_State* L);
   static int LuaNvSet(lua_State* L);
   static int LuaExcludeFromSwitchReport(lua_State* L);
+  static int LuaScoreboardSet(lua_State* L);
 
   lua_State* m_lua = nullptr;
   std::unordered_map<int, uint8_t> m_switchStates;
@@ -269,6 +278,7 @@ class LuaRulesEngine
   Adjustments* m_pAdjustments = nullptr;
   MachineMemory* m_pMemory = nullptr;
   SwitchReport* m_pSwitchReport = nullptr;
+  scoreboard::Feed* m_pScoreboardFeed = nullptr;
   // What the rules defined when there is no store, so ppuc.adjustment still
   // answers with the default and machine memory lasts for the session.
   std::unique_ptr<Adjustments> m_ownAdjustments;

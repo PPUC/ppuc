@@ -89,6 +89,7 @@ ppuc.serumScene(id)
 ppuc.soundCommand(cmd [, board])
 ppuc.speech(text)
 ppuc.playSound(file)
+ppuc.scoreboardSet(name, value)
 ppuc.effectTrigger(id, value)
 ppuc.effectTrigger(name, value)
 ppuc.suppressSwitch(number)
@@ -207,6 +208,23 @@ of a ROM-less game are excluded already.
 
 Without a game folder all of this still works, for the session: adjustments
 read as their defaults and machine memory is forgotten at exit.
+
+## The Scoreboard
+
+A game with a `scoreboard/` folder has a scoreboard on its backbox screen (see
+the handbook, section 8). It already knows the scores, ball, player, credits
+and every `ppuc.game` player and ball variable. Anything else it shows comes
+from the rules:
+
+```lua
+ppuc.scoreboardSet("mode", "Barroom Brawl")   -- shown where the layout says {value.mode}
+ppuc.scoreboardSet("jackpot", 25000000)       -- numbers work as numbers
+ppuc.scoreboardSet("mode", nil)               -- and nil takes it off
+```
+
+It only hands the text over; the drawing is done elsewhere, at most once per
+frame. Without a scoreboard the call does nothing, so the same rules run on a
+machine without one.
 
 ## Playing Sounds
 

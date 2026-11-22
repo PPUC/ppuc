@@ -1,5 +1,7 @@
 #include "LuaRulesEngine.h"
 
+#include "scoreboard/ScoreboardModel.h"
+
 #include "Adjustments.h"
 #include "LuaApiSupport.h"
 #include "LuaGameApi.h"
@@ -241,6 +243,7 @@ void LuaRulesEngine::RegisterApi()
   SetPpucFunction(m_lua, this, "nvGet", LuaNvGet);
   SetPpucFunction(m_lua, this, "nvSet", LuaNvSet);
   SetPpucFunction(m_lua, this, "excludeFromSwitchReport", LuaExcludeFromSwitchReport);
+  SetPpucFunction(m_lua, this, "scoreboardSet", LuaScoreboardSet);
 
   // Registered only when the ROM-less game is running, so `ppuc.game == nil` is
   // a reliable feature test for a script that must work under either engine.
@@ -399,6 +402,12 @@ void LuaRulesEngine::SetSwitchReport(SwitchReport* pReport)
 {
   std::lock_guard<std::recursive_mutex> lock(m_mutex);
   m_pSwitchReport = pReport;
+}
+
+void LuaRulesEngine::SetScoreboardFeed(scoreboard::Feed* pFeed)
+{
+  std::lock_guard<std::recursive_mutex> lock(m_mutex);
+  m_pScoreboardFeed = pFeed;
 }
 
 void LuaRulesEngine::CallGameHandler(const char* name, std::vector<LuaArg> args)
@@ -1562,6 +1571,35 @@ int LuaRulesEngine::LuaNvSet(lua_State* L)
   if (!engine->m_pMemory->Set(name, value, &error))
   {
     return luaL_error(L, "ppuc.nvSet: %s", error.c_str());
+  }
+  return 0;
+}
+
+// ppuc.scoreboardSet(name, value): what a scoreboard text shows as
+// {value.name}. A number is shown as a number; nil or "" takes it away. The
+// scoreboard is drawn on another thread: this only hands the text over.
+int LuaRulesEngine::LuaScoreboardSet(lua_State* L)
+{
+  auto* engine = FromLua(L);
+  const char* name = luaL_checkstring(L, 1);
+  std::string value;
+  if (!lua_isnoneornil(L, 2))
+  {
+    if (lua_type(L, 2) == LUA_TBOOLEAN)
+    {
+      value = lua_toboolean(L, 2) ? "1" : "0";
+    }
+    else
+    {
+      size_t length = 0;
+      const char* text = luaL_tolstring(L, 2, &length);
+      value.assign(text, length);
+      lua_pop(L, 1);
+    }
+  }
+  if (engine->m_pScoreboardFeed != nullptr)
+  {
+    engine->m_pScoreboardFeed->SetValue(name, value);
   }
   return 0;
 }

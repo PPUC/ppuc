@@ -26,6 +26,8 @@ mkdir ppuc
 cp build/ppuc-pinmame ppuc/
 cp build/ppuc-menu ppuc/
 cp build/ppuc-backbox ppuc/
+# Built only where SDL_ttf is.
+if [ -f build/ppuc-scoreboard-preview ]; then cp build/ppuc-scoreboard-preview ppuc/; fi
 cp -P third-party/runtime-libs/macos-x64/*.dylib ppuc/
 cp -R third-party/pinmame-nvram-maps ppuc/
 ppuc_stage_espeak_data macos-x64

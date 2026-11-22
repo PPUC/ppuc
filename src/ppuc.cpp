@@ -64,6 +64,9 @@
 #include "CoinDoor.h"
 #include "MachineState.h"
 #include "SwitchReport.h"
+#include "scoreboard/Scoreboard.h"
+#include "scoreboard/ScoreboardModel.h"
+#include "scoreboard/ScoreboardYaml.h"
 #include "HealthLog.h"
 #include "SwitchHold.h"
 #include "ThreadHandoff.h"
@@ -504,6 +507,17 @@ bool opt_attract_slides = true;
 // asks about it goes through SlidesVisible(), so the common case -- a game with
 // no slides -- costs one null check per pass.
 static std::unique_ptr<AttractSlides::Show> g_attractSlides;
+
+// The game's scoreboard (<game folder>/scoreboard/scoreboard.yaml): the frame,
+// the scores and the game's signs around the scene videos. The layout and the
+// feed are plain data; the drawing is further down, with the other screens.
+// The machine thread publishes into the feed, the main thread draws from it.
+static bool g_hasScoreboard = false;
+static scoreboard::Layout g_scoreboardLayout;
+static std::string g_scoreboardFolder;
+static scoreboard::Feed g_scoreboardFeed;
+// Main thread: the next pass draws the scoreboard window even if nothing changed.
+static bool g_scoreboardRedraw = true;
 // The switches a person can press: flipper buttons, start, coin, the coin
 // door. Filled from the configuration's own `button` flag, the same definition
 // the ball search uses.
@@ -6585,6 +6599,67 @@ static void DrawSongPickerInto(SDL_Renderer* renderer, int w, int h)
                      dim);
 }
 
+// ---- The scoreboard ------------------------------------------------------
+//
+// Drawn into whichever renderer shows the game: the media host's backglass,
+// on top of the PUP scene, or a window of its own when there is no backglass.
+// Loaded into that renderer on its first frame, because textures belong to
+// the renderer that made them.
+static scoreboard::Board g_scoreboardBoard;
+static scoreboard::Snapshot g_scoreboardSnapshot;
+static bool g_scoreboardFailed = false;
+static uint64_t g_scoreboardShownVersion = UINT64_MAX;
+static uint64_t g_scoreboardShownMs = 0;
+
+static bool ScoreboardReady(SDL_Renderer* renderer)
+{
+    if (!g_hasScoreboard || g_scoreboardFailed || renderer == nullptr)
+    {
+        return false;
+    }
+    if (g_scoreboardBoard.Loaded() && g_scoreboardBoard.Renderer() == renderer)
+    {
+        return true;
+    }
+    std::string error;
+    if (!g_scoreboardBoard.Load(g_scoreboardLayout, g_scoreboardFolder, renderer, &error))
+    {
+        // Said once, and the game goes on with what it had before: a translite,
+        // or the bare PUP video.
+        printf("PPUC: scoreboard not shown: %s\n", error.c_str());
+        g_scoreboardFailed = true;
+        return false;
+    }
+    return true;
+}
+
+// `fillWindow`: nothing plays behind the frame, so the idle picture goes into
+// the window. Over a PUP video it stays false, or the picture would cover it.
+static bool DrawScoreboardInto(SDL_Renderer* renderer, int w, int h, bool fillWindow)
+{
+    if (!ScoreboardReady(renderer))
+    {
+        return false;
+    }
+    g_scoreboardFeed.ReadIfNewer(g_scoreboardSnapshot.version, &g_scoreboardSnapshot);
+    g_scoreboardBoard.Draw(w, h, g_scoreboardSnapshot, fillWindow);
+    return true;
+}
+
+// What a tool on the own-window path is drawn over: the scoreboard where the
+// game has one, its translite otherwise.
+static void DrawGameBehind(SDL_Renderer* renderer, int w, int h, SDL_Texture* translite)
+{
+    if (DrawScoreboardInto(renderer, w, h, true))
+    {
+        return;
+    }
+    if (translite)
+    {
+        SDL_RenderTexture(renderer, translite, nullptr, nullptr);
+    }
+}
+
 // What the backbox screen shows when something other than the game wants it.
 //
 // The service tools win outright. Somebody with a keyboard open at the switch
@@ -6605,10 +6680,7 @@ static void DrawHealthNoticeInto(SDL_Renderer* renderer, int w, int h, bool clea
         {
             behind = pTransliteTexture;
         }
-        if (behind)
-        {
-            SDL_RenderTexture(renderer, behind, nullptr, nullptr);
-        }
+        DrawGameBehind(renderer, w, h, behind);
     }
 
     const SDL_Color white{235, 235, 235, 255};
@@ -6653,10 +6725,7 @@ static void DrawServiceScreenInto(SDL_Renderer* renderer, int w, int h, bool cle
         {
             SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
             SDL_RenderClear(renderer);
-            if (pTransliteTexture)
-            {
-                SDL_RenderTexture(renderer, pTransliteTexture, nullptr, nullptr);
-            }
+            DrawGameBehind(renderer, w, h, pTransliteTexture);
         }
         DrawSongPickerInto(renderer, w, h);
         return;
@@ -6669,11 +6738,7 @@ static void DrawServiceScreenInto(SDL_Renderer* renderer, int w, int h, bool cle
     {
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
-        SDL_Texture* behind = pTransliteAttractTexture ? pTransliteAttractTexture : pTransliteTexture;
-        if (behind)
-        {
-            SDL_RenderTexture(renderer, behind, nullptr, nullptr);
-        }
+        DrawGameBehind(renderer, w, h, pTransliteAttractTexture ? pTransliteAttractTexture : pTransliteTexture);
     }
     DrawSlidesInto(renderer, w, h);
 }
@@ -6688,6 +6753,50 @@ static bool ServiceScreenWanted()
     return g_overlay != OverlayScreen::None || HealthNoticeActive() || g_songPicker.active ||
            (g_attractSlides && g_attractSlides->Visible());
 }
+
+// The own-window path, for a game with a scoreboard and no backglass: the
+// scoreboard has the window whenever no tool wants it, and is drawn again when
+// what it shows changed, and once a second besides. Between those nothing is
+// drawn at all -- without a video behind it, a frame that did not change is a
+// frame nobody needs.
+static void ServiceScoreboardWindow()
+{
+    if (!g_hasScoreboard || g_scoreboardFailed || pTransliteRenderer == nullptr ||
+        (pMediaPluginHost && pMediaPluginHost->HasBackglass()))
+    {
+        return;
+    }
+    if (g_firmwareScreen.active || ServiceScreenWanted())
+    {
+        // Whatever took the window over leaves its last frame behind.
+        g_scoreboardRedraw = true;
+        return;
+    }
+    const uint64_t nowMs = SDL_GetTicks();
+    const uint64_t version = g_scoreboardFeed.Version();
+    if (!g_scoreboardRedraw && version == g_scoreboardShownVersion && nowMs - g_scoreboardShownMs < 1000)
+    {
+        return;
+    }
+    int w = 0;
+    int h = 0;
+    if (!SDL_GetCurrentRenderOutputSize(pTransliteRenderer, &w, &h) || w <= 0 || h <= 0)
+    {
+        return;
+    }
+    SDL_SetRenderDrawColor(pTransliteRenderer, 0, 0, 0, 255);
+    SDL_RenderClear(pTransliteRenderer);
+    if (!DrawScoreboardInto(pTransliteRenderer, w, h, true))
+    {
+        return;
+    }
+    SDL_RenderPresent(pTransliteRenderer);
+    g_scoreboardShownVersion = version;
+    g_scoreboardShownMs = nowMs;
+    g_scoreboardRedraw = false;
+}
+
+static bool ScoreboardOwnsWindow() { return g_hasScoreboard && !g_scoreboardFailed; }
 
 // The own-window path, for a machine whose backglass nothing else is drawing:
 // a translite, or no video at all.
@@ -6766,6 +6875,10 @@ static void NoteSwitchMonitorState(int, uint8_t) {}
 static void NoteCoilMonitorState(int, uint8_t) {}
 static void RenderOverlay() {}
 static void DrawServiceScreenInto(SDL_Renderer*, int, int, bool) {}
+// The KMS path has no SDL renderer to draw a scoreboard with.
+static bool DrawScoreboardInto(SDL_Renderer*, int, int, bool) { return false; }
+static void ServiceScoreboardWindow() {}
+static bool ScoreboardOwnsWindow() { return false; }
 static bool ServiceScreenWanted() { return false; }
 static void DrawSlidesInto(SDL_Renderer*, int, int) {}
 // The song chooser is a screen, and this path has none to put one in.
@@ -8803,6 +8916,53 @@ static void SetMachineThreadPriority(int priority, const char* what)
 // It used to be the first half of the main loop, behind whatever the second
 // half spent: a DMD frame waiting for the display, a plugin message, a sound
 // file being opened. A switch waited for all of it.
+// Machine thread: what the scoreboard shows, copied out of GameCore. At most
+// every 20 ms, and the feed only takes the lock when something differs, so a
+// busy bus does not notice it. GameCore belongs to this thread; the drawing
+// thread only ever sees the copy.
+static void PublishScoreboardFacts()
+{
+  if (!g_hasScoreboard || g_pGameCore == nullptr)
+  {
+    return;
+  }
+  static uint64_t lastMs = 0;
+  const uint64_t nowMs = static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
+          .count());
+  if (nowMs - lastMs < 20)
+  {
+    return;
+  }
+  lastMs = nowMs;
+
+  static scoreboard::Facts facts;
+  const GameCore& game = *g_pGameCore;
+  facts.hasGame = true;
+  facts.inGame = game.IsInGame();
+  facts.players = game.GetPlayerCount();
+  facts.current = game.GetCurrentPlayer();
+  facts.ball = game.GetCurrentBall();
+  facts.credits = game.GetCredits();
+  for (uint8_t p = 1; p <= 4; ++p)
+  {
+    facts.scores[p - 1] = p <= facts.players ? game.GetScore(p) : 0;
+  }
+  const std::vector<std::string>& playerVars = g_scoreboardFeed.PlayerVarNames();
+  const std::vector<std::string>& ballVars = g_scoreboardFeed.BallVarNames();
+  facts.playerVars.resize(playerVars.size());
+  facts.ballVars.resize(ballVars.size());
+  for (size_t i = 0; i < playerVars.size(); ++i)
+  {
+    facts.playerVars[i] = facts.players > 0 ? game.GetVar(playerVars[i]) : 0;
+  }
+  for (size_t i = 0; i < ballVars.size(); ++i)
+  {
+    facts.ballVars[i] = game.GetBallVar(ballVars[i]);
+  }
+  g_scoreboardFeed.Publish(facts);
+}
+
 static void RunSwitchThread(GameEngine* pEngine, BallSearchRunner& ballSearchRunner, uint32_t ballSearchDelayMs,
                             uint32_t ballSearchRoundDelayMs, bool engineHere, bool pollGis,
                             const std::atomic<bool>& stop)
@@ -8897,6 +9057,10 @@ static void RunSwitchThread(GameEngine* pEngine, BallSearchRunner& ballSearchRun
         printf("Lua rules error: %s\n", pLuaRulesEngine->GetFatalError().c_str());
         running = false;
       }
+    }
+    if (engineHere)
+    {
+      PublishScoreboardFacts();
     }
     stallWatch.Phase("rules");
 
@@ -10151,6 +10315,37 @@ int main(int argc, char** argv)
     }
   }
 
+  // The scoreboard. Like the slides, a broken layout is reported and the game
+  // plays without it. Not in the bench and debug modes, which keep the screen
+  // for what they show.
+  if (HasOptionValue(opt_game_folder) && !opt_switch_monitor)
+  {
+    const std::filesystem::path folder = std::filesystem::path(opt_game_folder) / "scoreboard";
+    const std::filesystem::path layoutPath = folder / "scoreboard.yaml";
+    std::error_code existsError;
+    if (std::filesystem::exists(layoutPath, existsError))
+    {
+      std::string layoutError;
+      if (!scoreboard::LoadLayout(layoutPath.string(), &g_scoreboardLayout, &layoutError))
+      {
+        printf("PPUC: scoreboard not loaded: %s\n", layoutError.c_str());
+      }
+      else
+      {
+        g_hasScoreboard = true;
+        g_scoreboardFolder = folder.string();
+        g_scoreboardFeed.SetVars(g_scoreboardLayout.playerVarNames, g_scoreboardLayout.ballVarNames);
+        printf("Scoreboard: %s, %zu fields, the scene window is %dx%d (PUP CustomPos %s)\n",
+               layoutPath.string().c_str(), g_scoreboardLayout.fields.size(), g_scoreboardLayout.windowW,
+               g_scoreboardLayout.windowH, scoreboard::PupCustomPos(g_scoreboardLayout, 2).c_str());
+        if (!useScriptEngine)
+        {
+          printf("Scoreboard: no scores under a ROM, only what the rules set with ppuc.scoreboardSet\n");
+        }
+      }
+    }
+  }
+
   const bool needPluginBus = opt_pup || opt_altsound || opt_b2s || !useScriptEngine;
   if (needPluginBus)
   {
@@ -10196,8 +10391,13 @@ int main(int argc, char** argv)
     // The overlay rides along with the backglass frame rather than opening a
     // window beside it. Two fullscreen windows on KMSDRM means the panel
     // alternates between them as fast as they present.
-    pMediaPluginHost->SetOverlayDraw([](SDL_Renderer* renderer, int w, int h)
-                                     { DrawServiceScreenInto(renderer, w, h, false); });
+    // The scoreboard first, over the PUP scene; the tools over that.
+    pMediaPluginHost->SetOverlayDraw(
+        [](SDL_Renderer* renderer, int w, int h)
+        {
+          DrawScoreboardInto(renderer, w, h, false);
+          DrawServiceScreenInto(renderer, w, h, false);
+        });
 #endif
     MediaPluginHost::Options mediaOptions;
     mediaOptions.enablePup = opt_pup;
@@ -10284,10 +10484,14 @@ int main(int argc, char** argv)
   {
     opt_translite = NULL;
     opt_translite_attract = NULL;
+    g_hasScoreboard = false;
   }
+  // A scoreboard needs a window of its own only where no backglass is drawn.
+  const bool scoreboardWindow =
+      g_hasScoreboard && (pMediaPluginHost == nullptr || !pMediaPluginHost->HasBackglass());
 
 #ifndef PPUC_USE_KMSDMD
-  if (opt_translite || opt_virtual_dmd)
+  if (opt_translite || opt_virtual_dmd || scoreboardWindow)
   {
     ConfigureSDLVideoDriverForHeadlessLinux();
     if (!SDL_Init(SDL_INIT_VIDEO))
@@ -10391,6 +10595,27 @@ int main(int argc, char** argv)
     SDL_FlushRenderer(pTransliteRenderer);
 #endif
   }
+
+#ifndef PPUC_USE_KMSDMD
+  // The scoreboard in the translite's place: same screen, same size, its own
+  // window when the game has no translite picture at all. With one, the
+  // translite window is reused and the scoreboard draws over its picture.
+  if (scoreboardWindow && pTransliteRenderer == nullptr)
+  {
+    if (!SDL_CreateWindowAndRenderer("PPUC Scoreboard", opt_translite_width, opt_translite_height,
+                                     opt_translite_window ? SDL_WINDOW_BORDERLESS : SDL_WINDOW_FULLSCREEN,
+                                     &pTransliteWindow, &pTransliteRenderer) ||
+        !PositionWindowOnScreen(pTransliteWindow, opt_translite_screen))
+    {
+      printf("PPUC: scoreboard not shown: no window: %s\n", SDL_GetError());
+      if (pTransliteRenderer) SDL_DestroyRenderer(pTransliteRenderer);
+      if (pTransliteWindow) SDL_DestroyWindow(pTransliteWindow);
+      pTransliteRenderer = nullptr;
+      pTransliteWindow = nullptr;
+      g_hasScoreboard = false;
+    }
+  }
+#endif
 
   if (opt_virtual_dmd)
   {
@@ -10557,6 +10782,10 @@ int main(int argc, char** argv)
     pLuaRulesEngine->SetAdjustments(&g_adjustments);
     pLuaRulesEngine->SetMachineMemory(&g_machineMemory);
     pLuaRulesEngine->SetSwitchReport(&g_switchReport);
+    if (g_hasScoreboard)
+    {
+      pLuaRulesEngine->SetScoreboardFeed(&g_scoreboardFeed);
+    }
     pLuaRulesEngine->SetSwitchGroups(pPpuc->GetSwitchGroups());
     pLuaRulesEngine->SetActionCallback(
         [](const RulesAction& action)
@@ -11421,6 +11650,12 @@ int main(int argc, char** argv)
           switch (request.command)
           {
             case RenderCommand::RENDER_GAME:
+              if (ScoreboardOwnsWindow())
+              {
+                // The scoreboard is the game's picture; it redraws itself.
+                g_scoreboardRedraw = true;
+                break;
+              }
               printf("Rendering translite\n");
 #ifdef PPUC_USE_KMSDMD
               if (!RenderTransliteImage(transliteImage, pTransliteDisplay.get()))
@@ -11438,6 +11673,11 @@ int main(int argc, char** argv)
               break;
 
             case RenderCommand::RENDER_ATTRACT:
+              if (ScoreboardOwnsWindow())
+              {
+                g_scoreboardRedraw = true;
+                break;
+              }
               printf("Rendering attract translite\n");
 #ifdef PPUC_USE_KMSDMD
               if (!RenderTransliteImage(transliteAttractImage.pixels.empty() ? transliteImage : transliteAttractImage,
@@ -11517,6 +11757,7 @@ int main(int argc, char** argv)
           RenderOverlay();
         }
       }
+      ServiceScoreboardWindow();
 
 #ifndef PPUC_USE_KMSDMD
       // The virtual DMD is drawn here, not where its frames arrive. libdmdutil
@@ -11756,6 +11997,12 @@ int main(int argc, char** argv)
   // were destroyed after the bus had unloaded the plugins they point into.
   pLuaRulesEngine.reset();
   pEngine.reset();
+
+#ifndef PPUC_USE_KMSDMD
+  // Its textures belong to the backglass or the window renderer, and both go
+  // below.
+  g_scoreboardBoard.Unload();
+#endif
 
   if (pMediaPluginHost)
   {

@@ -1,0 +1,339 @@
+#include "doctest.h"
+
+#include "RulesFixture.h"
+#include "scoreboard/BurnEffect.h"
+#include "scoreboard/ScoreboardModel.h"
+
+using namespace scoreboard;
+
+namespace
+{
+
+Layout MakeLayout()
+{
+  Layout layout;
+  layout.font = "font.ttf";
+  layout.lists["ranks"] = {"Rookie", "Officer", "Sergeant"};
+  Field rank;
+  rank.text = "{player.rank:ranks}";
+  layout.fields.push_back(rank);
+  Field bullets;
+  bullets.type = Field::Type::Icons;
+  Source::Parse("player.bullets", &bullets.source);
+  bullets.mask = true;
+  bullets.count = 8;
+  bullets.on = "on.png";
+  layout.fields.push_back(bullets);
+  Field stars;
+  stars.type = Field::Type::Icons;
+  Source::Parse("player.badges", &stars.source);
+  stars.count = 5;
+  stars.on = "star.png";
+  layout.fields.push_back(stars);
+  Field hits;
+  hits.text = "{ball.bullets_hit} hits";
+  layout.fields.push_back(hits);
+  layout.Finish();
+  return layout;
+}
+
+Snapshot MakeSnapshot(const Layout& layout)
+{
+  Snapshot snapshot;
+  snapshot.facts.hasGame = true;
+  snapshot.facts.inGame = true;
+  snapshot.facts.players = 3;
+  snapshot.facts.current = 2;
+  snapshot.facts.ball = 2;
+  snapshot.facts.credits = 4;
+  snapshot.facts.scores = {1000, 38720500, 500, 0};
+  snapshot.facts.playerVars.assign(layout.playerVarNames.size(), 0);
+  snapshot.facts.ballVars.assign(layout.ballVarNames.size(), 0);
+  return snapshot;
+}
+
+void SetVar(const Layout& layout, Snapshot* snapshot, const std::string& name, int64_t value)
+{
+  for (size_t i = 0; i < layout.playerVarNames.size(); ++i)
+    if (layout.playerVarNames[i] == name) snapshot->facts.playerVars[i] = value;
+  for (size_t i = 0; i < layout.ballVarNames.size(); ++i)
+    if (layout.ballVarNames[i] == name) snapshot->facts.ballVars[i] = value;
+}
+
+}  // namespace
+
+TEST_CASE("scoreboard: sources parse")
+{
+  Source source;
+  CHECK(Source::Parse("ball", &source));
+  CHECK(source.kind == Source::Kind::Ball);
+  CHECK(Source::Parse("score3", &source));
+  CHECK(source.kind == Source::Kind::PlayerScore);
+  CHECK(source.index == 3);
+  CHECK(Source::Parse("player.rank", &source));
+  CHECK(source.kind == Source::Kind::PlayerVar);
+  CHECK(source.name == "rank");
+  CHECK(Source::Parse("value.mode", &source));
+  CHECK(source.kind == Source::Kind::Value);
+  CHECK_FALSE(Source::Parse("score5", &source));
+  CHECK_FALSE(Source::Parse("player.", &source));
+  CHECK_FALSE(Source::Parse("bogus", &source));
+}
+
+TEST_CASE("scoreboard: the layout collects the variables its fields read")
+{
+  const Layout layout = MakeLayout();
+  CHECK(layout.playerVarNames == std::vector<std::string>{"rank", "bullets", "badges"});
+  CHECK(layout.ballVarNames == std::vector<std::string>{"bullets_hit"});
+  CHECK(layout.styles.count("burnt") == 1);
+  CHECK(layout.styles.count("ember") == 1);
+  CHECK(layout.Validate().empty());
+}
+
+TEST_CASE("scoreboard: validation names what is wrong")
+{
+  Layout layout = MakeLayout();
+  Field bad;
+  bad.text = "{player.rank:titles} {nonsense}";
+  bad.style = "chalk";
+  layout.fields.push_back(bad);
+  layout.logoSize = 20;
+  layout.windowW = 5000;
+  layout.Finish();
+  const std::vector<std::string> problems = layout.Validate();
+  REQUIRE(problems.size() == 5);
+  CHECK(problems[0] == "the window does not fit the size");
+  CHECK(problems[1].find("logo size") != std::string::npos);
+  CHECK(problems[2] == "field 5: style 'chalk' is not defined");
+  CHECK(problems[3] == "field 5: list 'titles' is not defined");
+  CHECK(problems[4] == "field 5: '{nonsense}' is not a value");
+}
+
+TEST_CASE("scoreboard: scores get thousands separators")
+{
+  CHECK(FormatScore(0) == "0");
+  CHECK(FormatScore(999) == "999");
+  CHECK(FormatScore(1000) == "1,000");
+  CHECK(FormatScore(38720500) == "38,720,500");
+}
+
+TEST_CASE("scoreboard: text fields")
+{
+  const Layout layout = MakeLayout();
+  Snapshot snapshot = MakeSnapshot(layout);
+  SetVar(layout, &snapshot, "rank", 2);
+  SetVar(layout, &snapshot, "bullets_hit", 7);
+  snapshot.values["mode"] = "Barroom Brawl";
+
+  CHECK(ExpandText("Ball {ball}", layout, snapshot) == "Ball 2");
+  CHECK(ExpandText("Player {player} of {players}", layout, snapshot) == "Player 2 of 3");
+  CHECK(ExpandText("{score}", layout, snapshot) == "38,720,500");
+  CHECK(ExpandText("{score1}", layout, snapshot) == "1,000");
+  CHECK(ExpandText("{player.rank:ranks}", layout, snapshot) == "Sergeant");
+  CHECK(ExpandText("{player.rank}", layout, snapshot) == "2");
+  CHECK(ExpandText("{ball.bullets_hit} hits", layout, snapshot) == "7 hits");
+  CHECK(ExpandText("{value.mode}", layout, snapshot) == "Barroom Brawl");
+  CHECK(ExpandText("Credits {credits}", layout, snapshot) == "Credits 4");
+  // A typo is a gap, not braces on a machine's screen.
+  CHECK(ExpandText("a{typo}b", layout, snapshot) == "ab");
+  CHECK(ExpandText("{value.unset}", layout, snapshot) == "");
+  // Past the end of a list: nothing rather than a crash.
+  SetVar(layout, &snapshot, "rank", 9);
+  CHECK(ExpandText("{player.rank:ranks}", layout, snapshot) == "");
+  CHECK(ExpandText("open {brace", layout, snapshot) == "open {brace");
+}
+
+TEST_CASE("scoreboard: icons lit by count or by bit")
+{
+  const Layout layout = MakeLayout();
+  Snapshot snapshot = MakeSnapshot(layout);
+  SetVar(layout, &snapshot, "bullets", 0b10100101);
+  SetVar(layout, &snapshot, "badges", 3);
+
+  CHECK(IconsLit(layout.fields[1], layout, snapshot) ==
+        std::vector<bool>{true, false, true, false, false, true, false, true});
+  CHECK(IconsLit(layout.fields[2], layout, snapshot) == std::vector<bool>{true, true, true, false, false});
+  SetVar(layout, &snapshot, "badges", 99);
+  CHECK(IconsLit(layout.fields[2], layout, snapshot) == std::vector<bool>{true, true, true, true, true});
+}
+
+TEST_CASE("scoreboard: the featured player and the others")
+{
+  const Layout layout = MakeLayout();
+  Snapshot snapshot = MakeSnapshot(layout);
+  CHECK(FeaturedPlayer(snapshot) == 2);
+  CHECK(OtherPlayers(snapshot) == std::vector<int>{1, 3});
+
+  // After the game the best score is the big one.
+  snapshot.facts.inGame = false;
+  snapshot.facts.scores = {5000, 2000, 9000, 0};
+  CHECK(FeaturedPlayer(snapshot) == 3);
+  CHECK(OtherPlayers(snapshot) == std::vector<int>{1, 2});
+
+  snapshot.facts.players = 0;
+  CHECK(FeaturedPlayer(snapshot) == 0);
+  CHECK(OtherPlayers(snapshot).empty());
+}
+
+TEST_CASE("scoreboard: fields show in game, in attract, or always")
+{
+  const Layout layout = MakeLayout();
+  Snapshot snapshot = MakeSnapshot(layout);
+  Field field;
+  field.when = When::Game;
+  CHECK(FieldVisible(field, snapshot));
+  field.when = When::Attract;
+  CHECK_FALSE(FieldVisible(field, snapshot));
+  snapshot.facts.inGame = false;
+  CHECK(FieldVisible(field, snapshot));
+}
+
+TEST_CASE("scoreboard: the feed moves on only when something changed")
+{
+  Feed feed;
+  Facts facts;
+  facts.players = 1;
+  feed.Publish(facts);
+  const uint64_t v1 = feed.Version();
+  feed.Publish(facts);
+  CHECK(feed.Version() == v1);
+  facts.scores[0] = 10;
+  feed.Publish(facts);
+  CHECK(feed.Version() == v1 + 1);
+
+  feed.SetValue("mode", "Stakeout");
+  CHECK(feed.Version() == v1 + 2);
+  feed.SetValue("mode", "Stakeout");
+  CHECK(feed.Version() == v1 + 2);
+
+  Snapshot snapshot;
+  CHECK(feed.ReadIfNewer(0, &snapshot));
+  CHECK(snapshot.values.at("mode") == "Stakeout");
+  CHECK(snapshot.facts.scores[0] == 10);
+  CHECK_FALSE(feed.ReadIfNewer(snapshot.version, &snapshot));
+
+  feed.SetValue("mode", "");
+  CHECK(feed.ReadIfNewer(snapshot.version, &snapshot));
+  CHECK(snapshot.values.count("mode") == 0);
+  feed.SetValue("mode", "");
+  CHECK_FALSE(feed.ReadIfNewer(snapshot.version, &snapshot));
+}
+
+TEST_CASE("scoreboard: PUP CustomPos for the window")
+{
+  Layout layout;
+  layout.windowX = 320;
+  layout.windowY = 54;
+  layout.windowW = 1280;
+  layout.windowH = 720;
+  CHECK(PupCustomPos(layout, 2) == "2,16.667,5.000,66.667,66.667");
+}
+
+TEST_CASE("scoreboard: UTF-8")
+{
+  CHECK(DecodeUtf8("A1") == std::vector<uint32_t>{'A', '1'});
+  CHECK(DecodeUtf8("\xc3\xa9") == std::vector<uint32_t>{0xe9});
+  CHECK(DecodeUtf8("\xe2\x98\x85") == std::vector<uint32_t>{0x2605});
+  CHECK(DecodeUtf8("\xe2\x98") == std::vector<uint32_t>{'?', '?'});
+  CHECK(DecodeUtf8("\xff") == std::vector<uint32_t>{'?'});
+}
+
+TEST_CASE("scoreboard: a burnt letter")
+{
+  // A 10x10 square of full coverage in a 20x20 box.
+  const int n = 20;
+  std::vector<uint8_t> coverage(n * n, 0);
+  for (int y = 5; y < 15; ++y)
+    for (int x = 5; x < 15; ++x) coverage[y * n + x] = 255;
+
+  Style burnt;
+  std::vector<uint8_t> rgba;
+  int w = 0, h = 0;
+  Burn(coverage.data(), n, n, burnt, 40, &rgba, &w, &h);
+  const int pad = BurnPad(burnt, 40);
+  CHECK(w == n + 2 * pad);
+  CHECK(h == n + 2 * pad);
+  auto px = [&](int x, int y) { return &rgba[(static_cast<size_t>(y + pad) * w + (x + pad)) * 4]; };
+
+  // The middle of the letter: nearly opaque and dark.
+  CHECK(px(10, 10)[3] > 200);
+  CHECK(px(10, 10)[0] < 80);
+  // Just outside: scorched, partly see-through.
+  CHECK(px(16, 10)[3] > 0);
+  CHECK(px(16, 10)[3] < px(10, 10)[3]);
+  // The far corner of the padding: untouched wood.
+  CHECK(rgba[3] == 0);
+
+  // The same glyph burns the same way twice.
+  std::vector<uint8_t> again;
+  Burn(coverage.data(), n, n, burnt, 40, &again, &w, &h);
+  CHECK(again == rgba);
+
+  // A glowing brand is bright in the middle.
+  Layout layout;
+  layout.Finish();
+  std::vector<uint8_t> hot;
+  Burn(coverage.data(), n, n, layout.styles.at("ember"), 40, &hot, &w, &h);
+  const int hotPad = BurnPad(layout.styles.at("ember"), 40);
+  const uint8_t* middle = &hot[(static_cast<size_t>(10 + hotPad) * w + (10 + hotPad)) * 4];
+  CHECK(middle[0] > 200);
+  CHECK(middle[1] > 150);
+}
+
+TEST_CASE("scoreboard: blur keeps the total")
+{
+  std::vector<float> values(9 * 9, 0.0f);
+  values[4 * 9 + 4] = 81.0f;
+  BlurCoverage(&values, 9, 9, 1);
+  float sum = 0.0f;
+  for (const float v : values) sum += v;
+  CHECK(sum == doctest::Approx(81.0f).epsilon(0.05));
+  CHECK(values[4 * 9 + 4] < 81.0f);
+  CHECK(values[4 * 9 + 5] > 0.0f);
+}
+
+TEST_CASE("scoreboard: the logo is scaled by area")
+{
+  // A one-pixel line in an 8x8 picture must survive halving: a plain resample
+  // drops every other row and with it the line.
+  std::vector<uint8_t> src(64, 0);
+  for (int x = 0; x < 8; ++x) src[3 * 8 + x] = 255;
+  const std::vector<uint8_t> out = ScaleCoverage(src.data(), 8, 8, 4, 4);
+  REQUIRE(out.size() == 16);
+  CHECK(out[1 * 4 + 0] == 127);
+  CHECK(out[0] == 0);
+  CHECK(ScaleCoverage(src.data(), 8, 8, 0, 4).empty());
+}
+
+TEST_CASE("scoreboard: rules set values with ppuc.scoreboardSet")
+{
+  Feed feed;
+  ppuc_test::RulesHarness rules(R"(
+    function ppuc.onSwitchChanged(number, state)
+      if state == 0 then return end
+      if number == 1 then ppuc.scoreboardSet("mode", "Stakeout") end
+      if number == 2 then ppuc.scoreboardSet("jackpot", 25000000) end
+      if number == 3 then ppuc.scoreboardSet("mode", nil) end
+      if number == 4 then ppuc.scoreboardSet("lit", true) end
+    end
+  )");
+  REQUIRE(rules.Load() == "");
+  // No scoreboard: the call works and goes nowhere.
+  rules.engine().ProcessSwitchState(1, 1);
+  rules.engine().ProcessSwitchState(1, 0);
+  CHECK(feed.Version() == 0);
+
+  rules.engine().SetScoreboardFeed(&feed);
+  rules.engine().ProcessSwitchState(1, 1);
+  rules.engine().ProcessSwitchState(2, 1);
+  rules.engine().ProcessSwitchState(4, 1);
+  Snapshot snapshot;
+  REQUIRE(feed.ReadIfNewer(0, &snapshot));
+  CHECK(snapshot.values.at("mode") == "Stakeout");
+  CHECK(snapshot.values.at("jackpot") == "25000000");
+  CHECK(snapshot.values.at("lit") == "1");
+
+  rules.engine().ProcessSwitchState(3, 1);
+  REQUIRE(feed.ReadIfNewer(snapshot.version, &snapshot));
+  CHECK(snapshot.values.count("mode") == 0);
+}

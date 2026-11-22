@@ -40,6 +40,7 @@ flash/
   slides/            how-to-play slides for attract mode
   music/             background music
   pup/               PUP video pack
+  scoreboard/        the game's own screen around the videos (section 8)
   translite-on.png   the backglass image while a game is running
   translite-off.png  the backglass image in attract mode
   state/             written by PPUC: adjustments, switch report, machine memory
@@ -706,12 +707,103 @@ One screen, several things that might want it, in this order:
    interrupted mid-write does not come back.
 2. **The service menu or monitor**, when somebody has a keyboard out.
 3. **The slideshow**, when the machine has been idle in attract.
-4. **The game**: B2S, PUP video, or the translite image.
+4. **The game**: its scoreboard over the PUP video, a B2S, or the translite
+   image.
 
 Only one of them draws at a time, and only one presents a frame. On a machine
 with no desktop compositor, two windows presenting means the panel alternates
 between them as fast as they draw — which looks exactly like a hardware fault
 and is not one.
+
+### The scoreboard
+
+A game can bring its own full screen: a frame (a ranch gate, a saloon
+front, a cockpit), the scores of up to four players along it, the game's own
+signs at the sides, and the scene videos in a window in the middle. It lives
+in the game folder:
+
+```
+scoreboard/
+  scoreboard.yaml    what goes where
+  frame.png          the frame, transparent where the scene shows
+  idle.png           shown in the window when no video plays (optional)
+  *.png              pictures for the signs: bullets, stars, ...
+  SomeFont.ttf       the font, with its licence
+```
+
+PPUC draws it on top of whatever PUP plays, in the same frame. Without a PUP
+pack it opens the screen itself (the `[Translite]` screen, size and window
+settings) and shows `idle.png` in the window.
+
+It costs next to nothing, which is the point: only the video moves every
+frame. The frame is one picture. Every letter is burnt into the wood once,
+when the game loads, and a score is then a dozen small copies. Nothing is
+redrawn while nothing changes, and no video is spent on a score.
+
+The **PPUC logo** is always on it, burnt into one corner. The layout chooses
+the corner and the size; it cannot leave it out.
+
+#### scoreboard.yaml
+
+```yaml
+scoreboard:
+  size: [1920, 1080]           # the layout's coordinates; scaled to the screen
+  frame: frame.png
+  idle: idle.png
+  font: Rye-Regular.ttf
+  window: [320, 120, 1280, 720]  # where the scene shows: x, y, width, height
+  logo: {corner: top-right, size: 180, margin: 24}
+  styles:                      # how text is burnt in; "burnt" and "ember" exist
+    ember: {core: "ffcf48", scorch: "3a1606", glow: true}
+  lists:
+    ranks: [Rookie, Officer, Sergeant, Detective]
+  fields:
+    - {type: current_score, x: 960, y: 846, size: 116, style: ember}
+    - {type: other_scores, x: 330, y: 992, width: 1260, size: 44}
+    - {type: text, when: game, text: "Player {player}", x: 342, y: 882, size: 40, align: left}
+    - {type: text, when: game, text: "{player.rank:ranks}", x: 177, y: 714, size: 40}
+    - type: icons
+      source: player.bullets   # lit by a count, or with lit: mask by bit
+      lit: mask
+      count: 8
+      on: bullet_on.png
+      off: bullet_off.png
+      x: 82
+      y: 236
+      dx: 52
+      dy: 78
+      columns: 4
+```
+
+- **current_score** is the player whose turn it is, large; after a game, the
+  best score of it. **other_scores** spreads everybody else over its width.
+- **text** fills in `{ball}`, `{player}`, `{players}`, `{credits}`, `{score}`,
+  `{score1}`..`{score4}`, `{player.NAME}` and `{ball.NAME}` (the game's
+  `ppuc.game` variables), and `{value.NAME}`, which the rules set with
+  `ppuc.scoreboardSet`. `{player.rank:ranks}` turns a number into a name from
+  a list. A name that means nothing shows as nothing.
+- **when** is `always`, `game` or `attract`.
+- `x` of a text is where `align` puts it; `y` is the top of the letters.
+
+A mistake in the file is reported when the game starts, with the line, and
+the game plays without the scoreboard.
+
+#### Making the art
+
+`ppuc-scoreboard-preview` draws a layout into a PNG with made-up scores, so
+the art can be made and checked without a machine:
+
+```
+ppuc-scoreboard-preview /path/to/game out.png --players 3 --current 2 \
+    --var rank=4 --var bullets=0x93 --set "mode=Stakeout" --scene frame-of-a-video.png
+```
+
+It also prints the PUP `CustomPos` that puts a video exactly into the window.
+Make the scene videos the window's size (1280x720 for the layout above) and
+they play without being scaled, which is the cheapest thing the screen can do.
+
+The scoreboard needs a ROM-less game for its scores; under a ROM it shows
+only what the rules set.
 
 ## 9. Updating board firmware
 

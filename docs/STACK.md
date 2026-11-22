@@ -130,6 +130,11 @@ bandwidth than an idle playfield.
 - `src/ScriptEngine.*` + `src/game/`: the ROM-less engine for electro-mechanical
   machines, driven by config and Lua rules.
 - `src/LuaRulesEngine.*`: embedded Lua 5.4 rules engine (`ppuc.*` namespace).
+- `src/scoreboard/`: a game's own backbox screen around the scene videos
+  (`scoreboard/scoreboard.yaml` in the game folder). `ScoreboardModel` is the
+  SDL-free part (layout, the feed from the machine thread, text); `BurnEffect`
+  makes burnt-in glyphs once at load; `Scoreboard` draws with SDL over the PUP
+  backglass or in its own window; `ScoreboardPreview` → `ppuc-scoreboard-preview`.
 - `src/MediaPluginHost.*`: hosts VPX message plugins (PUP, B2S, AltSound) via
   `MsgPluginManager` from the vpinball plugin SDK.
 - `src/AudioOutput.*`: SDL3_mixer background music and speech mixing/ducking.
