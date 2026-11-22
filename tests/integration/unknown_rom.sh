@@ -31,11 +31,6 @@ fi
 LOG="$(mktemp -t ppuc_unknown_rom)"
 # A game folder with nothing but the wiring: no translite, so no window, and no
 # state/ written into ppuc_games.
-#
-# Known flake, not what this tests: on macOS a run now and then dies while the
-# plugin bus loads the plugins, before PinMAME is asked for the ROM (status 132
-# or 139, last line "Plugin directory: ..."). It happens on commits before this
-# test existed too.
 FOLDER="$(mktemp -d -t ppuc_unknown_rom_game)"
 cp "${GAME}/io-boards.yaml" "${FOLDER}/"
 trap 'rm -f "${LOG}"; rm -rf "${FOLDER}"' EXIT
