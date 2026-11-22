@@ -822,6 +822,18 @@ It also prints the PUP `CustomPos` that puts a video exactly into the window.
 Make the scene videos the window's size (1280x720 for the layout above) and
 they play without being scaled, which is the cheapest thing the screen can do.
 
+`tools/make-scenes.sh` cuts the scene clips out of a film you have the rights
+to, at the window's size and as H.264 the Pi decodes in hardware:
+
+```
+tools/make-scenes.sh film.mkv pup/scenes --list scenes.txt   # name start length per line
+tools/make-scenes.sh film.mkv pup/scenes --random 20 --length 6
+```
+
+A wide film is cut at the sides to fill the window, never stretched. The
+sound is dropped unless `--audio` is given, since the game has its own.
+`--size` matches a window other than 1280x720.
+
 The scoreboard needs a ROM-less game for its scores; under a ROM it shows
 only what the rules set.
 
