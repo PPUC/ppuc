@@ -151,4 +151,36 @@ bool LoadConfig(const std::string& path, const GameConfig* game, Config* pConfig
   return true;
 }
 
+bool LoadDevices(const std::string& path, std::vector<Device>* pSwitches, std::vector<Device>* pOutputs,
+                 std::string* pError)
+{
+  try
+  {
+    const YAML::Node file = YAML::LoadFile(path);
+    auto read = [](const YAML::Node& list, std::vector<Device>* out, bool output)
+    {
+      if (!list || !list.IsSequence()) return;
+      for (const auto& node : list)
+      {
+        if (!node["number"]) continue;
+        Device device;
+        device.number = node["number"].as<int>();
+        device.board = node["board"] ? node["board"].as<int>() : 0;
+        device.port = node["port"] ? node["port"].as<int>() : 0;
+        device.description = node["description"] ? node["description"].as<std::string>() : std::string();
+        if (output) device.type = node["type"] ? node["type"].as<std::string>() : std::string("coil");
+        out->push_back(device);
+      }
+    };
+    read(file["switches"], pSwitches, false);
+    read(file["pwmOutput"], pOutputs, true);
+  }
+  catch (const std::exception& ex)
+  {
+    if (pError) *pError = path + ": " + ex.what();
+    return false;
+  }
+  return true;
+}
+
 }  // namespace bench

@@ -465,6 +465,8 @@ const char* opt_altsound_hardware = NULL;
 int opt_serum_resolution = 0;
 bool opt_no_serial = false;
 bool opt_bench = false;
+// io-boards.yaml, for what needs it after startup (the monitor on a bench).
+std::string g_configFilePath;
 std::string opt_scoreboard_record;
 std::string opt_bench_play;
 bool opt_no_sound = false;
@@ -2590,21 +2592,54 @@ static void EnsureMonitorTables()
     }
 
     std::vector<MonitorEntry> switches;
+    std::vector<MonitorEntry> coils;
     for (const PPUCSwitch& sw : pPpuc->GetSwitches())
     {
         switches.push_back({sw.number, sw.board, sw.port, sw.description, 0, 0, 0});
+    }
+    for (const PPUCCoil& coil : pPpuc->GetCoils())
+    {
+        coils.push_back({coil.number, coil.board, coil.port, coil.description, 0, 0, 0, 0, coil.type});
+    }
+    // No boards (--bench): libppuc only learns the devices while connecting,
+    // so they come from the game's io-boards.yaml, as libppuc would read them.
+    if (switches.empty() && opt_no_serial && !g_configFilePath.empty())
+    {
+        static bool tried = false;
+        if (tried)
+        {
+            return;
+        }
+        tried = true;
+        std::vector<bench::Device> yamlSwitches;
+        std::vector<bench::Device> yamlOutputs;
+        std::string error;
+        if (!bench::LoadDevices(g_configFilePath, &yamlSwitches, &yamlOutputs, &error))
+        {
+            printf("PPUC: switch monitor: %s\n", error.c_str());
+            return;
+        }
+        for (const bench::Device& d : yamlSwitches)
+        {
+            switches.push_back({d.number, static_cast<uint8_t>(d.board), static_cast<uint8_t>(d.port), d.description,
+                                0, 0, 0});
+        }
+        for (const bench::Device& d : yamlOutputs)
+        {
+            const uint8_t type = d.type == "flasher" ? PWM_TYPE_FLASHER
+                                 : d.type == "lamp"  ? PWM_TYPE_LAMP
+                                 : d.type == "motor" ? PWM_TYPE_MOTOR
+                                 : d.type == "shaker" ? PWM_TYPE_SHAKER
+                                                      : PWM_TYPE_SOLENOID;
+            coils.push_back({d.number, static_cast<uint8_t>(d.board), static_cast<uint8_t>(d.port), d.description,
+                             0, 0, 0, 0, type});
+        }
     }
     if (switches.empty())
     {
         return;
     }
     BuildMonitorTable(g_switchMonitorEntries, g_switchMonitorIndex, std::move(switches));
-
-    std::vector<MonitorEntry> coils;
-    for (const PPUCCoil& coil : pPpuc->GetCoils())
-    {
-        coils.push_back({coil.number, coil.board, coil.port, coil.description, 0, 0, 0, 0, coil.type});
-    }
     BuildMonitorTable(g_coilMonitorEntries, g_coilMonitorIndex, std::move(coils));
 
     printf("PPUC: switch monitor showing %zu switches and %zu coils\n", g_switchMonitorEntries.size(),
@@ -10259,6 +10294,8 @@ int main(int argc, char** argv)
       pPpuc->SetTiltSwitch(static_cast<uint8_t>(g_gameConfig.tilt.inhibitSwitch));
     }
   }
+
+  g_configFilePath = config_file != nullptr ? config_file : "";
 
   // --bench: a ball model in the boards' place. It needs a trough to serve
   // from, which a ROM-less game has in emGame: and any game can give in bench:.

@@ -381,6 +381,10 @@ logged at all.
   e.g. *(1-60)*, operating a switch brings up its page for a few seconds, and
   when nothing changes the pages take turns.
 
+On a desk without boards (`--bench`) the monitor lists the switches and coils
+from the game's `io-boards.yaml` and shows what the ball model and the play
+script do with them.
+
 The monitor shows what the *machine* is doing, before any rule suppresses
 anything. That is deliberate: if a rule is eating a switch, the monitor is how
 you find out.
