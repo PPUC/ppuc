@@ -20,7 +20,10 @@
 //   --effect name       pop, fade, slide, shake
 //   --spot name         a callout spot of the layout (default center)
 //   --replay timeline   plays a recorded game instead: one PNG per frame
-//   --frames folder     where the replay's frames go (frame00001.png, ...)
+//   --frames folder     where the replay's frames go (frame00001.png, ...); "-"
+//                       writes them raw to stdout instead, RGBA, for a pipe into
+//                       ffmpeg -f rawvideo -pix_fmt rgba -s WxH -r FPS -i -
+//                       (a long game as PNGs is tens of gigabytes)
 //   --fps n             replay frame rate (default 30)
 //   --transparent       leave the window see-through, to lay the frames over
 //                       a video afterwards
@@ -325,7 +328,8 @@ int main(int argc, char** argv)
       std::fprintf(stderr, "--replay needs --frames\n");
       return 2;
     }
-    std::filesystem::create_directories(framesDir);
+    const bool toStdout = framesDir == "-";
+    if (!toStdout) std::filesystem::create_directories(framesDir);
     // A replay starts from nothing: no game, the timeline says what there is.
     snapshot = Snapshot{};
     snapshot.facts.hasGame = true;
@@ -353,6 +357,22 @@ int main(int argc, char** argv)
       SDL_RenderClear(renderer);
       board.Draw(width, height, snapshot, !transparent, t);
       SDL_FlushRenderer(renderer);
+      if (toStdout)
+      {
+        // Row by row: the surface may pad its rows.
+        bool written = true;
+        for (int y = 0; y < height && written; ++y)
+        {
+          const uint8_t* row = static_cast<const uint8_t*>(surface->pixels) + static_cast<size_t>(y) * surface->pitch;
+          written = std::fwrite(row, 4, static_cast<size_t>(width), stdout) == static_cast<size_t>(width);
+        }
+        if (!written)
+        {
+          std::fprintf(stderr, "frame %d: stdout closed\n", frame + 1);
+          return 1;
+        }
+        continue;
+      }
       char name[32];
       std::snprintf(name, sizeof(name), "frame%05d.png", frame + 1);
       if (!IMG_SavePNG(surface, (std::filesystem::path(framesDir) / name).string().c_str()))
@@ -361,9 +381,11 @@ int main(int argc, char** argv)
         return 1;
       }
     }
+    std::fflush(stdout);
     IMG_SavePNG(surface, outPath.c_str());
-    std::printf("replayed %zu changes into %d frames at %d fps in %s (%.1f s to draw and save)\n", events.size(), frame,
-                fps, framesDir.c_str(), (SDL_GetTicksNS() - started) / 1e9);
+    // On stderr: stdout may be the video.
+    std::fprintf(stderr, "replayed %zu changes into %d frames at %d fps in %s (%.1f s to draw and save)\n", events.size(), frame,
+                fps, toStdout ? "stdout" : framesDir.c_str(), (SDL_GetTicksNS() - started) / 1e9);
     board.Unload();
     SDL_DestroyRenderer(renderer);
     SDL_DestroySurface(surface);

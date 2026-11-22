@@ -854,6 +854,20 @@ writes one from a real game: on the machine, or on a desk with `--bench`
 (see [section 7](#7-rules)). With `--no-display` the board is
 then recorded without being shown.
 
+A whole game as PNGs is tens of gigabytes. `--frames -` writes the frames
+raw to stdout instead, straight into ffmpeg, with nothing on disk; with
+`--transparent` the scene videos can go under it in the same command:
+
+```
+ppuc-scoreboard-preview /path/to/game last.png --replay game.txt --frames - --transparent |
+  ffmpeg -f lavfi -i color=black:s=1920x1080:r=30 -f concat -safe 0 -i scenes.txt \
+         -f rawvideo -pix_fmt rgba -s 1920x1080 -r 30 -i - \
+         -filter_complex "[0][1]overlay=320:120[bg];[bg][2]overlay=0:0:shortest=1,format=yuv420p" game.mp4
+```
+
+(`scenes.txt` lists the clips, `file 'scene01.mp4'` a line; 320:120 is the
+window's corner.)
+
 It also prints the PUP `CustomPos` that puts a video exactly into the window
 on a screen of `--size`.
 Make the scene videos the window's size (1280x720 for the layout above) and
