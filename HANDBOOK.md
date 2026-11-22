@@ -845,7 +845,11 @@ tools/make-scenes.sh film.mkv pup/scenes --list scenes.txt   # name start length
 tools/make-scenes.sh film.mkv pup/scenes --random 20 --length 6
 ```
 
-A wide film is cut at the sides to fill the window, never stretched. The
+A wide film is cut at the sides to fill the window, never stretched. Black
+bars that are part of the picture (a wide film inside a 16:9 file, as
+many copies are) are found and cut off first; `--no-crop` keeps them. For a
+short clip rather than a whole film, `--skip-start 5 --skip-end 5` keeps the
+random picks from leaving out minutes of it. The
 sound is dropped unless `--audio` is given, since the game has its own.
 `--size` matches a window other than 1280x720.
 

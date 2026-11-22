@@ -27,6 +27,9 @@
 # --audio         keep the sound (AAC). Off by default: the game has its own.
 # --crf N         quality, lower is better and bigger (default 21)
 # --prefix TEXT   file name prefix for random clips (default "scene")
+# --no-crop       keep black bars that are part of the picture. By default
+#                 they are found (a wide film inside a 16:9 file) and cut off
+#                 first, so the scene fills the window.
 #
 # Clips are named <name>.mp4. Existing ones are left alone, so a list can grow
 # and be run again; delete a clip to make it again.
@@ -34,7 +37,7 @@
 set -u
 
 usage() {
-   sed -n '3,33p' "$0" | sed 's/^# \{0,1\}//'
+   sed -n '3,36p' "$0" | sed 's/^# \{0,1\}//'
    exit 2
 }
 
@@ -59,6 +62,7 @@ FPS=30
 AUDIO=0
 CRF=21
 PREFIX="scene"
+CROP=1
 
 while [ $# -gt 0 ]; do
    case "$1" in
@@ -73,6 +77,7 @@ while [ $# -gt 0 ]; do
       --audio) AUDIO=1; shift ;;
       --crf) CRF="${2:-}"; shift 2 ;;
       --prefix) PREFIX="${2:-}"; shift 2 ;;
+      --no-crop) CROP=0; shift ;;
       -h|--help) usage ;;
       *) die "unknown option $1" ;;
    esac
@@ -101,6 +106,28 @@ to_seconds() {
 DURATION="$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "${INPUT}")"
 [ -n "${DURATION}" ] || die "cannot read the length of ${INPUT}"
 
+# Black bars burnt into the picture: what cropdetect finds most often in 30 s
+# from the middle of the video, where there are no titles. Even numbers, as
+# the encoder wants.
+CROP_FILTER=""
+if [ "${CROP}" -eq 1 ]; then
+   middle="$(awk -v d="${DURATION}" 'BEGIN { m = d / 2 - 15; if (m < 0) m = 0; printf "%.1f", m }')"
+   detected="$(ffmpeg -hide_banner -nostdin -ss "${middle}" -t 30 -i "${INPUT}" -an \
+                  -vf "fps=2,cropdetect=limit=24:round=2:reset=0" -f null - 2>&1 |
+               grep -o 'crop=[0-9:]*' | sort | uniq -c | sort -rn | awk 'NR == 1 { print $2 }')"
+   size="$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0:s=x "${INPUT}")"
+   case "${detected}" in
+      crop=*)
+         cw="$(echo "${detected}" | cut -d= -f2 | cut -d: -f1)"
+         ch="$(echo "${detected}" | cut -d: -f2)"
+         if [ "${cw}x${ch}" != "${size}" ]; then
+            CROP_FILTER="${detected},"
+            echo "make-scenes: black bars in the picture; using ${cw}x${ch} of ${size} (--no-crop keeps them)"
+         fi
+         ;;
+   esac
+fi
+
 made=0
 kept=0
 
@@ -122,7 +149,7 @@ encode() {
    printf '%-24s from %8.1fs, %4.1fs\n' "${name}" "${start}" "${length}"
    if ! ffmpeg -hide_banner -loglevel error -nostdin -y \
          -ss "${start}" -t "${length}" -i "${INPUT}" \
-         -vf "scale=${W}:${H}:force_original_aspect_ratio=increase:flags=lanczos,crop=${W}:${H},fps=${FPS},format=yuv420p" \
+         -vf "${CROP_FILTER}scale=${W}:${H}:force_original_aspect_ratio=increase:flags=lanczos,crop=${W}:${H},fps=${FPS},format=yuv420p" \
          -c:v libx264 -preset slow -crf "${CRF}" -profile:v high -level:v 4.0 \
          -g "${FPS}" -keyint_min "${FPS}" -sc_threshold 0 \
          "${audio_args[@]}" -movflags +faststart \
