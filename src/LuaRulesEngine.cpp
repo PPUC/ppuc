@@ -9,6 +9,7 @@
 #include "SwitchReport.h"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -245,6 +246,7 @@ void LuaRulesEngine::RegisterApi()
   SetPpucFunction(m_lua, this, "excludeFromSwitchReport", LuaExcludeFromSwitchReport);
   SetPpucFunction(m_lua, this, "scoreboardSet", LuaScoreboardSet);
   SetPpucFunction(m_lua, this, "scoreboardCallout", LuaScoreboardCallout);
+  SetPpucFunction(m_lua, this, "gameVersion", LuaGameVersion);
 
   // Registered only when the ROM-less game is running, so `ppuc.game == nil` is
   // a reliable feature test for a script that must work under either engine.
@@ -1602,6 +1604,78 @@ int LuaRulesEngine::LuaScoreboardSet(lua_State* L)
   {
     engine->m_pScoreboardFeed->SetValue(name, value);
   }
+  return 0;
+}
+
+// MAJOR.MINOR.PATCH, numbers without leading zeros, then an optional
+// -prerelease and +build of dot-separated [0-9A-Za-z-] parts (semver.org).
+bool LuaRulesEngine::IsSemanticVersion(const std::string& version)
+{
+  size_t i = 0;
+  const auto number = [&]() -> bool
+  {
+    const size_t start = i;
+    while (i < version.size() && version[i] >= '0' && version[i] <= '9') ++i;
+    if (i == start) return false;
+    return !(version[start] == '0' && i - start > 1);
+  };
+  const auto identifiers = [&]() -> bool
+  {
+    bool any = false;
+    while (true)
+    {
+      const size_t start = i;
+      while (i < version.size() && (std::isalnum(static_cast<unsigned char>(version[i])) || version[i] == '-')) ++i;
+      if (i == start) return false;
+      any = true;
+      if (i < version.size() && version[i] == '.')
+      {
+        ++i;
+        continue;
+      }
+      return any;
+    }
+  };
+  if (!number() || i >= version.size() || version[i++] != '.') return false;
+  if (!number() || i >= version.size() || version[i++] != '.') return false;
+  if (!number()) return false;
+  if (i < version.size() && version[i] == '-')
+  {
+    ++i;
+    if (!identifiers()) return false;
+  }
+  if (i < version.size() && version[i] == '+')
+  {
+    ++i;
+    if (!identifiers()) return false;
+  }
+  return i == version.size();
+}
+
+LuaRulesEngine::GameIdentity LuaRulesEngine::GetGameIdentity() const
+{
+  std::lock_guard<std::mutex> lock(m_identityMutex);
+  return m_identity;
+}
+
+// ppuc.gameVersion(name, version): the game says what it is, for the log and
+// the service tools. The version is a semantic version; anything else is an
+// error naming the line, so "0.1" or "v0.1.0" is caught on the bench.
+int LuaRulesEngine::LuaGameVersion(lua_State* L)
+{
+  auto* engine = FromLua(L);
+  const char* name = luaL_checkstring(L, 1);
+  const char* version = luaL_checkstring(L, 2);
+  if (!IsSemanticVersion(version))
+  {
+    return luaL_error(L, "ppuc.gameVersion: '%s' is not a semantic version (MAJOR.MINOR.PATCH, e.g. 0.1.0)",
+                      version);
+  }
+  {
+    std::lock_guard<std::mutex> lock(engine->m_identityMutex);
+    engine->m_identity = GameIdentity{name, version};
+  }
+  printf("Game: %s %s\n", name, version);
   return 0;
 }
 

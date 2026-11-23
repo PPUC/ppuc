@@ -917,6 +917,7 @@ if(PPUC_BUILD_TESTS)
       tests/test_dmd_pacing.cpp
       tests/test_game_tilt.cpp
       tests/test_game_config_yaml.cpp
+      tests/test_tool_sounds.cpp
       tests/test_board_flipper_gate.cpp
       tests/test_health_log.cpp
       tests/test_playfield_assist.cpp

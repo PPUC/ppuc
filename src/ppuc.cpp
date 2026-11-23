@@ -50,6 +50,7 @@
 #include "DMDUtil/DMDUtil.h"
 #include "DebugTime.h"
 #include "Uf2Image.h"
+#include "ToolSounds.h"
 #include "ppuc_version.h"  // <--- HINZUGEFÜGT
 #ifdef PPUC_USE_KMSDMD
 #include "KMSDMD/KMSDMD.h"
@@ -697,6 +698,18 @@ std::string g_stateDirectory;
 // The four coin door buttons, decided on the switch thread (CoinDoor.h).
 CoinDoorRouter g_coinDoor;
 const char* opt_coin_door_buttons = nullptr;
+const char* opt_tool_sounds = nullptr;
+
+// The game's menu sounds for the tools (ToolSounds.h), sent like a rule's
+// ppuc.soundCommand. Without ToolSounds in ppuc.ini the tools are silent.
+static ToolSounds g_toolSounds;
+
+// The boards and versions screen, and what the boards said when they were
+// asked at start-up. Kept here so the screen costs no traffic on the bus.
+[[maybe_unused]] static int g_boardsSelection = 0;
+static std::mutex g_boardVersionsMutex;
+static std::vector<PPUCBoardVersion> g_boardVersions;
+static bool g_boardVersionsKnown = false;
 // The tools offer the ROM's own service menu only with a ROM, and only with an
 // ENTER to hand to it: a ROM-less game has no menu of its own, and a ROM's menu
 // without its buttons is a screen nobody can leave.
@@ -2422,6 +2435,7 @@ enum class OverlayScreen
     Test,
     Adjustments,
     SwitchReport,
+    Boards,
 };
 
 static OverlayScreen g_overlay = OverlayScreen::None;
@@ -3150,6 +3164,8 @@ static const OverlayMenuItem kOverlayMenu[] = {
     {"Tests", "Switches, coils, lamps, GI and flashers", OverlayScreen::Tests, OverlayAction::None},
     {"Adjustments", "Settings kept on the USB stick", OverlayScreen::Adjustments, OverlayAction::None},
     {"Switch report", "Switches that stopped changing", OverlayScreen::SwitchReport, OverlayAction::None},
+    {"Boards and versions", "The I/O boards with their firmware, and the game's version", OverlayScreen::Boards,
+     OverlayAction::None},
     {"ROM service menu", "The game's own menu, until the coin door is closed", OverlayScreen::None,
      OverlayAction::RomServiceMenu},
     {"Restart PPUC", "Stop the game and start it again", OverlayScreen::Confirm, OverlayAction::RestartPpuc},
@@ -3799,18 +3815,26 @@ static void DrawServiceTestInto(int w, int h)
 static constexpr int kOverlayPanelTop = 104;     // heading, down to the first row
 static constexpr int kOverlayRowHeight = 52;
 static constexpr int kOverlayPanelFooter = 116;  // two lines of help below the rows
+// The column the tools' rows are laid out in, on a screen of any width.
+static constexpr float kOverlayColumnWidth = 1100.0f;
 
-// A panel with a heading, centred, sized to hold `rows` lines.
-// minWidth widens the panel for content that does not fit the usual one. The
-// service tools all hold short rows and take the default; a music credit is a
-// sentence and a URL, and ran off both edges of it.
-static SDL_FRect DrawOverlayPanel(int w, int h, int rows, const char* title, float minWidth = 0.0f)
+// The screen behind a tool and the column its rows go in, with the heading.
+//
+// The service tools take the whole screen: a box in the middle left long
+// setting names and their help running out over its edge, and on a backbox
+// screen there is room to spare. Their rows sit in a column of
+// kOverlayColumnWidth in the middle, so the label and its value stay close
+// together on a wide screen. fullScreen false is the old box, for what is
+// shown over a game rather than instead of it: the music chooser and the
+// health notice. minWidth widens that box for content that does not fit it.
+static SDL_FRect DrawOverlayPanel(int w, int h, int rows, const char* title, float minWidth = 0.0f,
+                                  bool fullScreen = true)
 {
     const SDL_Color white{235, 235, 235, 255};
     // Sized from the parts rather than a round number: heading, one row per
     // item, then two lines of help. Guessing the height once put the help text
     // across the last item.
-    float panelW = 760.0f;
+    float panelW = fullScreen ? kOverlayColumnWidth : 760.0f;
     if (minWidth > panelW)
     {
         panelW = minWidth;
@@ -3824,21 +3848,82 @@ static SDL_FRect DrawOverlayPanel(int w, int h, int rows, const char* title, flo
     const float panelH = static_cast<float>(kOverlayPanelTop + rows * kOverlayRowHeight + kOverlayPanelFooter);
     const SDL_FRect panel{(static_cast<float>(w) - panelW) / 2.0f, (static_cast<float>(h) - panelH) / 2.0f, panelW,
                           panelH};
-
-    // Dimmed rather than cleared: whatever is behind stays faintly visible, so
-    // it is obvious the machine is still running underneath the menu.
-    SDL_SetRenderDrawBlendMode(g_uiRenderer, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(g_uiRenderer, 0, 0, 0, 200);
     const SDL_FRect full{0.0f, 0.0f, static_cast<float>(w), static_cast<float>(h)};
-    SDL_RenderFillRect(g_uiRenderer, &full);
-    SDL_SetRenderDrawColor(g_uiRenderer, 24, 26, 34, 255);
-    SDL_RenderFillRect(g_uiRenderer, &panel);
-    SDL_SetRenderDrawColor(g_uiRenderer, 90, 96, 120, 255);
-    SDL_RenderRect(g_uiRenderer, &panel);
+
+    SDL_SetRenderDrawBlendMode(g_uiRenderer, SDL_BLENDMODE_BLEND);
+    if (fullScreen)
+    {
+        // Nearly opaque: the game behind is only a hint that it still runs.
+        SDL_SetRenderDrawColor(g_uiRenderer, 24, 26, 34, 245);
+        SDL_RenderFillRect(g_uiRenderer, &full);
+    }
+    else
+    {
+        // Dimmed rather than cleared: whatever is behind stays faintly
+        // visible, so it is obvious the machine is still running underneath.
+        SDL_SetRenderDrawColor(g_uiRenderer, 0, 0, 0, 200);
+        SDL_RenderFillRect(g_uiRenderer, &full);
+        SDL_SetRenderDrawColor(g_uiRenderer, 24, 26, 34, 255);
+        SDL_RenderFillRect(g_uiRenderer, &panel);
+        SDL_SetRenderDrawColor(g_uiRenderer, 90, 96, 120, 255);
+        SDL_RenderRect(g_uiRenderer, &panel);
+    }
     SDL_SetRenderDrawBlendMode(g_uiRenderer, SDL_BLENDMODE_NONE);
 
     DrawFirmwareText(title, pFirmwareFontLarge, w / 2, static_cast<int>(panel.y) + 24, white);
     return panel;
+}
+
+// A line of help under a tool's rows, centred in its column. A line wider than
+// the column is split at the space nearest its middle into two, and a half
+// still too wide is cut short. Returns the lines drawn.
+static int DrawOverlayHelpLine(const SDL_FRect& panel, const std::string& text, int y, SDL_Color colour)
+{
+    if (text.empty())
+    {
+        return 0;
+    }
+    const int maxWidth = static_cast<int>(panel.w) - 32;
+    const int centre = static_cast<int>(panel.x + panel.w / 2.0f);
+    const auto draw = [&](std::string line, int lineY)
+    {
+        std::vector<char> buffer(line.begin(), line.end());
+        buffer.push_back('\0');
+        TruncateToWidth(buffer.data(), pFirmwareFontSmall, maxWidth);
+        DrawFirmwareText(buffer.data(), pFirmwareFontSmall, centre, lineY, colour);
+    };
+    if (MeasureTextWidth(text.c_str(), pFirmwareFontSmall) <= maxWidth)
+    {
+        draw(text, y);
+        return 1;
+    }
+    size_t split = std::string::npos;
+    for (size_t i = 0; i < text.size(); ++i)
+    {
+        if (text[i] == ' ' && (split == std::string::npos ||
+                               std::abs(static_cast<long>(i) - static_cast<long>(text.size() / 2)) <
+                                   std::abs(static_cast<long>(split) - static_cast<long>(text.size() / 2))))
+        {
+            split = i;
+        }
+    }
+    if (split == std::string::npos)
+    {
+        draw(text, y);
+        return 1;
+    }
+    draw(text.substr(0, split), y);
+    draw(text.substr(split + 1), y + 32);
+    return 2;
+}
+
+// The two lines under a tool's rows: what the selected row is about, then the
+// buttons. The buttons move down when the first line needed two.
+static void DrawOverlayHelp(const SDL_FRect& panel, int helpY, const std::string& about, const char* keys)
+{
+    const SDL_Color dim{140, 140, 150, 255};
+    const int lines = DrawOverlayHelpLine(panel, about, helpY, dim);
+    DrawOverlayHelpLine(panel, keys, helpY + (lines == 2 ? 72 : 40), dim);
 }
 
 // How many rows of a list fit on a screen `h` high. A backbox screen can be
@@ -3874,10 +3959,21 @@ static void DrawOverlayRow(const SDL_FRect& panel, int y, bool selected, const c
     }
     DrawFirmwareTextLeft(selected ? ">" : " ", pFirmwareFontSmall, static_cast<int>(panel.x) + 32, y,
                          selected ? amber : dim);
-    DrawFirmwareTextLeft(label, pFirmwareFontSmall, static_cast<int>(panel.x) + 64, y, selected ? white : dim);
+    // The value column: at least 280 pixels from the right, and a label never
+    // runs into it -- "Game: Midnight trigger" was drawn on top of its value.
+    const int valueX = static_cast<int>(panel.x + panel.w) - std::max(280, static_cast<int>(panel.w * 0.38f));
+    const int labelX = static_cast<int>(panel.x) + 64;
+    std::vector<char> shown(label, label + strlen(label) + 1);
     if (value != nullptr && value[0] != '\0')
     {
-        DrawFirmwareTextLeft(value, pFirmwareFontSmall, static_cast<int>(panel.x + panel.w) - 280, y, valueColour);
+        TruncateToWidth(shown.data(), pFirmwareFontSmall, valueX - labelX - 24);
+    }
+    DrawFirmwareTextLeft(shown.data(), pFirmwareFontSmall, labelX, y, selected ? white : dim);
+    if (value != nullptr && value[0] != '\0')
+    {
+        std::vector<char> shownValue(value, value + strlen(value) + 1);
+        TruncateToWidth(shownValue.data(), pFirmwareFontSmall, static_cast<int>(panel.x + panel.w) - 24 - valueX);
+        DrawFirmwareTextLeft(shownValue.data(), pFirmwareFontSmall, valueX, y, valueColour);
     }
 }
 
@@ -3910,8 +4006,7 @@ static void RenderOverlayMenu(int w, int h)
     }
 
     const int helpY = static_cast<int>(panel.y) + kOverlayPanelTop + visible * kOverlayRowHeight + 12;
-    DrawFirmwareText(kOverlayMenu[items[g_menuSelection]].hint, pFirmwareFontSmall, w / 2, helpY, dim);
-    DrawFirmwareText("up/down move    ENTER selects    ESC closes", pFirmwareFontSmall, w / 2, helpY + 40, dim);
+    DrawOverlayHelp(panel, helpY, kOverlayMenu[items[g_menuSelection]].hint, "up/down move    ENTER selects    ESC closes");
 }
 
 // Every adjustment, the machine's first, then the game's, then a way back to
@@ -3977,10 +4072,9 @@ static void RenderOverlayAdjustments(int w, int h)
                      Adjustments::Display(entry.definition, entry.definition.defaultValue);
         }
     }
-    DrawFirmwareText(about.c_str(), pFirmwareFontSmall, w / 2, helpY, dim);
-    DrawFirmwareText(g_adjustEditing ? "up/down changes    ENTER keeps    ESC cancels"
-                                     : "up/down move    ENTER changes    ESC goes back",
-                     pFirmwareFontSmall, w / 2, helpY + 40, dim);
+    DrawOverlayHelp(panel, helpY, about,
+                    g_adjustEditing ? "up/down changes    ENTER keeps    ESC cancels"
+                                    : "up/down move    ENTER changes    ESC goes back");
 }
 
 // The switches that stopped changing, worst first, then a way to start over.
@@ -4034,8 +4128,113 @@ static void RenderOverlaySwitchReport(int w, int h)
         snprintf(line, sizeof(line), "%u games counted, listed after %u without a change",
                  g_switchReport.GetGamesCounted(), threshold);
     }
-    DrawFirmwareText(line, pFirmwareFontSmall, w / 2, helpY, dim);
-    DrawFirmwareText("up/down move    ENTER selects    ESC goes back", pFirmwareFontSmall, w / 2, helpY + 40, dim);
+    DrawOverlayHelp(panel, helpY, line, "up/down move    ENTER selects    ESC goes back");
+}
+
+// The rows of the boards and versions screen: the game, PPUC, libppuc, then
+// every board as it answered at start-up.
+static std::vector<std::pair<std::string, std::string>> BoardsAndVersionsRows()
+{
+    std::vector<std::pair<std::string, std::string>> rows;
+    const auto shortSha = [](const char* sha)
+    {
+        std::string text = sha ? sha : "";
+        return text.size() > 7 ? text.substr(0, 7) : text;
+    };
+
+    LuaRulesEngine::GameIdentity game;
+    if (pLuaRulesEngine)
+    {
+        game = pLuaRulesEngine->GetGameIdentity();
+    }
+    if (!game.version.empty())
+    {
+        rows.emplace_back("Game: " + game.name, game.version);
+    }
+    else
+    {
+        // A ROM is its own version; a game of rules names one with
+        // ppuc.gameVersion(name, version).
+        const bool script = opt_engine != nullptr && strcmp(opt_engine, "script") == 0;
+        rows.emplace_back("Game", !script && opt_rom ? std::string("ROM ") + opt_rom
+                                                     : std::string("no version (ppuc.gameVersion)"));
+    }
+    rows.emplace_back("PPUC", std::string(PPUC_EXECUTABLE_VERSION) + "  " + shortSha(PPUC_EXECUTABLE_SHA));
+    rows.emplace_back("libppuc", std::string(PPUC::GetLibraryVersion()) + "  " + shortSha(PPUC::GetLibraryCommit()));
+
+    std::vector<PPUCBoardVersion> versions;
+    bool known = false;
+    {
+        std::lock_guard<std::mutex> lock(g_boardVersionsMutex);
+        versions = g_boardVersions;
+        known = g_boardVersionsKnown;
+    }
+    if (versions.empty())
+    {
+        rows.emplace_back("Boards", opt_no_serial ? "not connected (no serial)"
+                                                  : (known ? "none configured" : "not asked yet"));
+        return rows;
+    }
+    for (const PPUCBoardVersion& v : versions)
+    {
+        const uint8_t configured = pPpuc ? pPpuc->GetConfiguredBoardType(v.board) : 0;
+        const char* configuredName = ppuc::v2::BoardTypeName(configured);
+        std::string label = "Board " + std::to_string(v.board);
+        if (configuredName)
+        {
+            label += "  " + std::string(configuredName);
+        }
+        std::string value;
+        if (!v.responded)
+        {
+            value = "no answer";
+        }
+        else
+        {
+            value = v.FirmwareVersion();
+            if (v.buildId != 0)
+            {
+                char build[16];
+                snprintf(build, sizeof(build), "+%08x", v.buildId);
+                value += build;
+            }
+            const char* reportedName = ppuc::v2::BoardTypeName(v.boardType);
+            if (configured != 0 && v.boardType != configured && reportedName)
+            {
+                value += "  is " + std::string(reportedName);
+            }
+        }
+        rows.emplace_back(label, value);
+    }
+    return rows;
+}
+
+// What runs on this machine: the game's version, PPUC's, and every board's
+// firmware as the boards reported it when PPUC started.
+static void RenderOverlayBoards(int w, int h)
+{
+    const SDL_Color white{235, 235, 235, 255};
+    const SDL_Color amber{255, 200, 70, 255};
+
+    const auto rows = BoardsAndVersionsRows();
+    const int count = static_cast<int>(rows.size());
+    g_boardsSelection = std::clamp(g_boardsSelection, 0, count - 1);
+    const int visible = std::min(count, OverlayRowsThatFit(h));
+    const int first = OverlayFirstRow(g_boardsSelection, count, visible);
+    const SDL_FRect panel = DrawOverlayPanel(w, h, visible, "BOARDS AND VERSIONS");
+
+    for (int row = 0; row < visible; ++row)
+    {
+        const int i = first + row;
+        const int y = static_cast<int>(panel.y) + kOverlayPanelTop + row * kOverlayRowHeight;
+        const bool trouble = rows[i].second == "no answer" || rows[i].second.find("  is ") != std::string::npos;
+        DrawOverlayRow(panel, y, i == g_boardsSelection, rows[i].first.c_str(), rows[i].second.c_str(),
+                       trouble ? amber : white);
+    }
+
+    const int helpY = static_cast<int>(panel.y) + kOverlayPanelTop + visible * kOverlayRowHeight + 12;
+    DrawOverlayHelp(panel, helpY, "Firmware as the boards reported it when PPUC started",
+                    "up/down move    ESC goes back");
 }
 
 static void RenderOverlayVolume(int w, int h)
@@ -4433,6 +4632,51 @@ static void StepVolume(int step)
     ApplyRuntimeVolumes();
 }
 
+
+static void PlayToolSound(ToolSounds::Sound sound)
+{
+    const uint32_t command = g_toolSounds.commands[sound];
+    if (command == 0 || !pMediaPluginHost)
+    {
+        return;
+    }
+    std::string error;
+    if (!pMediaPluginHost->SendSoundCommand(0, command, &error))
+    {
+        static bool reported = false;
+        if (!reported)
+        {
+            printf("PPUC: tool sound 0x%04X not sent: %s\n", command, error.c_str());
+            reported = true;
+        }
+    }
+}
+
+// The sound a key makes in the tools: the game's own for its four buttons.
+static void PlayToolSoundForKey(SDL_Keycode key)
+{
+    switch (key)
+    {
+        case SDLK_ESCAPE:
+            PlayToolSound(ToolSounds::Escape);
+            break;
+        case SDLK_UP:
+        case SDLK_RIGHT:
+            PlayToolSound(ToolSounds::Up);
+            break;
+        case SDLK_DOWN:
+        case SDLK_LEFT:
+            PlayToolSound(ToolSounds::Down);
+            break;
+        case SDLK_RETURN:
+        case SDLK_KP_ENTER:
+            PlayToolSound(ToolSounds::Enter);
+            break;
+        default:
+            break;
+    }
+}
+
 // True when the key was the overlay's business, so the game bindings below it
 // never see a keystroke meant for a menu.
 //
@@ -4446,11 +4690,13 @@ static bool HandleOverlayKey(SDL_Keycode key)
         if (key == SDLK_SPACE)
         {
             g_overlay = OverlayScreen::Menu;
+            PlayToolSound(ToolSounds::Open);
             return true;
         }
         return false;
     }
 
+    PlayToolSoundForKey(key);
     switch (key)
     {
         case SDLK_ESCAPE:
@@ -4536,6 +4782,11 @@ static bool HandleOverlayKey(SDL_Keycode key)
                     // Only the reset row can be chosen.
                     g_reportSelection = count - 1;
                 }
+            }
+            else if (g_overlay == OverlayScreen::Boards)
+            {
+                const int count = static_cast<int>(BoardsAndVersionsRows().size());
+                g_boardsSelection = (g_boardsSelection + delta + count) % count;
             }
             else if (g_overlay == OverlayScreen::Monitor && !g_coilMonitorEntries.empty())
             {
@@ -4720,6 +4971,7 @@ static void HandleCoinDoorButton(int number, uint8_t state)
             printf("PPUC: tools menu opened from the coin door\n");
             g_menuSelection = 0;
             g_overlay = OverlayScreen::Menu;
+            PlayToolSound(ToolSounds::Open);
         }
         return;
     }
@@ -4824,6 +5076,10 @@ static void DrawOverlayInto(SDL_Renderer* renderer, int w, int h, bool clearFirs
     else if (g_overlay == OverlayScreen::SwitchReport)
     {
         RenderOverlaySwitchReport(w, h);
+    }
+    else if (g_overlay == OverlayScreen::Boards)
+    {
+        RenderOverlayBoards(w, h);
     }
 }
 
@@ -6657,7 +6913,8 @@ static void DrawSongPickerInto(SDL_Renderer* renderer, int w, int h)
     }
 
     const int rows = 1 + static_cast<int>(credit.size());
-    const SDL_FRect panel = DrawOverlayPanel(w, h, rows, "CHOOSE THE MUSIC", static_cast<float>(widest) + 64.0f);
+    const SDL_FRect panel =
+        DrawOverlayPanel(w, h, rows, "CHOOSE THE MUSIC", static_cast<float>(widest) + 64.0f, false);
 
     int y = static_cast<int>(panel.y) + kOverlayPanelTop;
     DrawFirmwareText(title.c_str(), pFirmwareFontLarge, w / 2, y, amber);
@@ -6791,7 +7048,7 @@ static void DrawHealthNoticeInto(SDL_Renderer* renderer, int w, int h, bool clea
         widest = lineW;
     }
     const SDL_FRect panel =
-        DrawOverlayPanel(w, h, 2, g_healthNotice.title.c_str(), static_cast<float>(widest) + 64.0f);
+        DrawOverlayPanel(w, h, 2, g_healthNotice.title.c_str(), static_cast<float>(widest) + 64.0f, false);
     int y = static_cast<int>(panel.y) + kOverlayPanelTop;
     DrawFirmwareText(g_healthNotice.detail.c_str(), pFirmwareFontLarge, w / 2, y, amber);
     y += kOverlayRowHeight;
@@ -7425,6 +7682,11 @@ static bool ReportBoardFirmware(PPUC* pPpuc, const char* firmwarePath, bool allo
                                 size_t* answered = nullptr, std::vector<PPUCBoardVersion>* versionsOut = nullptr)
 {
     const std::vector<PPUCBoardVersion> versions = pPpuc->QueryBoardVersions(waitForBoardsMs);
+    {
+        std::lock_guard<std::mutex> lock(g_boardVersionsMutex);
+        g_boardVersions = versions;
+        g_boardVersionsKnown = true;
+    }
     if (versionsOut)
     {
       *versionsOut = versions;
@@ -9636,6 +9898,8 @@ int main(int argc, char** argv)
           opt_close_coin_door = ParseIniBool(value);
         else if (key == "CoinDoorButtons")
           opt_coin_door_buttons = DuplicateOptionalIniString(value);
+        else if (key == "ToolSounds")
+          opt_tool_sounds = DuplicateOptionalIniString(value);
         else if (key == "HardReset")
           opt_hard_reset = ParseIniBool(value);
         else if (key == "NvramSave")
@@ -10192,6 +10456,19 @@ int main(int argc, char** argv)
     return 1;
   }
 
+  if (HasOptionValue(opt_tool_sounds))
+  {
+    std::string toolSoundsError;
+    if (!ToolSounds::Parse(opt_tool_sounds, &g_toolSounds, &toolSoundsError))
+    {
+      printf("[Runtime] %s\n", toolSoundsError.c_str());
+      return 1;
+    }
+    printf("Tool sounds: open 0x%04X, enter 0x%04X, up 0x%04X, down 0x%04X, escape 0x%04X\n",
+           g_toolSounds.commands[ToolSounds::Open], g_toolSounds.commands[ToolSounds::Enter],
+           g_toolSounds.commands[ToolSounds::Up], g_toolSounds.commands[ToolSounds::Down],
+           g_toolSounds.commands[ToolSounds::Escape]);
+  }
   const bool useScriptEngine = opt_engine != nullptr && strcmp(opt_engine, "script") == 0;
   // The ROM-less engine reads switches as they come, with no matrix scan to
   // satisfy, so it gets no hold unless one is asked for.

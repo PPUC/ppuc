@@ -492,3 +492,37 @@ if ppuc.soundCommand(0x0015) then error("sent without a host") end
 )LUA");
   harness.LoadOrFail();
 }
+
+TEST_CASE("ppuc.gameVersion names the game with a semantic version") {
+  RulesHarness harness(R"LUA(
+ppuc.gameVersion("Trinity", "0.1.0")
+)LUA");
+  harness.LoadOrFail();
+  const auto identity = harness.engine().GetGameIdentity();
+  CHECK(identity.name == "Trinity");
+  CHECK(identity.version == "0.1.0");
+}
+
+TEST_CASE("ppuc.gameVersion refuses what is not a semantic version") {
+  RulesHarness harness(R"LUA(
+ppuc.gameVersion("Trinity", "0.1")
+)LUA");
+  const auto error = harness.Load();
+  CHECK(error.find("not a semantic version") != std::string::npos);
+  CHECK(harness.engine().GetGameIdentity().version.empty());
+}
+
+TEST_CASE("semantic versions as semver.org has them") {
+  using E = LuaRulesEngine;
+  CHECK(E::IsSemanticVersion("0.1.0"));
+  CHECK(E::IsSemanticVersion("1.12.300"));
+  CHECK(E::IsSemanticVersion("0.1.0-beta.2"));
+  CHECK(E::IsSemanticVersion("0.1.0+20261123"));
+  CHECK(E::IsSemanticVersion("0.1.0-rc.1+build.7"));
+  CHECK_FALSE(E::IsSemanticVersion("0.1"));
+  CHECK_FALSE(E::IsSemanticVersion("v0.1.0"));
+  CHECK_FALSE(E::IsSemanticVersion("01.1.0"));
+  CHECK_FALSE(E::IsSemanticVersion("0.1.0-"));
+  CHECK_FALSE(E::IsSemanticVersion("0.1.0-beta..1"));
+  CHECK_FALSE(E::IsSemanticVersion(""));
+}

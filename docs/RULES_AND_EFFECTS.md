@@ -91,6 +91,7 @@ ppuc.speech(text)
 ppuc.playSound(file)
 ppuc.scoreboardSet(name, value)
 ppuc.scoreboardCallout(text | {text, spot, style, size, ms, effect, priority})
+ppuc.gameVersion(name, version)   -- e.g. ("Trinity", "0.1.0"), semantic versioning
 ppuc.effectTrigger(id, value)
 ppuc.effectTrigger(name, value)
 ppuc.suppressSwitch(number)

@@ -360,6 +360,22 @@ Q is not ESC on purpose. A key that closes a menu in one place and kills the
 machine mid-game in another is the kind of difference nobody remembers with a
 ball in play.
 
+The tools take the whole screen, so a long setting and its help always fit.
+
+**Sounds.** The tools can make the game's own menu sounds, as its ROM's menu
+does, through the game's AltSound pack. They are the game's, so `ppuc.ini`
+names them: five sound commands for opening the menu, ENTER, UP, DOWN and
+ESCAPE, 0 for a silent one. Without the key the tools are silent.
+
+```ini
+[Runtime]
+ToolSounds = 0x03DA, 0x03DB, 0x03D4, 0x03D5, 0x03DC   ; Dirty Harry's
+```
+
+To find a game's own, run its ROM with `DebugSoundCommands=true`, open its
+menu (*ROM service menu*, below) and press each button once: the log shows a
+`PinMAME sound command` for each press.
+
 The menu has these entries:
 
 ### Switch and coil monitor
@@ -484,6 +500,19 @@ any more.
 When the coin door is opened and the report lists anything, the backbox screen
 says so for a few seconds. The menu shows the count beside the entry. The log
 names each switch when it is first listed and at every start.
+
+### Boards and versions
+
+What runs on this machine, for a report or a phone call:
+
+- the game and its version (a ROM game shows its ROM; a game of rules shows the
+  version its rules give with `ppuc.gameVersion`, section 7);
+- PPUC's and libppuc's version and commit;
+- every board with its type and the firmware it reported when PPUC started.
+  A board that did not answer, or that says it is another type than
+  `io-boards.yaml` gives it, is shown in amber.
+
+The boards are asked once, at start. Opening the screen puts nothing on the bus.
 
 ### ROM service menu
 
@@ -696,6 +725,12 @@ service menu (section 5), remember values across power cycles (*machine
 memory*: an extra-ball level that adjusts itself, a champion's name), and take
 switches off the switch report that may rightly sit still for many games. Both
 are kept in the game folder's `state/`.
+
+A game written in rules gives its version with `ppuc.gameVersion("Trinity",
+"0.1.0")`: a semantic version, MAJOR.MINOR.PATCH. It is in the log at every
+start and on *Boards and versions* (section 5), so a machine can always say
+which release of its game it runs. Anything that is not a semantic version
+stops the rules with an error naming the line.
 
 A custom game can be played through on a desk, with no machine attached:
 `ppuc-pinmame --game <folder> --bench --bench-play game.play` lets a small

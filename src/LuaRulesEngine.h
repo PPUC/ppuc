@@ -113,6 +113,16 @@ class LuaRulesEngine
   // function exists and does nothing, so one set of rules runs on a machine
   // with a scoreboard and on one without.
   void SetScoreboardFeed(scoreboard::Feed* pFeed);
+  // What the rules call themselves: ppuc.gameVersion(name, version), with a
+  // semantic version (MAJOR.MINOR.PATCH, optionally -pre and +build). Both
+  // empty until the rules say. Read from any thread.
+  struct GameIdentity
+  {
+    std::string name;
+    std::string version;
+  };
+  GameIdentity GetGameIdentity() const;
+  static bool IsSemanticVersion(const std::string& version);
   GameCore* GetGameCore() const { return m_pGameCore; }
   DmdCanvas* GetDmdCanvas() const { return m_pDmdCanvas; }
 
@@ -245,6 +255,7 @@ class LuaRulesEngine
   static int LuaExcludeFromSwitchReport(lua_State* L);
   static int LuaScoreboardSet(lua_State* L);
   static int LuaScoreboardCallout(lua_State* L);
+  static int LuaGameVersion(lua_State* L);
 
   lua_State* m_lua = nullptr;
   std::unordered_map<int, uint8_t> m_switchStates;
@@ -280,6 +291,8 @@ class LuaRulesEngine
   MachineMemory* m_pMemory = nullptr;
   SwitchReport* m_pSwitchReport = nullptr;
   scoreboard::Feed* m_pScoreboardFeed = nullptr;
+  mutable std::mutex m_identityMutex;
+  GameIdentity m_identity;
   // What the rules defined when there is no store, so ppuc.adjustment still
   // answers with the default and machine memory lasts for the session.
   std::unique_ptr<Adjustments> m_ownAdjustments;
