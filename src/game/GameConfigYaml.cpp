@@ -125,6 +125,19 @@ MachineDevices CollectDeclaredDevices(const YAML::Node& root)
     }
   }
 
+  // The game-on solenoid is a coil too, even without a pwmOutput: on a WPC
+  // machine it is no winding but the boards' own high-power gate, which
+  // libppuc sends them as CONFIG_TOPIC_GAME_ON_SOLENOID. A game with no ROM
+  // switches it with emGame.gameOnCoil, as the ROM did.
+  if (const YAML::Node node = root["gameOnSolenoid"]; node && node.IsScalar())
+  {
+    const int number = node.as<int>();
+    if (number != 0 && std::find(devices.coils.begin(), devices.coils.end(), number) == devices.coils.end())
+    {
+      devices.coils.push_back(number);
+    }
+  }
+
   // Addressable LED lamps count as lamps too, so a machine whose backbox is a
   // WS2812 strip can still name them.
   if (const YAML::Node stripes = root["ledStripes"]; stripes && stripes.IsSequence())

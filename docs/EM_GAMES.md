@@ -260,6 +260,11 @@ simpler wiring for an EM conversion, at the cost of losing the coin-door
 interlock. `ppuc-pinmame` logs which case it is in at startup, because a silently
 dead playfield is the single most likely first-run failure of this feature.
 
+On a WPC or later playfield the game-on solenoid is no winding but the boards'
+own high-power gate, the machine's `gameOnSolenoid`, which has no `pwmOutput`.
+`gameOnCoil` may name it all the same (`gameOnCoil: 31` on Dirty Harry): a game
+without its ROM then switches high power as the ROM did.
+
 ## The display
 
 Scores go to the DMD. With no DMD scripting at all, a built-in screen shows the

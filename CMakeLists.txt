@@ -904,6 +904,7 @@ if(PPUC_BUILD_TESTS)
       src/dmd/DmdDefaultScreen.cpp
       src/dmd/DmdRenderer.cpp
       src/game/BenchBalls.cpp
+      src/game/GameConfigYaml.cpp
       src/game/GameCore.cpp
       src/game/PlayfieldAssist.cpp
       ${PPUC_LUA_SOURCES}
@@ -915,6 +916,7 @@ if(PPUC_BUILD_TESTS)
       tests/test_dmd_source_select.cpp
       tests/test_dmd_pacing.cpp
       tests/test_game_tilt.cpp
+      tests/test_game_config_yaml.cpp
       tests/test_board_flipper_gate.cpp
       tests/test_health_log.cpp
       tests/test_playfield_assist.cpp
@@ -960,6 +962,13 @@ if(PPUC_BUILD_TESTS)
    if(PPUC_LUA_LIBRARY)
       target_link_libraries(ppuc_tests PRIVATE ${PPUC_LUA_LIBRARY})
    endif()
+   # yaml-cpp, for the emGame config loader. Like ppuc_plugin_smoke, the test
+   # runs from the build tree, so it finds the staged library there.
+   target_link_libraries(ppuc_tests PRIVATE ${PPUC_YAML_CPP_LINK_LIBRARY})
+   set_target_properties(ppuc_tests PROPERTIES
+      BUILD_WITH_INSTALL_RPATH TRUE
+      INSTALL_RPATH "${CMAKE_CURRENT_SOURCE_DIR}/third-party/runtime-libs/${PLATFORM}-${ARCH}"
+   )
 
    add_test(NAME ppuc_tests COMMAND ppuc_tests)
 
